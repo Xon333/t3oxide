@@ -6,10 +6,12 @@ This captures resource evidence, not a claim of battery/energy savings.
 import argparse
 import ctypes
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import subprocess
 import time
@@ -104,37 +106,87 @@ def children(rows, roots):
         chosen |= added
 
 
+
+def installed_app_build(pid):
+    """Read the running app's on-disk bundle metadata; never persist its path.
+
+    A repo revision is not an installed build. Missing/inaccessible metadata stays
+    null; do not replace it with a version from this checkout or a guessed path.
+    """
+    executable = run('ps', '-p', str(pid), '-o', 'comm=')
+    if not executable or '/Contents/MacOS/' not in executable:
+        return None
+    bundle = executable.rsplit('/Contents/MacOS/', 1)[0]
+    if not bundle.endswith('.app'):
+        return None
+    try:
+        with (Path(bundle) / 'Contents/Info.plist').open('rb') as f:
+            info = plistlib.load(f)
+        return {'version': info.get('CFBundleShortVersionString'),
+                'build': info.get('CFBundleVersion'),
+                'bundle_id': info.get('CFBundleIdentifier'),
+                'source': 'running executable bundle Info.plist (on disk)'}
+    except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
+        return None
+
+
+def select_roots(rows, explicit):
+    if any(pid <= 0 for pid in explicit):
+        raise ValueError('PIDs must be positive.')
+    roots = explicit or {pid for pid, r in rows.items() if r['name'].lower() == 't3oxide'}
+    if not roots:
+        raise ValueError('No t3oxide process found. Open the installed app, or supply an identified --pid.')
+    missing = roots - rows.keys()
+    if missing:
+        raise ValueError('Requested PIDs are not running: ' + ', '.join(map(str, sorted(missing))))
+    if not explicit and len(roots) != 1:
+        raise ValueError('Multiple t3oxide processes found; use --pid for the intended installed app.')
+    return roots
+
+
+def complete_sum(samples, key):
+    """No sample is not a zero-cost process; partial/unreadable metrics are null."""
+    return sum(r[key] for r in samples) if samples and all(r.get(key) is not None for r in samples) else None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--label', default='t3oxide')
     parser.add_argument('--seconds', type=float, default=120)
     parser.add_argument('--interval', type=float, default=5)
     parser.add_argument('--pid', type=int, action='append', default=[], help='Root PID; repeat for explicitly attributed processes.')
-    parser.add_argument('--output', type=Path, default=Path('metrics'))
+    parser.add_argument('--output', type=Path, default=Path.home() / '.local/state/t3oxide/measurements',
+                        help='Private output directory; defaults outside the checkout.')
     args = parser.parse_args()
     if not 0 < args.seconds <= 3600 or not 1 <= args.interval <= 60:
         parser.error('Use 0 < seconds <= 3600 and 1 <= interval <= 60.')
     label = re.sub(r'[^a-zA-Z0-9_.-]', '-', args.label)[:80]
     start = time.monotonic()
     stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    destination = args.output / f'{label}-{stamp}'
+    destination = args.output.expanduser() / f'{label}-{stamp}'
     previous = {}; summary_rows = []; explicit = set(args.pid)
     first_table = process_table()
-    if any(pid <= 0 for pid in explicit):
-        parser.error('PIDs must be positive.')
-    roots = explicit or {pid for pid, r in first_table.items() if r['name'].lower() == 't3oxide'}
-    if not roots or not roots.intersection(first_table):
-        parser.error('No t3oxide process found. Open the app, or specify --pid for a host adapter or reference process.')
+    try:
+        roots = select_roots(first_table, explicit)
+    except ValueError as error:
+        parser.error(str(error))
     destination.mkdir(parents=True, exist_ok=False, mode=0o700)
     root_identities = {pid: (mac_rusage(pid) if platform.system() == 'Darwin' else linux_extra(pid)).get('start_identity') for pid in roots}
     changed_roots = set()
     metadata = {'schema_version': 1, 'label': label, 'os': platform.system(), 'os_release': platform.release(),
                 'architecture': platform.machine(), 'logical_cpus': os.cpu_count(), 'root_pids': sorted(roots),
+                'collector_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'requested_seconds': args.seconds, 'interval_seconds': args.interval,
+                'installed_app_builds': {str(pid): installed_app_build(pid) for pid in roots}
+                    if platform.system() == 'Darwin' else {},
+                'unverifiable_root_pids_at_start': sorted(pid for pid, identity in root_identities.items() if identity is None),
                 'units': {'memory': 'bytes', 'cpu_percent': '100 = one CPU core; interval CPU-time delta'},
                 'limitations': ['Short-lived processes between samples may be missed.',
                                'RSS sums may double-count shared memory; footprint and PSS are separate fields.',
                                'Missing metrics are null, not zero. This is not an energy or battery-life benchmark.',
                                'Only this host is measured. Remote adapters/agents are not attributed to the client.',
+                               'Installed app metadata is read from the running executable bundle on disk; do not update or replace it during capture.',
+                               'Samples with absent/unverifiable roots are incomplete, not evidence of lower resource use.',
                                'The collector itself is excluded from the selected process totals.'],
                 'system_before': system_snapshot()}
     (destination / 'metadata.json').write_text(json.dumps(metadata, indent=2)+'\n')
@@ -160,12 +212,12 @@ def main():
                 if same and delta and 'idle_wakeups_total' in row:
                     row['idle_wakeups_per_second'] = max(0, (row['idle_wakeups_total'] - prior[1].get('idle_wakeups_total', 0)) / delta)
                 previous[pid] = (now, dict(row)); samples.append(row)
-            def complete_sum(key):
-                return sum(r[key] for r in samples) if samples and all(r.get(key) is not None for r in samples) else None
             sample = {'utc': dt.datetime.now(dt.timezone.utc).isoformat(), 'elapsed_seconds': round(now-start, 3),
-                      'processes': samples, 'rss_sum_bytes': sum(r['rss_bytes'] for r in samples),
-                      'footprint_sum_bytes': complete_sum('footprint_bytes'), 'pss_sum_bytes': complete_sum('pss_bytes'),
-                      'cpu_percent_interval_sum': complete_sum('cpu_percent_interval'), 'process_count': len(samples)}
+                      'processes': samples, 'root_pids_not_observed': sorted(roots - rows.keys()),
+                      'root_pids_unverifiable_or_changed': sorted(roots.intersection(rows) - valid_roots),
+                      'rss_sum_bytes': complete_sum(samples, 'rss_bytes'),
+                      'footprint_sum_bytes': complete_sum(samples, 'footprint_bytes'), 'pss_sum_bytes': complete_sum(samples, 'pss_bytes'),
+                      'cpu_percent_interval_sum': complete_sum(samples, 'cpu_percent_interval'), 'process_count': len(samples)}
             out.write(json.dumps(sample)+'\n'); out.flush(); summary_rows.append({key: sample[key] for key in ('rss_sum_bytes', 'footprint_sum_bytes', 'pss_sum_bytes', 'cpu_percent_interval_sum')})
             if now - start >= args.seconds:
                 break
@@ -179,7 +231,7 @@ def main():
                'reused_or_unverifiable_root_pids': sorted(changed_roots), 'system_after': system_snapshot()}
     (destination / 'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     print(destination)
-    print('Return metadata.json, samples.jsonl and summary.json; no upload was performed.')
+    print('Keep metadata.json, samples.jsonl and summary.json private; no upload was performed.')
 
 
 if __name__ == '__main__':

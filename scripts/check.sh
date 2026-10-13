@@ -18,3 +18,4 @@ if command -v swiftc >/dev/null; then
   fi
 fi
 python3 -m py_compile scripts/measure.py
+python3 -m unittest discover -s tests -p test_measure.py
