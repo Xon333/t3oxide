@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "environments": [
+    {
+      "id": "remote", "label": "Remote T3", "environmentId": "REPLACE_WITH_INSTALL_OUTPUT",
+      "sshDestination": "REPLACE_WITH_EXISTING_SSH_ALIAS",
+      "node": "/REPLACE/WITH/INSTALL/OUTPUT/node",
+      "adapter": "/REPLACE/WITH/INSTALL/OUTPUT/adapter",
+      "hostConfig": "/REPLACE/WITH/INSTALL/OUTPUT/hostConfig",
+      "enabled": true
+    },
+    {
+      "id": "local", "label": "Local T3 (optional)", "environmentId": "REPLACE_WITH_LOCAL_INSTALL_OUTPUT",
+      "sshDestination": null, "node": "/REPLACE/WITH/LOCAL/node",
+      "adapter": "/REPLACE/WITH/LOCAL/adapter", "hostConfig": "/REPLACE/WITH/LOCAL/hostConfig",
+      "enabled": false
+    }
+  ]
+}

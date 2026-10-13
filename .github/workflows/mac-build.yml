@@ -1,0 +1,48 @@
+name: Companion checks
+on:
+  push:
+    paths: ['adapter/**', 'mac/**', 'scripts/**', 'tests/**', '.github/workflows/mac-build.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: t3oxide-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Archive exact source for reproducible cloud checks
+        run: git archive --format=tar HEAD > /tmp/t3oxide-source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3oxide-source
+          path: /tmp/t3oxide-source.tar
+          retention-days: 7
+      - name: Adapter and script checks
+        run: |
+          node --test tests/*.test.mjs
+          for file in adapter/*.mjs scripts/*.mjs; do node --check "$file"; done
+          bash -n scripts/build-mac.sh scripts/check.sh
+          python3 -m py_compile scripts/measure.py
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native model check
+        run: |
+          swiftc -swift-version 5 mac/Model.swift tests/ModelTests.swift -o /tmp/t3oxide-model
+          /tmp/t3oxide-model
+      - name: Build AppKit client
+        run: bash scripts/build-mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3oxide-macos-arm64
+          path: dist/t3oxide-macos-arm64.zip
+          retention-days: 14

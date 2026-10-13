@@ -1,0 +1,20 @@
+# Local secrets; example configuration may be committed.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Host/editor residue.
+.DS_Store
+Thumbs.db
+*~
+
+# Build output, measurements and host-local configuration.
+dist/
+.build/
+metrics/
+__pycache__/
+*.pyc
+config/environments.json
+config/host.json
+*.token
