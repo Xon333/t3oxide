@@ -1,10 +1,22 @@
 t3oxide source adaptations
 
-adapter/core.mjs and adapter/t3.mjs adapt narrow command, response and event
+The primary Go terminal client uses the unmodified MIT-licensed Charm modules:
+charm.land/bubbletea/v2 v2.1.0, charm.land/bubbles/v2 v2.2.1,
+charm.land/lipgloss/v2 v2.0.6, and charm.land/glamour/v2 v2.0.1.
+Their original license texts are in LICENSES/. Exact release/source provenance
+is recorded in docs/dependencies.json; Go module checksums are in go.sum.
+The interface uses those libraries directly. It does not depend on core-tui.
+The transport and recovery code were reused from the separately delivered Go
+core-tui alternative for this same project, then adapted into a T3-specific
+session layer; that alternative's UI source is not bundled here.
+
+adapter/core.mjs, adapter/t3.mjs, adapter/models.mjs and adapter/navigation.mjs
+adapt narrow command, response, catalog, lineage and event
 structures from pingdotgg/t3code at 0e7346ccd9427c06161e222319e718e6bd70887f.
 adapter/wire.mjs implements the narrow Effect RPC envelopes documented in that
 repository's .repos/effect-smol RpcMessage.ts. These are adapted client-side
-contracts, not a bundled copy of the full T3 runtime. See docs/architecture.md.
+contracts, not a bundled copy of the full T3 runtime. See docs/architecture.md
+and docs/model-navigation.md.
 
 T3 source license retained below:
 

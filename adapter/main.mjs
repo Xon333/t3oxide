@@ -86,10 +86,11 @@ export async function run(argv = process.argv.slice(2), {
       let result;
       switch (a.op) {
         case 'hello': result = await backend.probe(); break;
-        case 'list': result = await backend.list(a.query ?? ''); break;
+        case 'list': result = await backend.list(a.query ?? '', a); break;
+        case 'models': result = await backend.models(a.threadId); break;
         case 'watch': result = await backend.watch(a.threadId); break;
         case 'history': result = await backend.history(a.cursor); break;
-        case 'send': case 'stop': case 'answer': case 'launch': result = await backend.act(a.op,a); break;
+        case 'send': case 'stop': case 'answer': case 'launch': case 'select-model': result = await backend.act(a.op,a); break;
         default: throw new Fault('invalid_request','Unsupported companion operation.');
       }
       if (superseded()) throw new Fault('cancelled','Navigation was superseded.');

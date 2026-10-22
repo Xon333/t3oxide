@@ -4,6 +4,8 @@ import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
 import { Fault, LIMIT, SOURCE, pageRows, clip, command, hash, identifier, launch, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
+import { FEATURES, catalog, modelCommand, modelView } from './models.mjs';
+import { threadList } from './navigation.mjs';
 
 export async function readConfig(path) {
   const stat = await lstat(path);
@@ -72,6 +74,8 @@ export class T3 {
     this.descriptor = validateDescriptor(d, this.config.environmentId);
     return { protocol: 1, adapterRevision: SOURCE, environmentId: d.environmentId,
       serverVersion: d.serverVersion, orchestrationProtocol: d.orchestrationProtocolVersion,
+      features: { ...FEATURES, modelSelection: d.capabilities?.serverResolvedCommandContext === true,
+        messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },
       writesEnabled: this.config.allowWrites === true && d.capabilities?.serverResolvedCommandContext === true };
   }
   async connect() {
@@ -126,19 +130,18 @@ export class T3 {
       }
     }, delay + Math.floor(Math.random() * Math.min(500, delay / 4)));
   }
-  async list(query = '') {
+  async list(query = '', options = {}) {
     await this.connect();
-    const shell = await this.http('/api/orchestration/shell');
-    requireThat(Array.isArray(shell.threads) && Array.isArray(shell.projects), 'Unsupported T3 shell.', 'incompatible');
-    const projects = new Map(shell.projects.map(p => [p.id, p.title]));
-    const q = String(query).trim().toLocaleLowerCase().slice(0,200);
-    const matching = shell.threads.filter(t => !t.deletedAt && !t.archivedAt &&
-      (!q || `${t.title} ${projects.get(t.projectId) ?? ''}`.toLocaleLowerCase().includes(q)))
-      .sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    return { observedAt: new Date().toISOString(), more: matching.length > LIMIT.threads,
-      threads: matching.slice(0,LIMIT.threads).map(t => ({ id: identifier(t.id),
-        title: clip(t.title,512).text, project: clip(projects.get(t.projectId) ?? '',256).text,
-        status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text, model: clip(t.modelSelection?.model ?? '',256).text })) };
+    return threadList(await this.http('/api/orchestration/shell'), query, options);
+  }
+  async models(threadId) {
+    await this.connect();
+    const p = targetThread(await this.bounded(identifier(threadId)), threadId);
+    return this.modelCatalog(p);
+  }
+  async modelCatalog(p) {
+    const config = await this.rpc.call('server.getConfig', {}).promise;
+    return catalog(config, p);
   }
   async bounded(threadId, signal) {
     this.stats.snapshots++;
@@ -174,7 +177,7 @@ export class T3 {
       if (epoch !== this.epoch || this.closed) return null;
       const snapshot = await this.bounded(threadId, signal);
       if (epoch !== this.epoch || this.closed) return null;
-      this.current = view(snapshot, threadId); this.following = true;
+      this.current = modelView(snapshot, threadId); this.following = true;
       this.snapshotSequence = snapshot.snapshotSequence; this.lastStreamSequence = snapshot.snapshotSequence;
       this.setState('synchronizing'); this.emitView(true);
       const sub = this.rpc.call('orchestration.subscribeThread', { threadId,
@@ -227,7 +230,7 @@ export class T3 {
     if (item.kind === 'synchronized') { this.synchronized = true; this.retryDelay = 1000; this.setState('live'); this.emitView(); return; }
     if (item.kind === 'snapshot') {
       this.synchronized = false;
-      this.current = view(item,this.watchId); this.snapshotSequence = item.snapshotSequence; this.lastStreamSequence = item.snapshotSequence;
+      this.current = modelView(item,this.watchId); this.snapshotSequence = item.snapshotSequence; this.lastStreamSequence = item.snapshotSequence;
       this.setState('synchronizing'); this.emitView(true); return;
     }
     if (item.kind !== 'event') return;
@@ -250,7 +253,7 @@ export class T3 {
       }
       if (event.type === 'turn-item.updated' && !['user_message','assistant_message','proposed_plan','approval_request','user_input_request','error','system_notice','notification','secret_request'].includes(payload?.type)) return;
       if (event.type === 'message.updated') return; // corresponding turn item supplies canonical visibility
-    } else if (!/^(thread\.|run\.|run-attempt\.|runtime-request\.|context-transfer\.|checkpoint.rollback)/.test(event.type)) return;
+    } else if (!/^(thread\.|run\.|run-attempt\.|provider-thread\.|provider-session\.|provider-turn\.|subagent\.|runtime-request\.|context-transfer\.|checkpoint.rollback)/.test(event.type)) return;
     if (this.refreshing) { this.refreshAgain = true; return; }
     this.scheduleRefresh();
   }
@@ -268,7 +271,7 @@ export class T3 {
     try {
       const s = await this.bounded(id, this.navigation.signal);
       if (epoch !== this.epoch || this.closed || s.snapshotSequence < this.snapshotSequence) return;
-      const next = view(s,id);
+      const next = modelView(s,id);
       next.state = this.synchronized ? 'live' : 'synchronizing'; next.live = next.state === 'live'; next.historical = false;
       for (const pending of pendingUpdates.values()) {
         if (pending.sequence <= s.snapshotSequence) continue;
@@ -345,7 +348,9 @@ export class T3 {
           // First dispatch uses fresh control state. An explicit same-ID retry
           // reuses the exact command, even if the original Stop/answer took effect.
           const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
-          receipt.payload = op === 'launch' ? launch(a,p) : command(op,a,p,this.descriptor);
+          const choices = op === 'select-model' || op === 'send' && a.modelSelection !== undefined
+            ? await this.modelCatalog(p) : null;
+          receipt.payload = op === 'launch' ? launch(a,p) : modelCommand(op,a,p,this.descriptor,choices);
           receipt.tag = op === 'launch' ? 'orchestration.launchThread' : 'orchestration.dispatchCommand';
         }
         requireThat(!this.closed && this.rpc, 'T3 disconnected before dispatch.', 'disconnected');

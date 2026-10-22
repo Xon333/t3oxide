@@ -2,6 +2,55 @@
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
+## Primary Go client and Terminal theme, 2026-10-22
+
+The Go/Bubble Tea client supersedes Swift as the primary documented installation and CI artifact. Swift source, build checks and separate recovery state remain available for legacy rollback.
+
+The optional `/theme terminal` and `--theme terminal` inherit terminal-default foreground/background and basic ANSI palette colors. Code/diff highlighting uses a named Chroma style with its native `terminal16` formatter and no base text/background colors. The default remains violet; violet, cyan and lime keep their fixed palettes and Dracula syntax highlighting. No new dependency versions, color probes, configuration readers or theme watchers were introduced.
+
+Checks passed on Go 1.27.2 darwin/arm64, Node 24.21.0 and Apple Swift 6.4:
+
+- `bash scripts/check-go.sh`: formatting, all six packages, vet and the complete race run, including actual adapter, Bubble Tea and executable PTY integration.
+- `bash scripts/check.sh`: 135 Node tests, adapter/installer syntax, Swift model/type/transport checks and five Python measurement tests.
+- New regressions cover terminal theme CLI acceptance/persistence, Markdown and syntax using only basic ANSI/default colors, composer selections, filtered dialogs/pagination, fixed-theme round trips and unchanged drafts. Native Bubble Tea output confirms initial terminal mode does not set default colors and fixed-to-terminal changes emit foreground/background resets.
+- `go mod tidy -diff`, `go mod verify`, shell syntax and staged whitespace checks passed. Chroma's existing pinned version is now a direct dependency.
+- `bash scripts/build-go.sh`: ARM64 release executable, version/help, architecture and strict ad-hoc signature verified. Local build SHA-256: `97588b71f39a62718ad45cc6baf7be15d3bff4c16afc3656277afdc3d7420cd2`.
+
+Plus subagents reviewed terminal color ownership, publication contents and the final implementation. These are source/disposable-fixture results; installed clients, productive conversations and terminal configuration were not changed. A fresh hosted CI run and new Ghostty visual acceptance are separate evidence.
+
+## Earlier Go verification, 2026-10-22
+
+### Terminal UX redesign
+
+The subsequent [terminal redesign](terminal-redesign.md) retains the pinned dependency graph and all client/wire/config, adapter, Swift and recovery implementations. Prior full-stack evidence below applies to those unchanged layers. New checks on Go 1.27.2 darwin/arm64 were limited to affected paths:
+
+- The complete `internal/ui` package passed after integrating the layout, theme, command lifecycle, rendering and filtering changes (1.260s). The three final `TestWorkspace` regressions passed after review fixes (0.349s): cursor-only composer resizing, help over exact requests without hidden editing, and completion hints while filtering multiple choices.
+- Four existing Bubble Tea program tests passed against disposable loopback fixtures (14.399s): composer/theme/resize/quit, exact approvals/questions, model pickers/grouped navigation, and independent Stop during a request. Terminal teardown now also checks foreground/background color reset.
+- `go vet ./internal/ui` and `git diff --check` passed. No full Node, Swift, recovery, race or fleet qualification replay was performed for this presentation change.
+- The release was built once with `scripts/build-go.sh`; `--version`, `--help`, Mach-O ARM64 architecture and strict ad-hoc signature verification passed. SHA-256: `ff62cc1a383c38c5b041f120eb7503732806a17a4739e7f1ee155606cb676fb5`.
+
+The rendering and dialog checks cover bounded Unicode display widths, real syntax highlighting, native table-layout amplification, stale query results, disabled actions and preserved exact IDs/text. The source-level checks did not send, stop or change settings in productive T3 conversations. Installed Ghostty visual acceptance and deployment are separate evidence.
+
+### Prior full-stack baseline
+
+The complete implementation was built and tested natively on Apple Silicon with macOS 27.0.1, Go 1.27.2, Node 24.21.0, Apple Swift 6.4.0 and Xcode 27.0. The Go 1.26.0 minimum and all dependency versions remain unchanged; the existing clipboard module is now classified as a direct dependency. See [Go adoption](../NATIVE-GO.md) and [source ownership](go-terminal.md).
+
+Passed checks:
+
+- `bash scripts/check-go.sh`: formatting, the full six-package suite, vet, and the full race run, including the actual Node adapter, Bubble Tea programs, and assembled executable in Darwin PTYs.
+- `bash scripts/check.sh`: all 135 Node tests, adapter/installer syntax checks, Swift model typecheck and App.swift parse, compiled Swift model/transport tests, and all five Python measurement tests.
+- `bash scripts/build-go.sh`: release ARM64 executable; version, Mach-O architecture and ad-hoc signature verified. `go mod tidy -diff` and `go mod verify` passed.
+- `CI=true bash scripts/build-mac.sh`: retained ARM64 Swift app and ZIP; plist, ad-hoc signature, ZIP integrity, extracted signature and byte-identical payload verified. Swift source and tests remain unchanged from the supplied package.
+- `python3 tests/loopback_fixture.py`, using a disposable virtual environment for its test-only `aiohttp` dependency: all 12 SIGKILL recovery cases passed across dispatch and acknowledgement boundaries for Stop, approvals and questions.
+
+Focused regressions cover picker filtering/pagination, repeated expand/collapse, focus and details surfaces, whole-input paste rejection, presets, provider model-change restrictions, independent Stop, exact override acknowledgements, stale choices and recovery. The installer tests also verify paused locks/staging, modified releases, symlink configurations and failed publication cleanup. Darwin PTY restoration compares every persistent terminal flag and control character; it excludes only the kernel's transient `PENDIN` bookkeeping.
+
+Read-only `doctor` checks passed through the existing local and SSH host profiles against T3 `0.1.2-nightly.20261021.3473`, orchestration protocol 2. A temporary client profile pointing at the new source adapter read the current live conversation with model selection, runtime evidence and lineage. The native terminal client opened its catalog-backed model controls on that same connection. Existing profile files, selected models, credentials, drafts and host recovery journals were preserved.
+
+Mutation acceptance uses disposable simulated T3 hosts. This run did not install the new adapters into existing environments, change live conversation settings, or send/interrupt productive work. Physical clipboard behavior, a particular terminal/tmux combination, resource measurements and a fresh hosted CI run are not claimed. The workflow now includes the full Go checks and ARM64 terminal artifact alongside the existing adapter and Swift jobs.
+
+The following sections are the **original Swift implementation's historical record**, retained for rollback context. They are not new native Go acceptance claims.
+
 ## Tested compatibility
 
 - Native client: version 0.1.1, build 2; ARM64, macOS 14 minimum; built with Apple Swift 6.4.

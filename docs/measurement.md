@@ -21,7 +21,7 @@ python3 scripts/measure.py --label native-active --seconds 120
 
 The script selects the single running `t3oxide` process and includes its local descendants, such as its SSH channels. With multiple app instances, identify the intended PID and pass `--pid` explicitly. Shared OS services are outside this process tree. This capture does **not** include remote adapters, T3 servers, or agents.
 
-`metadata.json` records the installed app's version/build from the running executable's on-disk `Info.plist`, without retaining the bundle path. Do not replace the app during capture. Check `installed_app_builds`; if unavailable/null, record the running app's version and build privately from its bundle information. The collector's SHA-256 identifies the script separately; repository history does not identify the installed build.
+For the legacy Swift app, `metadata.json` records the installed version/build from the running executable's on-disk `Info.plist`, without retaining the bundle path. The primary Go executable has no app bundle; record its `--version` output and executable SHA-256 privately alongside the capture. Do not replace either client during capture. The collector's SHA-256 identifies the script separately; repository history does not identify the installed build.
 
 ## Browser comparison — on the same client Mac
 

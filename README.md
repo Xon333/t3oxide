@@ -1,47 +1,52 @@
 # t3oxide
 
-A lightweight native macOS companion for existing [T3 Code](https://github.com/pingdotgg/t3code) environments. Read conversations, send messages, answer questions and approvals, and stop an active turn without keeping the full web interface open.
+A Go terminal client for existing [T3 Code](https://github.com/pingdotgg/t3code) environments, built directly with **Bubble Tea v2**, Bubbles, Lip Gloss and Glamour. Read conversations, send messages, answer questions and approvals, and stop a reviewed active turn from your terminal. This is the primary client; the Swift/AppKit app remains available as a legacy rollback.
 
 ```text
-Swift/AppKit client
+Go CLI / Bubble Tea TUI
   └─ SSH or local stdio
       └─ on-demand Node adapter → existing T3 server
 ```
 
+## Build and install
+
+Build with **Go 1.26.0+**. Each T3 host needs Node.js 22.4+ and the host adapter; remote profiles use your existing OpenSSH configuration. The primary CI artifact targets Apple Silicon macOS.
+
+```sh
+bash scripts/build-go.sh
+./dist/t3oxide envs
+./dist/t3oxide
+```
+
+Follow [installation](NATIVE.md) to prepare the host adapter and environment profiles, then [Go setup and controls](NATIVE-GO.md) to install the executable on your PATH. Distributions include `NOTICE` and `LICENSES/` alongside the binary. Installation does not install, upgrade, start or restart T3.
+
 ## Features
 
-- Selectable transcript, composer, thread filter, and multiple environment profiles.
-- Bounded incremental updates, earlier history pages, and per-thread drafts.
-- Human-authored messages, queue/steer intent, Stop with queue hold, and new conversations using an existing workspace.
-- Explicit retry of saved operations, with durable host-side recovery across helper restarts.
-- Optional shortcuts to the full T3 web interface.
+- Markdown transcript, composer, command palette, conversation filtering and lineage navigation.
+- Multiple environment profiles, bounded history pages, per-thread drafts and explicit recovery of uncertain writes.
+- Current-thread and next-message model, reasoning and speed choices from the selected provider's advertised capabilities.
+- Human-authored messages with queue/steer intent, Stop with queue hold, and review of T3 requests.
+- Fixed violet, cyan and lime themes, plus a Terminal theme that inherits terminal foreground/background and uses ANSI palette accents. See [theme controls](NATIVE-GO.md#themes).
+- Read-only `envs`, `threads`, `status` and `doctor` commands, with optional JSON output.
 
-The client uses AppKit and OpenSSH, with no embedded browser or bundled T3 server. Only the selected environment's helper runs; T3 continues independently when the client disconnects.
+T3 owns providers, execution, durable conversations, queues and workspaces. Only the selected environment's helper runs; existing T3 work continues when the client disconnects. Full tool payloads, attachment uploads, provider configuration and full-history search remain in T3. See [model/navigation semantics](docs/model-navigation.md).
 
-## Requirements and setup
+## Development and CI
 
-- **Client:** Apple Silicon Mac running macOS 14 or later; Apple command-line developer tools to build from source.
-- **Host:** an existing compatible T3 instance and Node.js 22.4 or later, on macOS or Linux.
-- **Remote access:** working SSH authentication and host-key verification.
-
-Follow the [installation guide](NATIVE.md) to install the host adapter and configure the client. Build with:
+On an Apple Silicon Mac with Go 1.26.0+, Node 22.4+, Python 3 and Apple command-line developer tools:
 
 ```sh
-bash scripts/build-mac.sh
-```
-
-Outputs are `dist/t3oxide.app` and `dist/t3oxide-macos-arm64.zip`. Builds are ad-hoc signed, not notarized. GitHub Actions also produces an ARM64 artifact.
-
-## Compatibility and limits
-
-The adapter targets T3 orchestration protocol 2. See the [verification record](docs/verification.md) for tested nightly versions and actual acceptance results; compatibility with future nightlies is not guaranteed. T3-specific changes belong in the host adapter.
-
-The transcript displays plain text with bounded history and explicitly shortened long items. Rich diffs, terminals, attachment uploads, and other advanced workflows remain in full T3.
-
-## Development
-
-```sh
+bash scripts/check-go.sh
 bash scripts/check.sh
+bash scripts/build-go.sh
 ```
 
-See [architecture](docs/architecture.md), [contributor instructions](AGENTS.md), and the optional [resource measurement guide](docs/measurement.md). No RAM or battery savings are claimed without measurements.
+The Go check script covers formatting, tests, vet and race detection. The shared check script retains adapter, script, measurement and available Swift checks. CI publishes the primary `t3oxide-terminal-macos-arm64` artifact and separately checks/builds the legacy Swift app as `t3oxide-legacy-swift-macos-arm64`.
+
+See [architecture](docs/architecture.md), [Go implementation ownership](docs/go-terminal.md), [contributor instructions](AGENTS.md) and the [verification record](docs/verification.md) for pinned dependencies and recorded checks. The adapter targets T3 orchestration protocol 2; compatibility with future nightlies is not guaranteed. No RAM or battery savings are claimed without measurements.
+
+## Legacy Swift rollback
+
+The AppKit source remains in `mac/`. On an Apple Silicon Mac running macOS 14+ with Apple developer tools, build it with `bash scripts/build-mac.sh`. Outputs remain `dist/t3oxide.app` and `dist/t3oxide-macos-arm64.zip`; builds are ad-hoc signed and not notarized. See [legacy installation](NATIVE.md#legacy-swift-rollback).
+
+Swift retains `~/.config/t3oxide/drafts.json`; Go uses the separate `go-drafts.json` and never edits the Swift file. Preserve both state files and host `operations-v1/` recovery journals. Returning to Swift does not transfer new Go drafts or pending actions; review unresolved work before changing clients.

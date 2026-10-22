@@ -1,0 +1,58 @@
+{
+  "checked_on": "2026-10-22",
+  "t3oxide_baseline": {
+    "name": "t3oxide",
+    "sha": "91ef2df0c51cf60fc9bacaa85970a173a6f76a0f",
+    "url": "https://github.com/Xon333/t3oxide/commit/91ef2df0c51cf60fc9bacaa85970a173a6f76a0f"
+  },
+  "go_minimum": "1.26.0",
+  "dependencies": [
+    {
+      "name": "bubbletea",
+      "tag": "v2.1.0",
+      "published": "2026-10-08T17:40:36Z",
+      "url": "https://github.com/charmbracelet/bubbletea/releases/tag/v2.1.0",
+      "commit": "f9df43c4f2c021d8740a2628d59cd810a862eb98",
+      "module": "charm.land/bubbletea/v2",
+      "license": "MIT"
+    },
+    {
+      "name": "bubbles",
+      "tag": "v2.2.1",
+      "published": "2026-08-24T09:15:14Z",
+      "url": "https://github.com/charmbracelet/bubbles/releases/tag/v2.2.1",
+      "commit": "490948109eb4731927ba2f4cd464d8175a9630d7",
+      "module": "charm.land/bubbles/v2",
+      "license": "MIT"
+    },
+    {
+      "name": "lipgloss",
+      "tag": "v2.0.6",
+      "published": "2026-08-11T17:18:55Z",
+      "url": "https://github.com/charmbracelet/lipgloss/releases/tag/v2.0.6",
+      "commit": "733ce53541bb688fd735524b665e0d96e35433bb",
+      "module": "charm.land/lipgloss/v2",
+      "license": "MIT"
+    },
+    {
+      "name": "glamour",
+      "tag": "v2.0.1",
+      "published": "2026-06-12T13:55:25Z",
+      "url": "https://github.com/charmbracelet/glamour/releases/tag/v2.0.1",
+      "commit": "95c93db04489cebf252ec856584445c7e85ee276",
+      "module": "charm.land/glamour/v2",
+      "license": "MIT"
+    }
+  ],
+  "source_policy": "Unmodified upstream dependencies, pinned in go.mod/go.sum; no core-tui or UI fork.",
+  "base_archive_reported_toolchain": "go1.26.9 linux/amd64",
+  "upgrade_verification": {
+    "checked_on": "2026-10-22",
+    "toolchain": "go1.27.2 darwin/arm64",
+    "node": "v24.21.0",
+    "swift": "Apple Swift 6.4.0 (Xcode 27.0)",
+    "scope": "Full production dependency graph: CLI, Bubble Tea UI, config/wire/client, actual Node adapter, program and assembled-executable PTY integration",
+    "full_pinned_build": "Native Apple Silicon build; results in docs/verification.md",
+    "go_mod_and_sum": "All module versions and go.sum retained; clipboard promoted from indirect to direct for validated paste handling"
+  }
+}

@@ -1,0 +1,45 @@
+# Go terminal ownership
+
+The CLI entry point is `cmd/t3oxide`. The runtime path is:
+
+**Go CLI/TUI → OpenSSH or local stdio → Node NDJSON adapter → existing T3.**
+
+[Terminal redesign](terminal-redesign.md) records the UI decisions, keyboard/workflow guide and released upstream provenance. Start with Ctrl+P, type to find an action, then press Enter once. Ctrl+T chooses a conversation, Ctrl+E an environment and Ctrl+R a request; Enter sends and Ctrl+J adds a newline (Alt+Enter is an alias). F1 opens help; from the main workspace, Ctrl+P → `help` → Enter also works without a function key. F2 exposes full request/option details. Ctrl+S requests Stop + hold queue independently of ordinary actions; Ctrl+D quits locally while T3 continues.
+
+## Source boundary
+
+| Package | Responsibility |
+|---|---|
+| `internal/ui` | Bubble Tea event loop; Bubbles textarea, viewport and lists; Lip Gloss layout/themes; Glamour Markdown; command palette, exact dialog surfaces and terminal lifecycle |
+| `internal/client` | Selected T3 session, reconnect, bounded view events, drafts, navigation, exact requests, delivery and explicit recovery operations |
+| `internal/wire` | Existing NDJSON framing, identity/revision validation, bounded keyed views, independent Stop admission and owned subprocess cleanup |
+| `internal/config` | Existing environment format, strict SSH options, bounded durable drafts/operation records and single-owner lock |
+| `adapter/` | T3 protocol integration, bounded model/lineage extensions, authentication and host receipts |
+
+There is no core-tui dependency or local interface fork. Text entry, scrolling and list navigation use the upstream Bubbles components. No local agent runner, model runtime, T3 HTTP client, transcript database, prompt queue, polling service or embedded browser is introduced.
+
+The Go transport and recovery logic reuse tested work from the earlier core-tui alternative. The interface and its application-specific session boundary are independent of that framework. Both alternatives start from T3oxide `91ef2df0c51cf60fc9bacaa85970a173a6f76a0f`; `mac/`, the core command mapper, wire envelopes and journal implementation remain unchanged. The adapter adds bounded model/navigation modules; the installer includes them. Original Node/Swift/Python tests are preserved and the Go loopback fixture is extended.
+
+## Authority and lifetime
+
+T3 remains the source of conversation state. A session emits complete bounded snapshots after strict keyed delta/revision validation. The UI does not append model tokens or retain unbounded history. Earlier replaces the page and pauses live detail; Latest reattaches the live page. Old session, render and action results are rejected after switching.
+
+Sends preserve literal human text and `auto`, `queue` or `steer` intent. Before any mutation, the client saves a stable operation ID and original payload. Uncertain writes remain available for explicit same-ID retry; reconnect only restores reads. Stop uses its own admission and recovery lane and the reviewed run ID. A historical page cannot silently retarget Stop at newer work.
+
+Request dialogs preserve T3 request IDs, revisions and offered values. Dismissal is local; supersession, switching and shutdown cancel the exact pending surface. An approval is never answered through a generic permission policy.
+
+Drafts remain separate by environment/thread. Acknowledgment clears only matching submitted text, preserving later editing and attachment switches. Shared persistence coordination prevents retiring attachments from overwriting newer drafts or restoring text after acknowledgment. The durable state contains drafts, staged selection overrides, environment-scoped presets and recovery records, not conversation history. Matching acknowledgment clears only the submitted override ID. The new-conversation acknowledgment is correlated with its source thread while clearing only its separate launch draft.
+
+## Rendering and unsupported operations
+
+Network/action work runs outside Update/View. Markdown rendering uses keyed caches and bounded work, with stale width/theme/session results rejected. The default layout is one centered conversation column with role markers, a growing composer and an optional context sidebar on wide terminals. Lip Gloss layers compose overlays; Bubbles supplies contextual help, fuzzy lists and scrollable full details. Bubble Tea owns terminal foreground/background setup and reset. Fixed dark themes are violet, cyan and lime. The optional Terminal theme leaves default colors to the terminal, uses basic ANSI palette accents and inverse selections, and maps code/diff syntax through Chroma's native `terminal16` formatter without a fixed text color or background. It needs no color probes, Ghostty configuration parsing or theme watcher. Glamour retains finite-width table layout in every theme.
+
+The adapter provides bounded messages, notices, pending requests and attachment counts. Markdown and fenced code/diffs render through Glamour. Model selection/effort/tier now pass through the additive adapter extension described in [model-navigation.md](model-navigation.md). Full tool payloads, attachment uploads, provider switching/configuration and full-history search remain in T3. Transcript search covers the displayed page; thread filtering uses the actual host list operation.
+
+Dependency versions, upstream commits and release links are in `dependencies.json`. No latency, RAM, battery or footprint advantage is asserted from the language or framework choice.
+
+## Verification
+
+Use `scripts/check-go.sh` for formatting, the complete suite, vet and race detection with the production dependency graph. The integration suite runs the actual Node adapter, Bubble Tea programs and assembled executable in a real PTY against disposable loopback T3 fixtures. On Darwin the PTY comparison excludes only the kernel's transient `PENDIN` flag; every persistent mode and control character remains checked.
+
+The native Mac build also verifies the retained Swift implementation. [Verification](verification.md) records the exact toolchains, outcomes and installed-instance boundary. Go 1.26.0 and all recorded Charm versions remain pinned in `go.mod`/`go.sum`.

@@ -1,7 +1,23 @@
-name: Companion checks
+name: t3oxide checks
 on:
   push:
-    paths: ['adapter/**', 'mac/**', 'scripts/**', 'tests/**', '.github/workflows/mac-build.yml']
+    paths:
+      - 'adapter/**'
+      - 'mac/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'config/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'LICENCE*'
+      - 'LICENSE*'
+      - 'LICENSES/**'
+      - 'NOTICE'
+      - '*.md'
+      - 'docs/**'
+      - '.github/workflows/mac-build.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -9,7 +25,38 @@ concurrency:
   group: t3oxide-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  go:
+    name: Primary Go terminal client
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+      - name: Terminal client checks
+        run: bash scripts/check-go.sh
+      - name: Build Apple Silicon terminal client
+        run: |
+          test "$(uname -m)" = arm64
+          bash scripts/build-go.sh
+          file dist/t3oxide
+          test "$(lipo -archs dist/t3oxide)" = arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3oxide-terminal-macos-arm64
+          path: |
+            dist/t3oxide
+            NOTICE
+            LICENSES/
+          if-no-files-found: error
+          retention-days: 14
   adapter:
+    name: Shared host adapter and scripts
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -28,21 +75,23 @@ jobs:
         run: |
           node --test tests/*.test.mjs
           for file in adapter/*.mjs scripts/*.mjs; do node --check "$file"; done
-          bash -n scripts/build-mac.sh scripts/check.sh
+          bash -n scripts/build-go.sh scripts/check-go.sh scripts/check-portable-core.sh scripts/build-mac.sh scripts/check.sh
           python3 -m py_compile scripts/measure.py
+          python3 -m unittest discover -s tests -p test_measure.py
   mac:
+    name: Legacy Swift rollback client
     runs-on: macos-15
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Native model check
+      - name: Legacy Swift model check
         run: |
           swiftc -swift-version 5 mac/Model.swift tests/ModelTests.swift -o /tmp/t3oxide-model
           /tmp/t3oxide-model
-      - name: Build AppKit client
+      - name: Build legacy AppKit client and check transport
         run: bash scripts/build-mac.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: t3oxide-macos-arm64
+          name: t3oxide-legacy-swift-macos-arm64
           path: dist/t3oxide-macos-arm64.zip
           retention-days: 14
