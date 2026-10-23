@@ -126,9 +126,9 @@ func TestFeatureHeaderAndNavigationRemainBoundedThroughResizeAndThemes(t *testin
 		}
 	}
 }
-func TestModelStatusLabelsSavedSelectionNotUnverifiedRuntime(t *testing.T) {
-	if !strings.HasPrefix(modelStatusLine("saved · high effort"), "Thread:") {
-		t.Fatal("saved preference is unlabeled")
+func TestModelStatusPreservesSavedSelectionWithoutInventingRuntime(t *testing.T) {
+	if got := modelStatusLine("saved · high effort"); got != "saved · high effort" {
+		t.Fatalf("saved preference was replaced or redundantly labeled: %q", got)
 	}
 	if !strings.Contains(modelStatusLine(""), "unreported") {
 		t.Fatal("missing selection invented")

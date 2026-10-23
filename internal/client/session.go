@@ -169,6 +169,8 @@ type Session struct {
 	requestID, requestRevision string
 	requestGeneration          uint64
 	activeRun                  string
+	liveRequestThread          string
+	liveRequests               []map[string]any
 	seenRequests               map[string]bool
 	asker                      prompter
 	prompts                    *promptBroker
@@ -530,20 +532,7 @@ func (a *Session) applyPacket(packet wire.Packet) error {
 					a.activeRun = ""
 				}
 			}
-			if a.requestCancel != nil && !containsRequest(s, a.requestID, a.requestRevision) {
-				a.requestCancel()
-				a.requestCancel = nil
-			}
-			currentRequests := make(map[string]bool, len(s.Metadata.Requests))
-			for _, request := range s.Metadata.Requests {
-				key := stringValue(request["id"]) + "/" + stringValue(request["revision"])
-				currentRequests[key] = true
-				if !a.seenRequests[key] {
-					a.seenRequests[key] = true
-					a.notice("T3 awaits your input. /requests to review; Ctrl+S stops the active turn with queue hold.")
-				}
-			}
-			a.seenRequests = currentRequests
+			a.observeRequestsLocked(s)
 			a.mu.Unlock()
 		}
 	} else if packet.Event == "status" {
@@ -645,9 +634,10 @@ func (a *Session) statusLocked(s *wire.Snapshot) Status {
 				}
 			}
 		}
-		if len(s.Metadata.Requests) > 0 {
-			state += fmt.Sprintf(" · awaiting input (%d)", len(s.Metadata.Requests))
-		}
+	}
+	requests := len(a.requestOffersLocked())
+	if requests > 0 {
+		state += fmt.Sprintf(" · awaiting input (%d)", requests)
 	}
 	if a.environment != nil {
 		if a.ready && !a.writable {
@@ -671,6 +661,7 @@ func (a *Session) statusLocked(s *wire.Snapshot) Status {
 		state += " · " + a.lastAction
 	}
 	status := Status{Context: contextLine, ModelName: model, State: state, ThreadID: a.thread, Delivery: a.delivery, Connected: a.ready, Writable: a.ready && a.writable}
+	status.Requests = requests
 	status.ProfileIDs = a.manager.ProfileIDs()
 	status.Location = a.locationLocked(s)
 	status.ConnectionState = a.connectionState
@@ -703,7 +694,6 @@ func (a *Session) statusLocked(s *wire.Snapshot) Status {
 		}
 	}
 	if s != nil {
-		status.Requests = len(s.Metadata.Requests)
 		status.RunState = s.Metadata.Status
 		status.Historical = s.Metadata.Historical
 	}
@@ -836,11 +826,11 @@ func numberValue(v any) int64 {
 	}
 	return -1
 }
-func containsRequest(s *wire.Snapshot, id, revision string) bool {
-	if s == nil || !s.Metadata.Live {
+func containsRequest(requests []map[string]any, id, revision string) bool {
+	if id == "" || revision == "" {
 		return false
 	}
-	for _, r := range s.Metadata.Requests {
+	for _, r := range requests {
 		if stringValue(r["id"]) == id && stringValue(r["revision"]) == revision {
 			return true
 		}

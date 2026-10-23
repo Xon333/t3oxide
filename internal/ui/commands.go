@@ -273,18 +273,9 @@ func (m *Model) finishCommandNotice(name string, result client.Result, err error
 	}
 	if result.Text != "" {
 		m.notice = safeText(result.Text)
-		return
 	}
-	if m.notice != "" {
-		return
-	}
-	// Navigation's request acknowledgment precedes the rendered snapshot.
-	switch name {
-	case "earlier":
-		m.notice = "Earlier navigation acknowledged"
-	case "latest":
-		m.notice = "Latest navigation acknowledged"
-	}
+	// History position is already visible. Keep explicit result text and
+	// unrelated notices without adding a persistent navigation acknowledgment.
 }
 
 func commandOwnsNotice(name, notice string) bool {

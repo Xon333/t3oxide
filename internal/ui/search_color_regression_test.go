@@ -41,7 +41,7 @@ func TestSearchColorPreservesStyledUnicodeThroughRouter(t *testing.T) {
 			}
 			m.Update(renderedMsg{request: req, content: content})
 			m.viewport.GotoTop()
-			before := m.viewport.View()
+			beforeViewport := m.viewport
 			original := m.viewport.GetContent()
 
 			// Route the command through the real composer and Enter handler.
@@ -50,7 +50,11 @@ func TestSearchColorPreservesStyledUnicodeThroughRouter(t *testing.T) {
 			if m.searchTerm != "mARKDOWN" || len(m.searchLines) != 2 {
 				t.Fatalf("search not routed: term=%q lines=%v", m.searchTerm, m.searchLines)
 			}
-			after := m.viewport.View()
+			// Search feedback can consume a row. Compare native views at the
+			// same geometry while retaining all ANSI/Unicode and row-width checks.
+			beforeViewport.SetHeight(m.viewport.Height())
+			beforeViewport.SetYOffset(m.viewport.YOffset())
+			before, after := beforeViewport.View(), m.viewport.View()
 			if after == before {
 				t.Error("search did not visibly style the selected matching line")
 			}

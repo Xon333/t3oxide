@@ -53,9 +53,10 @@ type dialog struct {
 	preservedInitial          string
 	filterQuery               string
 	finishFocused             bool
-	actionFocus               int // 0 is the native list/editor; 1..N offered page controls
+	actionFocus               int // 0 is the native list/editor; 1..N visible page controls
 	surface                   client.Surface
 	launch                    *launchForm
+	browserSource             *dialog // exact suspended source for local More
 }
 
 func (m *Model) newList(title string, items []list.Item) list.Model {
@@ -76,6 +77,9 @@ func (m *Model) newList(title string, items []list.Item) list.Model {
 	return l
 }
 func (m *Model) openPrompt(p *client.Prompt) {
+	// A new client prompt supersedes any local browser overlay. Never leave
+	// an old More picker capable of answering a replacement prompt.
+	m.browserDialog = nil
 	q := p.Question
 	d := &dialog{prompt: p, kind: q.Kind, title: q.Title, description: q.Prompt, selected: make(map[string]bool), surface: q.Surface}
 	m.dialogSerial++
@@ -148,6 +152,9 @@ func (m *Model) openPrompt(p *client.Prompt) {
 
 func (m *Model) cancelDialog() tea.Cmd {
 	if m.dialog != nil && m.dialog.prompt == nil && m.browserDialog != nil {
+		if m.dialog.local == "browser-more" && !m.browserMoreSourceLive() {
+			return m.retireBrowserMore()
+		}
 		m.dialog, m.browserDialog = m.browserDialog, nil
 		m.resize()
 		return m.restoreFocus()
@@ -210,6 +217,22 @@ func (m *Model) chooseDialog() tea.Cmd {
 	if selected.disabled {
 		m.notice = selected.description
 		return nil
+	}
+	if d.local == "browser-more" {
+		if !m.browserMoreSourceLive() {
+			return m.retireBrowserMore()
+		}
+		if selected.command == "browser-more-help" {
+			m.openDetail("Help", m.helpText())
+			return nil
+		}
+		if selected.command != "browser-more-action" || !slices.Contains(d.browserSource.prompt.Question.BrowserPage.Actions, selected.id) {
+			m.notice = "This browser action is no longer offered"
+			return nil
+		}
+		m.dialog, m.browserDialog = d.browserSource, nil
+		m.resize()
+		return m.browserAction(selected.id)
 	}
 	if d.kind == client.ChooseMany {
 		d.selected[selected.id] = !d.selected[selected.id]

@@ -1,21 +1,68 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/Xon333/t3oxide/internal/wire"
 )
+
+// A historical page omits controls; that omission cannot resolve a live
+// request. Only verified live projections replace this attachment's offers.
+func (a *Session) observeRequestsLocked(s *wire.Snapshot) {
+	if !a.helloVerified || !s.Metadata.Live || s.Metadata.Historical || s.Metadata.ThreadID != a.thread {
+		return
+	}
+	// Keep offers separate from snapshots exposed to readers, including the
+	// retained page used during reconnect. Wire requests are JSON values.
+	data, _ := json.Marshal(s.Metadata.Requests)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	a.liveRequests = nil
+	_ = decoder.Decode(&a.liveRequests)
+	a.liveRequestThread = s.Metadata.ThreadID
+	if a.requestCancel != nil && !containsRequest(a.liveRequests, a.requestID, a.requestRevision) {
+		a.requestCancel()
+		a.requestCancel = nil
+	}
+	current := make(map[string]bool, len(a.liveRequests))
+	for _, request := range a.liveRequests {
+		key := stringValue(request["id"]) + "/" + stringValue(request["revision"])
+		current[key] = true
+		if !a.seenRequests[key] {
+			a.notice("T3 awaits your input. /requests to review; Ctrl+S stops the active turn with queue hold.")
+		}
+	}
+	a.seenRequests = current
+}
+
+func (a *Session) requestOffersLocked() []map[string]any {
+	if a.liveRequestThread != a.thread {
+		return nil
+	}
+	return a.liveRequests
+}
+
+func (a *Session) offersRequest(id, revision string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return containsRequest(a.requestOffersLocked(), id, revision)
+}
 
 // ReviewRequests presents client prompts with exact T3 request IDs,
 // revisions and offered decisions retained. Dismissal is strictly local.
 func (a *Session) ReviewRequests(ctx context.Context) error {
-	s := a.snapshot()
-	if s == nil || !s.Metadata.Live || len(s.Metadata.Requests) == 0 {
-		return errors.New("no actionable pending requests in the live view")
+	a.mu.Lock()
+	requests, thread := a.requestOffersLocked(), a.thread
+	a.mu.Unlock()
+	if len(requests) == 0 {
+		return errors.New("no verified pending requests; use /latest to refresh")
 	}
-	requests := s.Metadata.Requests
 	selected := requests[0]
 	if len(requests) > 1 {
 		choices := make([]Choice, 0, len(requests))
@@ -62,10 +109,10 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 		}
 		a.mu.Unlock()
 	}()
-	if !containsRequest(a.snapshot(), id, revision) {
+	if !a.offersRequest(id, revision) {
 		return errors.New("request changed; reopen /requests")
 	}
-	fields := map[string]any{"threadId": s.Metadata.ThreadID, "requestId": id, "revision": revision}
+	fields := map[string]any{"threadId": thread, "requestId": id, "revision": revision}
 	switch stringValue(selected["kind"]) {
 	case "approval_request":
 		options, err := objects(selected["options"])
@@ -129,7 +176,7 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 	if requestCtx.Err() != nil {
 		return requestCtx.Err()
 	}
-	if !containsRequest(a.snapshot(), id, revision) {
+	if !a.offersRequest(id, revision) {
 		return errors.New("request changed while you reviewed it; no answer sent")
 	}
 	_, err := a.perform(requestCtx, "answer", fields, "", false)

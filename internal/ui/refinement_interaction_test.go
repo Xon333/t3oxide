@@ -45,8 +45,8 @@ func TestRefinementFilteredRowSelectionUsesNativeCursor(t *testing.T) {
 			t.Fatalf("selected style disagrees with cursor:\n%s", view)
 		}
 		m.View()
-		if m.dialog.list.Index() != 1 || !strings.Contains(ansi.Strip(m.pickerSelectionView(60)), "Entry B") || !strings.Contains(m.dialog.detailText, "Entry B") {
-			t.Fatal("render changed selected row/footer/detail identity")
+		if m.dialog.list.Index() != 1 || strings.TrimSpace(ansi.Strip(m.pickerSelectionView(60))) != "" || !strings.Contains(m.dialog.detailText, "Entry B") {
+			t.Fatal("render changed selected row/detail identity or repeated its complete unique title")
 		}
 	}
 	m.Update(keyPress(tea.KeyEnter))

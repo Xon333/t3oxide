@@ -60,10 +60,12 @@ func (a *Session) Stop(ctx context.Context) (err error) {
 
 func (a *Session) perform(ctx context.Context, op string, fields map[string]any, savedID string, stopLane bool) (map[string]any, error) {
 	// A retained page is for uninterrupted reading across reconnects. Only
-	// Stop may use its reviewed run before the new helper supplies a view;
+	// Stop and exact request answers may use retained controls. The adapter
+	// validates their targets against fresh state without resuming live detail;
 	// ordinary mutations need the current helper's authoritative snapshot.
 	s := a.store.Snapshot()
-	if s == nil && op == "stop" {
+	current := s != nil
+	if s == nil && (op == "stop" || op == "answer") {
 		s = a.snapshot()
 	}
 	a.mu.Lock()
@@ -72,7 +74,11 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 		return nil, errors.New("writes unavailable: select a connected, writable conversation")
 	}
 	conn, env, thread, sessionCtx := a.conn, *a.environment, a.thread, a.ctx
-	if s == nil || stringValue(fields["threadId"]) != thread || (op != "stop" && (!s.Metadata.Live || s.Metadata.Historical || a.cachedHistory || a.store.NeedsResnapshot() || a.navigating)) {
+	// An explicit same-ID answer retry retains its original journaled target,
+	// even if a newer live projection has already removed that offer.
+	historicalAnswer := op == "answer" && s != nil && s.Metadata.Historical && s.Metadata.ThreadID == thread &&
+		(savedID != "" || containsRequest(a.requestOffersLocked(), stringValue(fields["requestId"]), stringValue(fields["revision"])))
+	if s == nil || stringValue(fields["threadId"]) != thread || (op != "stop" && (a.store.NeedsResnapshot() || a.navigating || (!historicalAnswer && (!current || !s.Metadata.Live || s.Metadata.Historical || a.cachedHistory)))) {
 		a.mu.Unlock()
 		return nil, errors.New("conversation is not synchronized; /latest before this action")
 	}

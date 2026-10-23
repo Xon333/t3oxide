@@ -408,6 +408,9 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 		t.Fatalf("first offered approval changed: %#v", approval)
 	}
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "awaiting input (1)") })
+	// The host projection can arrive before the program consumes actionDone.
+	// Wait for its empty composer before typing another slash command.
+	r.waitText("Ctrl+R requests  Ctrl+P commands  Enter send")
 	r.send("/requests\r")
 	r.modalReady("Choice")
 	r.send("Continue\r")
@@ -425,6 +428,7 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	if state.Pending("env-a", false) != nil {
 		t.Fatal("question acknowledgement did not settle")
 	}
+	r.waitText("Ctrl+S Stop/hold  Ctrl+P commands  Enter send")
 	r.send("/quit\r")
 	select {
 	case <-r.done:

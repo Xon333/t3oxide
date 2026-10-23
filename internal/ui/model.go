@@ -65,6 +65,7 @@ type Model struct {
 	mouse, sidebar                             bool
 	width, height, contentWidth, bodyHeight    int
 	modalWidth, modalHeight                    int
+	surfaceHelpHeight                          int
 	composer, modalInput                       textarea.Model
 	completion                                 commandCompletion
 	searchInput                                textinput.Model
@@ -96,6 +97,7 @@ type Model struct {
 	inputProblem, inputProblemKind             string
 	inputProblemID                             uint64
 	notice, problem                            string
+	feedbackShown, pickerSelectionShown        bool
 	streamProblem                              string
 	actionBusy, stopBusy                       bool
 	actionName                                 string
@@ -127,7 +129,7 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 		theme = "violet"
 	}
 	m := &Model{ctx: ctx, cancel: cancel, settings: settings, theme: theme, mouse: mouse, sidebar: sidebar, width: 80, height: 24, follow: true, focused: true, searchIndex: -1}
-	m.composer = newTextarea("Message")
+	m.composer = newTextarea("")
 	m.composer.DynamicHeight = true
 	m.composer.MinHeight = 1
 	m.modalInput = newTextarea("Enter your answer")
@@ -135,7 +137,7 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 	m.launchTitle.CharLimit = 0
 	m.launchTitle.SetVirtualCursor(true)
 	m.searchInput = textinput.New()
-	m.searchInput.Prompt = "Find in this page: "
+	m.searchInput.Prompt = ""
 	m.searchInput.CharLimit = 256
 	m.viewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(15))
 	m.detailViewport = viewport.New(viewport.WithWidth(80), viewport.WithHeight(15))
@@ -345,6 +347,17 @@ func (m *Model) startRender() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.captureLaunchDraft()
+	defer func() {
+		// Feedback can change in any routed command/component result. Resize
+		// only its transcript allocation, leaving the live editors untouched.
+		feedbackChanged := m.feedbackShown != m.feedbackVisible()
+		if feedbackChanged {
+			m.resizeTranscript()
+		}
+		if m.pickerSelectionShown != (m.pickerSelectionView(m.modalWidth) != "") || m.surfaceHelpHeight != m.surfaceHelpRows() || feedbackChanged && (m.browserPage || m.launchPage) {
+			m.resizeDialog()
+		}
+	}()
 	var commands []tea.Cmd
 	switch msg := message.(type) {
 	case editorFinishedMsg:
@@ -420,7 +433,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearInputProblem("composer", 0)
 			m.preservedDraft = ""
 			m.composer.SetValue("")
-			m.composer.Placeholder = "Message"
+			m.composer.Placeholder = ""
 			m.draftEdits++
 			m.refreshCompletion()
 			commands = append(commands, m.restoreFocus())
@@ -494,6 +507,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation == m.generation && m.browserDialog != nil && m.browserDialog.prompt.ID == msg.id {
 			m.browserDialog = nil
 			if m.dialog != nil && m.dialog.prompt == nil {
+				// This local menu and any Help overlay belong to the retired
+				// suspended browser. Durable errors/receipts keep their owners.
+				if m.dialog.local == "browser-more" || m.dialog.local == "browser-settings" || m.dialog.local == "theme" {
+					if m.detailTitle == "Help" || m.detailTitle == "Navigation controls" || m.detailTitle == "Request controls" || m.detailTitle == "Keyboard and commands" {
+						m.detail, m.detailTitle, m.detailCopy = "", "", ""
+					}
+					m.browserPage, m.launchPage = false, false
+				}
 				m.dialog = nil
 				m.resize()
 				return m, m.restoreFocus()
@@ -714,7 +735,7 @@ func (m *Model) currentDraft() string {
 // until the user copies/reviews it or explicitly clears it.
 func (m *Model) restoreDraft(text string) {
 	m.preservedDraft = ""
-	m.composer.Placeholder = "Message"
+	m.composer.Placeholder = ""
 	if len(text) <= maxInputBytes && strings.Count(text, "\n") < maxInputLines {
 		m.composer.SetValue(text)
 		if m.composer.Value() == text {

@@ -38,7 +38,7 @@ func TestPickerCompactLayoutsKeepQuerySelectionAndPortableCompletion(t *testing.
 			m.Update(keyPress('u', tea.ModCtrl))
 			pickerFeedbackType(m, "Item 11")
 			panel := ansi.Strip(m.modalView())
-			for _, want := range []string{"Filter: Item 11", "→ Item 11", "Continue", "(1)", "continue"} {
+			for _, want := range []string{"Filter: Item 11", "Item 11", "Continue", "(1)", "continue"} {
 				if want == "(1)" && m.modalWidth >= 25 {
 					want = "1 selected"
 				}
@@ -46,14 +46,17 @@ func TestPickerCompactLayoutsKeepQuerySelectionAndPortableCompletion(t *testing.
 					t.Fatalf("missing %q while the checked answer is filtered out:\n%s", want, panel)
 				}
 			}
+			if m.dialog.list.SelectedItem().(choiceItem).id != "exact-id-11" || !strings.Contains(m.dialog.detailText, "ID: exact-id-00") {
+				t.Fatal("current row changed or complete Details lost the hidden checked ID")
+			}
 			if lipgloss.Width(m.modalView()) > size[0] || lipgloss.Height(m.modalView()) > size[1] {
 				t.Fatalf("picker exceeds terminal: %dx%d\n%s", lipgloss.Width(m.modalView()), lipgloss.Height(m.modalView()), panel)
 			}
 			if size[0] >= 60 && m.dialog.list.FilterInput.Width() < 40 {
 				t.Fatal("supported compact layout squeezed the native query editor")
 			}
-			if size[1] < 24 && strings.Contains(panel, "Optional explanation") {
-				t.Fatal("optional descriptions survived at the expense of compact controls")
+			if size[0] >= 60 && !strings.Contains(panel, "Optional explanation") {
+				t.Fatal("supported compact picker lost the selected choice's useful context")
 			}
 			m.Update(keyPress(tea.KeyTab))
 			if !m.dialog.finishFocused || m.dialog.list.FilterInput.Focused() {

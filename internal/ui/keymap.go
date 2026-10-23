@@ -65,8 +65,19 @@ func (m *Model) keyMap() appKeyMap {
 	}
 	if normal && (m.transcriptFocus || m.currentDraft() == "") {
 		k.Palette.SetKeys("ctrl+space", "ctrl+@", "f3", "ctrl+p")
+		k.Palette.SetHelp("Ctrl+P", "commands")
 		k.Threads.SetKeys("ctrl+o", "f6", "ctrl+t")
 		k.Quit.SetKeys("ctrl+q", "ctrl+d")
+	} else if normal {
+		// Ctrl+P belongs to the nonempty editor. Tab transfers focus before
+		// the portable palette shortcut becomes available.
+		k.Palette.SetHelp("Tab→Ctrl+P", "commands")
+	}
+	if reading {
+		k.Help.SetKeys("f1", "?")
+		k.Help.SetHelp("?", "help")
+		k.Search.SetKeys("ctrl+f", "/")
+		k.Search.SetHelp("/", "find in page")
 	}
 	k.Edit.SetEnabled(normal && !m.transcriptFocus)
 	k.Clear.SetEnabled(normal && !m.transcriptFocus && m.currentDraft() != "")
@@ -123,6 +134,25 @@ func (m *Model) helpMap() contextHelp {
 	short := active
 	if m.detail != "" || m.dialog != nil || m.searching || m.transcriptFocus {
 		short = append(short, k.Palette, k.Stop)
+	}
+	if m.detail == "" && m.dialog == nil && !m.searching && !m.browserPage && !m.launchPage {
+		// Put Stop ahead of optional navigation so native help truncation
+		// cannot hide it. Requests has one mnemonic and no repeated count.
+		short = []key.Binding{k.Stop}
+		if m.problem != "" || m.streamProblem != "" {
+			short = append(short, k.Error)
+		}
+		if m.status.Requests > 0 {
+			short = append(short, k.Requests)
+		}
+		short = append(short, k.Palette)
+		if m.transcriptFocus {
+			short = append(short, k.Search, k.Help, k.Focus, k.Earlier, k.Latest, k.Copy)
+		} else if m.preservedDraft != "" {
+			short = append(short, k.Edit, k.Detail, k.Send)
+		} else {
+			short = append(short, k.Send, m.composer.KeyMap.InsertNewline, k.Focus)
+		}
 	}
 	full := [][]key.Binding{global, active}
 	if m.detail == "" && m.dialog == nil && !m.searching {

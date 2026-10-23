@@ -22,32 +22,33 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.5.0-bubbletea"
+var version = "0.5.1-bubbletea"
 
-const help = `t3oxide — terminal companion for your existing T3 environments
+const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 
+Examples:
   t3oxide                                  open the TUI
   t3oxide --env m1 --thread THREAD_ID        open a specific conversation
+
+In the TUI:
+  Ctrl+O conversations · Tab→Ctrl+P commands · /edit · /recall · /help
+  Ctrl+S Stop + queue hold · Ctrl+C keeps draft · Ctrl+Q exits
+  /retry [stop] reuses the saved operation ID; local exit leaves T3 running.
+
+Read-only commands:
   t3oxide envs [--json]                     list configured environments
   t3oxide threads --env m1 [FILTER] [--json] list matching threads
-  t3oxide status --env m1 [--thread ID]      read current adapter/thread status
-  t3oxide doctor [--env m1]                 verify identity and authenticated reads
+  t3oxide status --env m1 [--thread ID]      adapter/thread status (always JSON)
+  t3oxide doctor [--env m1] [--json]        verify identity and authenticated reads
 
 Options:
   --config PATH     existing environments.json (default ~/.config/t3oxide/)
   --state PATH      Go draft/recovery file (default ~/.config/t3oxide/go-drafts.json)
   --theme NAME      terminal, violet, cyan, or lime
   --no-mouse        native terminal selection; /mouse can change it later
-  --json            machine-readable listing/status output
+  --json            JSON for envs, threads or doctor; status always emits JSON
   --version         print version
   --help            print this help
-
-TUI: /switch environments/threads · /threads FILTER · /search TEXT
-     /delivery auto|queue|steer · Ctrl+S Stop + queue hold · /requests
-     /earlier (pauses live detail) · /latest · /retry [stop] · /theme
-     Enter sends · Ctrl+J newline · F3 commands · F6 conversations
-     Ctrl+C keeps draft · Ctrl+X clears (F5 recalls) · Ctrl+Q exits
-     F4 external editor · Tab transcript focus
 
 Only human actions in the TUI send writes. These CLI commands are read-only.
 Host credentials stay on the host. Existing T3 services are never started here.
@@ -60,6 +61,13 @@ type arguments struct {
 }
 
 func parse(args []string) (arguments, error) {
+	// Explicit help wins even when another argument is unknown, malformed,
+	// or would otherwise consume the help flag as its missing value.
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return arguments{help: true}, nil
+		}
+	}
 	a := arguments{config: config.DefaultEnvironmentsPath(), state: config.DefaultStatePath()}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -109,6 +117,9 @@ func parse(args []string) (arguments, error) {
 	}
 	if len(a.words) > 0 && a.command != "threads" {
 		return a, errors.New("unexpected positional arguments")
+	}
+	if a.json && a.command == "" && !a.version {
+		return a, errors.New("--json requires a read-only command: envs, threads, status or doctor; use --help")
 	}
 	return a, nil
 }

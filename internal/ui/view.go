@@ -31,20 +31,16 @@ func (m *Model) resize() {
 	if m.sidebar && m.width >= 110 {
 		m.contentWidth -= 30
 	}
-	wasBottom := m.viewport.AtBottom()
 	// Bubbles computes wrapped visual rows. Its high MaxHeight remains intact
 	// so the display cap cannot truncate a long human draft (see components.go).
 	m.composer.SetWidth(max(1, inner-4))
 	m.composer.SetHeight(min(m.composer.Height(), max(1, min(5, m.height/6))))
-	m.bodyHeight = max(1, m.height-m.composer.Height()-8)
-	m.viewport.SetWidth(m.contentWidth)
-	m.viewport.SetHeight(m.bodyHeight)
-	m.viewport.MouseWheelEnabled = m.mouse
-	if m.follow && wasBottom {
-		m.viewport.GotoBottom()
-	}
-	m.searchInput.SetWidth(max(1, inner-24))
+	m.resizeTranscript()
+	m.searchInput.SetWidth(max(1, inner-4))
+	m.resizeDialog()
+}
 
+func (m *Model) resizeDialog() {
 	// Supported layouts: 60×16 compact, 80×24 normal, 120×35 roomy.
 	// Below compact, drop optional question/description rows before reducing
 	// the query, current selection or portable completion control.
@@ -56,11 +52,22 @@ func (m *Model) resize() {
 	if m.height < 16 {
 		m.modalHeight = max(1, m.height-2)
 	}
+	m.surfaceHelpHeight = m.surfaceHelpRows()
+	surfaceHeight := m.height - 2 - m.surfaceHelpHeight
+	if m.feedbackVisible() {
+		surfaceHeight -= lipgloss.Height(m.feedbackView(m.workspaceWidth()))
+	}
 	if m.browserPage || m.launchPage {
-		m.modalHeight = max(1, min(22, m.height-6))
+		// Full-page allocation pays for the modal's border and horizontal padding.
+		m.modalWidth = max(1, min(m.modalWidth, m.workspaceWidth()-4))
+		m.modalHeight = max(1, min(22, surfaceHeight-2))
 	}
 	m.detailViewport.SetWidth(m.modalWidth)
-	m.detailViewport.SetHeight(max(1, m.modalHeight-1))
+	helpHeight := 1
+	if m.browserPage || m.launchPage {
+		helpHeight = 0
+	}
+	m.detailViewport.SetHeight(max(1, m.modalHeight-helpHeight))
 	m.detailViewport.MouseWheelEnabled = m.mouse
 	questionHeight := 0
 	if m.dialog != nil && m.dialog.description != "" && m.height >= 16 {
@@ -72,12 +79,13 @@ func (m *Model) resize() {
 	m.questionViewport.SetWidth(m.modalWidth)
 	m.questionViewport.SetHeight(questionHeight)
 	m.questionViewport.MouseWheelEnabled = m.mouse && m.dialog != nil && m.dialog.details
+	m.pickerSelectionShown = m.pickerSelectionView(m.modalWidth) != ""
 	if m.dialog != nil && m.detail == "" {
 		if m.dialog.details {
-			m.questionViewport.SetHeight(max(1, m.modalHeight-1))
+			m.questionViewport.SetHeight(max(1, m.modalHeight-helpHeight))
 		} else if m.dialog.launch != nil {
 			m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
-			m.modalInput.SetHeight(max(2, min(8, m.height-12)))
+			m.modalInput.SetHeight(max(1, min(8, surfaceHeight-8)))
 			m.launchTitle.SetWidth(max(1, m.workspaceWidth()-12))
 			return
 		} else if m.dialog.kind == client.EnterText {
@@ -86,12 +94,15 @@ func (m *Model) resize() {
 			m.styleList(&m.dialog.list)
 			// Query, current selection and help are fixed rows. Completion is
 			// outside the native filterable list, so even zero matches can finish.
-			fixed := questionHeight + 3
+			fixed := questionHeight + 1 + helpHeight
+			if m.pickerSelectionShown {
+				fixed++
+			}
 			if m.dialog.kind == client.ChooseMany {
 				fixed++
 			}
 			if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany {
-				fixed += 3
+				fixed += m.browserControlsHeight(m.modalWidth)
 			}
 			m.modalHeight = min(m.modalHeight, fixed+max(1, len(m.dialog.list.VisibleItems())))
 			m.dialog.list.SetShowPagination(m.height >= 24)
@@ -102,9 +113,35 @@ func (m *Model) resize() {
 		}
 	}
 	m.modalInput.SetWidth(m.modalWidth)
-	m.modalInput.SetHeight(max(1, m.modalHeight-questionHeight-1))
+	m.modalInput.SetHeight(max(1, m.modalHeight-questionHeight-helpHeight))
 	if m.dialog != nil && m.dialog.prompt != nil && m.dialog.prompt.Question.SingleLine {
 		m.modalInput.SetHeight(1)
+	}
+}
+
+func (m *Model) surfaceHelpRows() int {
+	if m.browserPage || m.launchPage {
+		return lipgloss.Height(m.dialogHelp(m.workspaceWidth(), true))
+	}
+	return 0
+}
+
+func (m *Model) resizeTranscript() {
+	wasBottom := m.viewport.AtBottom()
+	m.feedbackShown = m.feedbackVisible()
+	feedbackHeight := 0
+	if m.feedbackShown {
+		feedbackHeight = 1
+	}
+	m.bodyHeight = max(1, m.height-m.composer.Height()-7-feedbackHeight)
+	m.viewport.SetWidth(m.contentWidth)
+	m.viewport.SetHeight(m.bodyHeight)
+	// SetHeight does not clamp an existing offset. Preserve valid anchors and
+	// let the native viewport bound the last page when reclaimed space grows it.
+	m.viewport.SetYOffset(m.viewport.YOffset())
+	m.viewport.MouseWheelEnabled = m.mouse
+	if m.follow && wasBottom {
+		m.viewport.GotoBottom()
 	}
 }
 
@@ -153,7 +190,6 @@ func (m *Model) View() tea.View {
 	if m.sidebar && m.width >= 110 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.sidebarView(28, m.bodyHeight))
 	}
-	feedback := m.feedbackView(inner)
 	label := "Message"
 	if m.status.Delivery != "" && m.status.Delivery != "auto" {
 		label += " · " + m.status.Delivery
@@ -175,7 +211,12 @@ func (m *Model) View() tea.View {
 		composer = m.searchInput.View()
 	}
 	frame := framed(label, padBlock(composer, max(1, inner-4), m.composer.Height()), inner-4, p, m.composer.Focused() || m.searching)
-	content := strings.Join([]string{header, model, status, connection, padBlock(body, inner, m.bodyHeight), feedback, frame, m.footerView(inner)}, "\n")
+	parts := []string{header, model, status, connection, padBlock(body, inner, m.bodyHeight)}
+	if m.feedbackVisible() {
+		parts = append(parts, m.feedbackView(inner))
+	}
+	parts = append(parts, frame, m.footerView(inner))
+	content := strings.Join(parts, "\n")
 	content = padBlock(content, inner, m.height)
 	margin := max(0, (m.width-inner)/2)
 	lines := strings.Split(content, "\n")
@@ -228,6 +269,9 @@ func (m *Model) bodyView() string {
 }
 
 func (m *Model) feedbackView(width int) string {
+	if !m.feedbackVisible() {
+		return ""
+	}
 	p := colors(m.theme)
 	text, style := m.notice, p.subtle()
 	if text == "" && m.actionBusy {
@@ -235,10 +279,6 @@ func (m *Model) feedbackView(width int) string {
 	}
 	if m.stopBusy {
 		text = commandProgress("stop")
-	}
-	if m.status.Requests > 0 && text == "" {
-		text = fmt.Sprintf("%d request(s) need you · Ctrl+R review", m.status.Requests)
-		style = p.active()
 	}
 	if m.streamProblem != "" {
 		text = m.feedbackSummary(width)
@@ -251,18 +291,31 @@ func (m *Model) feedbackView(width int) string {
 	return style.Render(fitLine(text, width))
 }
 
+func (m *Model) feedbackVisible() bool {
+	return m.notice != "" || m.actionBusy || m.stopBusy || m.problem != "" || m.streamProblem != ""
+}
+
 func (m *Model) modalView() string {
 	p := colors(m.theme)
 	w, h := m.modalWidth, m.modalHeight
+	localHelp := ""
+	if !m.browserPage && !m.launchPage {
+		localHelp = m.dialogHelp(w, false)
+	}
+	helpHeight := 0
+	if localHelp != "" {
+		helpHeight = 1
+		localHelp = "\n" + localHelp
+	}
 	if m.detail != "" {
-		return framed(m.detailTitle, padBlock(m.detailViewport.View(), w, max(1, h-1))+"\n"+m.hints(w, "Esc", "back", "Ctrl+Y", "copy", "↑/↓", "scroll"), w, p, true)
+		return framed(m.detailTitle, padBlock(m.detailViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)
 	}
 	d := m.dialog
 	if d == nil {
 		return ""
 	}
 	if d.details {
-		return framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-1))+"\n"+m.hints(w, "Ctrl+L/Esc", "back", "↑/↓", "scroll"), w, p, true)
+		return framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)
 	}
 	var parts []string
 	if d.surface == client.SurfaceBrowser && d.kind != client.ChooseMany {
@@ -271,33 +324,17 @@ func (m *Model) modalView() string {
 	if m.questionViewport.Height() > 0 {
 		parts = append(parts, m.questionViewport.View())
 	}
-	detailLabel := "details"
-	if m.problem != "" || m.streamProblem != "" {
-		detailLabel = "error"
-	}
-	controls := m.hints(w, "Enter", "select", "Ctrl+L", detailLabel, "Esc", "close")
 	if d.kind == client.EnterText {
-		controls = m.hints(w, "Enter", "answer", "Ctrl+J", "newline", "Ctrl+L", detailLabel, "Esc", "close")
-		if d.preservedInitial != "" {
-			controls = m.hints(w, "Ctrl+L", "review", "Ctrl+Y", "copy", "Ctrl+U", "replace", "Esc", "close")
-		}
-		parts = append(parts, padBlock(m.modalInput.View(), w, max(1, h-m.questionViewport.Height()-1)), controls)
-		return framed(d.title, strings.Join(parts, "\n"), w, p, true)
-	}
-	if d.prompt != nil && d.prompt.Question.Navigation {
-		controls = m.hints(w, "Enter", "open", "Ctrl+L", detailLabel, "Esc", "close")
-	}
-	if d.kind == client.ChooseMany {
-		if d.finishFocused {
-			controls = m.hints(w, "Enter", "continue", "Tab", "choices", "Ctrl+L", detailLabel, "Esc", "close")
-		} else {
-			controls = m.hints(w, "Tab", "continue", "Enter", "toggle", "Ctrl+L", detailLabel, "Esc", "close")
-		}
+		parts = append(parts, padBlock(m.modalInput.View(), w, max(1, h-m.questionViewport.Height()-helpHeight)))
+		return framed(d.title, strings.Join(parts, "\n")+localHelp, w, p, true)
 	}
 	// Keep the native query editor visible before typing and when completion
 	// owns focus. The selected-result row stays visible even when Bubbles dims
 	// candidates during filtering, and F2 retains complete offered text.
-	parts = append(parts, ansi.Truncate(d.list.FilterInput.View(), w, ""), padBlock(d.list.View(), w, d.list.Height()), m.pickerSelectionView(w))
+	parts = append(parts, ansi.Truncate(d.list.FilterInput.View(), w, ""), padBlock(d.list.View(), w, d.list.Height()))
+	if selection := m.pickerSelectionView(w); selection != "" {
+		parts = append(parts, selection)
+	}
 	if d.kind == client.ChooseMany {
 		count := 0
 		for _, selected := range d.selected {
@@ -316,21 +353,131 @@ func (m *Model) modalView() string {
 		}
 		parts = append(parts, style.Render(fitLine(label, w)))
 	}
-	parts = append(parts, controls)
-	return framed(d.title, strings.Join(parts, "\n"), w, p, true)
+	return framed(d.title, strings.Join(parts, "\n")+localHelp, w, p, true)
 }
 
 func (m *Model) pickerSelectionView(width int) string {
 	d := m.dialog
+	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" {
+		return ""
+	}
 	if item, ok := d.list.SelectedItem().(choiceItem); ok {
-		text := "→ " + item.title
-		if item.description != "" && m.height >= 24 {
-			description, _, _ := strings.Cut(item.description, "\n")
+		title := safeText(item.title)
+		matches := 0
+		for _, candidate := range d.list.Items() {
+			other, ok := candidate.(choiceItem)
+			if ok && safeText(other.title) == title {
+				matches++
+			}
+		}
+		duplicate := matches > 1
+		// The native delegate reserves two cells before the title. Preserve a
+		// footer when that title is clipped, ambiguous, or has useful context.
+		truncated := strings.Contains(title, "\n") || ansi.StringWidth(item.Title()) > max(0, width-2)
+		description := ""
+		if item.description != "" {
+			description, _, _ = strings.Cut(safeText(item.description), "\n")
+		}
+		if !truncated && !duplicate && description == "" && item.args == "" && !item.disabled {
+			return ""
+		}
+		text := "→ " + title
+		if duplicate {
+			identity := item.id
+			if identity == "" {
+				identity = strings.TrimSpace("/" + item.command + " " + item.args)
+			}
+			text = "→ " + safeText(identity) + " · " + title
+		}
+		if description != "" {
 			text += " · " + description
+		} else if item.args != "" {
+			text += " · " + safeText(item.args)
 		}
 		return colors(m.theme).active().Render(fitLine(text, width))
 	}
 	return colors(m.theme).subtle().Render(fitLine("No matches", width))
+}
+
+// dialogHelp is the sole local-controls contract for modals and full pages.
+// Full pages include the independent global lanes and wrap whole bindings so
+// compact widths retain activation and Stop before secondary controls.
+func (m *Model) dialogHelp(width int, fullSurface bool) string {
+	detailLabel, escape := "details", "close"
+	if m.problem != "" || m.streamProblem != "" {
+		detailLabel = "error"
+	}
+	if fullSurface {
+		escape = "resume"
+	}
+	pairs := []string{"Enter", "select", "Ctrl+L", detailLabel, "Esc", escape}
+	d := m.dialog
+	switch {
+	case m.detail != "":
+		pairs = []string{"Esc", "back", "Ctrl+Y", "copy", "↑/↓", "scroll"}
+	case d != nil && d.details:
+		pairs = []string{"Ctrl+L/Esc", "back", "↑/↓", "scroll"}
+	case d != nil && d.launch != nil:
+		activation := "newline"
+		if d.launch.focus == 1 {
+			activation = "continue"
+		} else if d.launch.focus >= 2 {
+			actions := m.launchActions()
+			if index := d.launch.focus - 2; index < len(actions) {
+				activation = strings.ToLower(actionLabel(actions[index]))
+			}
+		}
+		pairs = []string{"Enter", activation, "Tab", "controls", "Ctrl+L", detailLabel, "Esc", escape}
+	case d != nil && d.kind == client.EnterText:
+		pairs = []string{"Enter", "answer", "Ctrl+J", "newline", "Ctrl+L", detailLabel, "Esc", escape}
+		if d.preservedInitial != "" {
+			pairs = []string{"Ctrl+L", "review", "Ctrl+Y", "copy", "Ctrl+U", "replace", "Esc", escape}
+		}
+	case d != nil && d.kind == client.ChooseMany:
+		activation, tab := "toggle", "continue"
+		if d.finishFocused {
+			activation, tab = "continue", "choices"
+		}
+		pairs = []string{"Enter", activation, "Tab", tab, "Ctrl+L", detailLabel, "Esc", escape}
+		if !fullSurface && !d.finishFocused {
+			// Keep the only portable completion route visible when native
+			// single-row help truncates secondary bindings on narrow dialogs.
+			pairs = []string{"Tab", tab, "Enter", activation, "Ctrl+L", detailLabel, "Esc", escape}
+		}
+	case d != nil && d.surface == client.SurfaceBrowser:
+		pairs = []string{"Enter", "open", "Tab", "controls", "Ctrl+L", detailLabel, "Esc", escape}
+	case d != nil && d.prompt != nil && d.prompt.Question.Navigation:
+		pairs[1] = "open"
+	}
+	if !fullSurface {
+		return m.hints(width, pairs...)
+	}
+	if d == nil && m.detail == "" {
+		pairs = []string{"Esc", "resume"}
+	}
+	k := m.keyMap()
+	stop, quit := k.Stop.Help(), k.Quit.Help()
+	pairs = append([]string{pairs[0], pairs[1], stop.Key, stop.Desc}, pairs[2:]...)
+	pairs = append(pairs, quit.Key, quit.Desc)
+	var rows []string
+	var row []string
+	rowWidth := 0
+	for i := 0; i+1 < len(pairs); i += 2 {
+		bindingWidth := ansi.StringWidth(pairs[i]) + 1 + ansi.StringWidth(pairs[i+1])
+		if len(row) > 0 && rowWidth+2+bindingWidth > width {
+			rows = append(rows, m.hints(width, row...))
+			row, rowWidth = nil, 0
+		}
+		if len(row) > 0 {
+			rowWidth += 2
+		}
+		row = append(row, pairs[i:i+2]...)
+		rowWidth += bindingWidth
+	}
+	if len(row) > 0 {
+		rows = append(rows, m.hints(width, row...))
+	}
+	return strings.Join(rows, "\n")
 }
 
 func framed(title, content string, width int, p palette, focused bool) string {
@@ -349,13 +496,6 @@ func (m *Model) footerView(width int) string {
 		// global bindings below it, with Stop first at compact widths.
 		k := m.keyMap()
 		return m.bindingHelp(width, contextHelp{short: []key.Binding{k.Stop, k.Quit, k.Help, k.Error}})
-	}
-	if width < 40 {
-		k := m.keyMap()
-		palette, stop := k.Palette, k.Stop
-		palette.SetHelp("^Space", "commands")
-		stop.SetHelp("^S", "Stop")
-		return m.bindingHelp(width, contextHelp{short: []key.Binding{palette, stop}})
 	}
 	return m.bindingHelp(width, m.helpMap())
 }
@@ -401,7 +541,7 @@ func (m *Model) sidebarView(width, height int) string {
 	if m.status.Writable {
 		access = "Writes enabled"
 	}
-	lines := []string{p.active().Render("Workspace"), "", fitLine(m.status.ProfileID, width), connected, access, "", fmt.Sprintf("%d pending request(s)", m.status.Requests), "", "F6      Conversations", "/env    Environments", "Ctrl+R  Requests", optionKey("M") + "      Model", optionKey("E") + "      Effort", optionKey("S") + "      Speed", "/sidebar off"}
+	lines := []string{p.active().Render("Workspace"), "", fitLine(m.status.ProfileID, width), connected, access, "", "Ctrl+O  Browser", "/env    Environments", "Ctrl+R  Requests", optionKey("M") + "      Model", optionKey("E") + "      Effort", optionKey("S") + "      Speed", "/sidebar off"}
 	return padBlock(p.subtle().Render(strings.Join(lines, "\n")), width, height)
 }
 
@@ -438,5 +578,5 @@ func modelStatusLine(selection string) string {
 	if selection == "" {
 		return "Model unreported"
 	}
-	return "Thread: " + selection
+	return selection
 }

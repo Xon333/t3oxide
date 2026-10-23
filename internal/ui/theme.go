@@ -8,6 +8,9 @@ import (
 	"github.com/Xon333/t3oxide/internal/client"
 )
 
+// The three highlight slots keep their roles across themes: accent owns context
+// and selection, secondary owns links/inline code, operation owns run status.
+// Warning and error remain independent semantic states.
 type palette struct{ name, accent, secondary, operation, fg, muted, bg, elevated, error, warning string }
 
 func colors(name string) palette {
@@ -20,16 +23,19 @@ func colors(name string) palette {
 	if derived {
 		name = base
 	}
-	p := palette{name: name, accent: "#BBA5FA", secondary: "#84D7E4", operation: "#DAAFFF", fg: "#E6E9F0", muted: "#A7ADBF", bg: "#20232B", elevated: "#2A2F3A", error: "#FF8298", warning: "#EBCB8B"}
-	if name == "cyan" {
-		p.accent, p.secondary = "#84D7E4", "#BBA5FA"
-	}
-	if name == "lime" {
-		p.accent, p.secondary = "#C1D99B", "#84D7E4"
+	p := palette{name: name, fg: "#E6E9F0", muted: "#A7ADBF", bg: "#20232B", elevated: "#2A2F3A", error: "#FF8298", warning: "#EBCB8B"}
+	switch name {
+	case "cyan":
+		p.accent, p.secondary, p.operation = "#84D7E4", "#C1D99B", "#BBA5FA"
+	case "lime":
+		p.accent, p.secondary, p.operation = "#C1D99B", "#BBA5FA", "#84D7E4"
+	default:
+		p.accent, p.secondary, p.operation = "#BBA5FA", "#84D7E4", "#C1D99B"
 	}
 	if derived {
-		// Eight configured profiles have distinct context/selection accents.
-		// Operational, attention and error colors retain their meanings.
+		// Preserve the existing derived context/selection sequence. When it
+		// takes another slot's color, that slot receives the now-unused base
+		// accent. Roles stay fixed and all three highlights remain distinct.
 		accents := [...]string{"#BBA5FA", "#84D7E4", "#C1D99B", "#F0ADCA", "#90B9F5", "#E8B590", "#81D3B5", "#D9AFE1"}
 		offset := 0
 		if name == "cyan" {
@@ -37,9 +43,13 @@ func colors(name string) palette {
 		} else if name == "lime" {
 			offset = 2
 		}
+		baseAccent := p.accent
 		p.accent = accents[(variant+offset)%len(accents)]
 		if p.accent == p.secondary {
-			p.secondary = "#A8C8E8"
+			p.secondary = baseAccent
+		}
+		if p.accent == p.operation {
+			p.operation = baseAccent
 		}
 	}
 	return p

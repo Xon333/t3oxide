@@ -56,46 +56,49 @@ func (m *Model) durableProblem() bool {
 
 func (m *Model) browserControls(width int) string {
 	p := colors(m.theme)
-	var profiles, parts []string
-	for i, action := range m.browserActions() {
-		label := actionLabel(action)
-		if strings.HasPrefix(action, "profile:") {
-			id := strings.TrimPrefix(action, "profile:")
-			page := m.dialog.prompt.Question.BrowserPage
-			for _, profile := range page.Profiles {
-				if profile.ID == id {
-					label = profile.Label
-				}
-			}
-			if page.ProfileID == id {
-				label = "● " + label
-			}
-		}
-		if m.dialog.actionFocus == i+1 {
-			label = p.selection().Render("[" + safeText(label) + "]")
+	width = max(1, width)
+	var profiles, actions strings.Builder
+	focusedProfileRow, focusedActionRow := 0, 0
+	for i, control := range m.visibleBrowserControls() {
+		label := safeText(control.label)
+		focused := m.dialog.actionFocus == i+1
+		if focused {
+			label = p.selection().Render("[" + label + "]")
 		} else {
-			label = p.plain().Render(safeText(label))
+			label = p.plain().Render(label)
 		}
-		if strings.HasPrefix(action, "profile:") {
-			profiles = append(profiles, label)
+		block, focusRow := &actions, &focusedActionRow
+		if !control.local && strings.HasPrefix(control.action, "profile:") {
+			block, focusRow = &profiles, &focusedProfileRow
 		}
-	}
-	for _, wanted := range []string{"environments", "new", "settings", "resume", "refresh", "types"} {
-		for i, action := range m.browserActions() {
-			if action == wanted {
-				label := actionLabel(action)
-				if m.dialog.actionFocus == i+1 {
-					parts = append(parts, p.selection().Render("["+label+"]"))
-				} else {
-					parts = append(parts, p.plain().Render(label))
-				}
+		// Wrap before a control when it fits on a fresh row. Long labels use
+		// the maintained ANSI wrapper, then the native viewport reveals focus.
+		if block.Len() > 0 {
+			last := strings.Split(block.String(), "\n")
+			if ansi.StringWidth(last[len(last)-1])+2+ansi.StringWidth(label) > width {
+				block.WriteString("\n")
+			} else {
+				block.WriteString("  ")
 			}
 		}
+		if focused {
+			*focusRow = strings.Count(block.String(), "\n")
+		}
+		block.WriteString(ansi.Hardwrap(label, width, true))
+	}
+	var parts []string
+	if profiles.Len() > 0 {
+		rows := 1
+		if m.height >= 24 {
+			rows = 2
+		}
+		parts = append(parts, browserControlViewport(profiles.String(), width, rows, focusedProfileRow))
+	}
+	if actions.Len() > 0 {
+		parts = append(parts, browserControlViewport(actions.String(), width, 2, focusedActionRow))
 	}
 	detail := ""
-	if m.dialog.actionFocus > 0 {
-		detail = "→ " + actionLabel(m.browserActions()[m.dialog.actionFocus-1])
-	} else if selected, ok := m.dialog.list.SelectedItem().(choiceItem); ok {
+	if selected, ok := m.dialog.list.SelectedItem().(choiceItem); ok && m.dialog.actionFocus == 0 {
 		for _, group := range m.dialog.prompt.Question.BrowserPage.Groups {
 			for _, id := range group.ChoiceIDs {
 				if id == selected.id {
@@ -104,7 +107,24 @@ func (m *Model) browserControls(width int) string {
 			}
 		}
 	}
-	return padBlock(ansi.Truncate(strings.Join(profiles, "  "), width, "")+"\n"+ansi.Truncate(strings.Join(parts, "  "), width, "")+"\n"+p.active().Render(fitLine(detail, width)), width, 3)
+	// Reserve the same group row while traversing controls, so focus does not
+	// move the query or selected conversation up and down.
+	parts = append(parts, p.active().Render(fitLine(detail, width)))
+	return strings.Join(parts, "\n")
+}
+
+func browserControlViewport(content string, width, maxRows, focusedRow int) string {
+	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(min(maxRows, lipgloss.Height(content))))
+	v.SetContent(content)
+	v.SetYOffset(focusedRow)
+	return v.View()
+}
+
+func (m *Model) browserControlsHeight(width int) int {
+	if len(m.visibleBrowserControls()) == 0 {
+		return 0
+	}
+	return lipgloss.Height(m.browserControls(width))
 }
 
 // Browser/launch replace the page. Underlying native editors and viewports are
@@ -116,30 +136,42 @@ func (m *Model) fullSurfaceView() string {
 	if m.launchPage && !m.browserPage {
 		header = p.active().Render("t3oxide") + "  " + p.plain().Render("New conversation")
 	}
-	var body string
 	if m.dialog != nil && m.dialog.launch != nil {
 		header = p.active().Render("t3oxide") + "  " + p.plain().Render("New conversation")
-		body = m.launchView(width)
-	} else if m.dialog != nil {
-		body = m.modalView()
-	} else {
-		body = p.subtle().Render("Loading…")
 	}
 	if m.dialog != nil && m.dialog.prompt != nil && m.dialog.prompt.Question.BrowserPage != nil {
 		page := m.dialog.prompt.Question.BrowserPage
 		header += "  " + p.subtle().Render(fitLine(page.Location, max(1, width-20)))
 	}
-	content := header + "\n" + p.operational().Render(fitLine(m.authoritativeStatus(), width)) + "\n" + padBlock(body, width, max(1, m.height-4)) + "\n" + m.feedbackView(width) + "\n" + m.hints(width, "Tab", "controls", "Ctrl+L", "details", "Esc", "resume", "Ctrl+S", "Stop/hold")
-	canvas := padBlock(content, m.width, m.height)
-	if m.detail != "" {
-		panel := m.modalView()
-		x, y := max(0, (m.width-lipgloss.Width(panel))/2), max(0, (m.height-lipgloss.Height(panel))/2)
-		canvas = lipgloss.NewCompositor(lipgloss.NewLayer(canvas), lipgloss.NewLayer(panel).X(x).Y(y).Z(1)).Render()
+	help := m.dialogHelp(width, true)
+	parts := []string{header, p.operational().Render(fitLine(m.authoritativeStatus(), width))}
+	remaining := m.height - lipgloss.Height(strings.Join(parts, "\n")) - lipgloss.Height(help)
+	feedback := ""
+	if m.feedbackVisible() {
+		feedback = m.feedbackView(width)
+		remaining -= lipgloss.Height(feedback)
 	}
+	var body string
+	if m.detail != "" {
+		body = m.modalView()
+	} else if m.dialog != nil && m.dialog.launch != nil {
+		body = m.launchView(width, max(1, remaining))
+	} else if m.dialog != nil {
+		body = m.modalView()
+	} else {
+		body = p.subtle().Render("Loading…")
+	}
+	parts = append(parts, padBlock(body, width, max(1, remaining)))
+	if feedback != "" {
+		parts = append(parts, feedback)
+	}
+	parts = append(parts, help)
+	content := strings.Join(parts, "\n")
+	canvas := padBlock(content, m.width, m.height)
 	return clipBlock(canvas, m.width, m.height)
 }
 
-func (m *Model) launchView(width int) string {
+func (m *Model) launchView(width, height int) string {
 	d := m.dialog
 	f := d.launch
 	p := colors(m.theme)
@@ -172,7 +204,7 @@ func (m *Model) launchView(width int) string {
 	content := strings.Join(parts, "\n")
 	// On compact terminals Tab scrolls the native form viewport to the focused
 	// title/control region; the message textarea owns its own reading position.
-	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, m.height-4)))
+	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(height))
 	v.SetContent(content)
 	if f.focus > 0 {
 		v.GotoBottom()

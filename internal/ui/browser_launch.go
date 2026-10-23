@@ -22,6 +22,10 @@ func (m *Model) executeBrowser(name, args string) tea.Cmd {
 		}
 		previous = m.browserDone
 	}
+	if m.browserDialog != nil {
+		m.dialog, m.browserDialog = m.browserDialog, nil
+		m.detail, m.detailTitle, m.detailCopy = "", "", ""
+	}
 	if m.dialog != nil && m.dialog.prompt != nil {
 		promptDone = m.dialog.prompt.Done
 		m.dialog.prompt.Respond(client.Answer{Cancelled: true})
@@ -143,6 +147,95 @@ func (m *Model) browserActions() []string {
 	return m.dialog.prompt.Question.BrowserPage.Actions
 }
 
+type browserControl struct {
+	action, label string
+	local         bool
+}
+
+const browserMore = "browser-more"
+
+// Rendering and traversal share this order. Unrecognized offered IDs remain
+// available in More; only this local control is synthesized.
+func (m *Model) visibleBrowserControls() []browserControl {
+	if m.dialog == nil || m.dialog.prompt == nil || m.dialog.prompt.Question.BrowserPage == nil {
+		return nil
+	}
+	page := m.dialog.prompt.Question.BrowserPage
+	var controls []browserControl
+	for _, action := range page.Actions {
+		if id, ok := strings.CutPrefix(action, "profile:"); ok {
+			label := id
+			for _, profile := range page.Profiles {
+				if profile.ID == id {
+					label = profile.Label
+					break
+				}
+			}
+			if page.ProfileID == id {
+				label = "● " + label
+			}
+			controls = append(controls, browserControl{action: action, label: label})
+		}
+	}
+	for _, action := range []string{"environments", "new", "settings", "resume"} {
+		if slices.Contains(page.Actions, action) {
+			controls = append(controls, browserControl{action: action, label: actionLabel(action)})
+		}
+	}
+	return append(controls, browserControl{action: browserMore, label: "More", local: true})
+}
+
+func primaryBrowserAction(action string) bool {
+	return strings.HasPrefix(action, "profile:") || slices.Contains([]string{"environments", "new", "settings", "resume"}, action)
+}
+
+func (m *Model) openBrowserMore() tea.Cmd {
+	source := m.dialog
+	if source == nil || source.prompt == nil || source.prompt.Question.BrowserPage == nil {
+		return nil
+	}
+	var items []list.Item
+	for _, action := range m.browserActions() {
+		if !primaryBrowserAction(action) {
+			items = append(items, choiceItem{id: action, title: actionLabel(action), command: "browser-more-action"})
+		}
+	}
+	items = append(items, choiceItem{title: "Help", command: "browser-more-help"})
+	m.dialogSerial++
+	d := &dialog{serial: m.dialogSerial, title: "More", local: "browser-more", kind: client.ChooseOne, browserSource: source}
+	d.list = m.newList(d.title, items)
+	m.browserDialog, m.dialog = source, d
+	m.resize()
+	return m.restoreFocus()
+}
+
+func (m *Model) browserMoreSourceLive() bool {
+	d := m.dialog
+	if d == nil || d.browserSource == nil || m.browserDialog != d.browserSource || d.browserSource.prompt == nil || d.browserSource.prompt.Question.BrowserPage == nil {
+		return false
+	}
+	select {
+	case <-d.browserSource.prompt.Done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (m *Model) retireBrowserMore() tea.Cmd {
+	source, suspended := m.dialog.browserSource, m.browserDialog
+	m.dialog, m.browserDialog = nil, nil
+	m.notice = "This browser was retired; no action sent"
+	if suspended != nil && suspended != source {
+		// A replaced source is authoritative; never answer or discard it on
+		// behalf of the old menu, even if a stale activation arrives.
+		m.dialog = suspended
+		m.resize()
+		return m.restoreFocus()
+	}
+	return m.cancelDialog()
+}
+
 func actionLabel(action string) string {
 	if action == "" {
 		return ""
@@ -168,7 +261,7 @@ func actionLabel(action string) string {
 }
 
 func (m *Model) browserKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	d, actions := m.dialog, m.browserActions()
+	d, controls := m.dialog, m.visibleBrowserControls()
 	switch msg.String() {
 	case "esc", "ctrl+l", "f2":
 		return false, nil
@@ -177,19 +270,28 @@ func (m *Model) browserKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if msg.String() == "shift+tab" {
 			delta = -1
 		}
-		d.actionFocus = (d.actionFocus + delta + len(actions) + 1) % (len(actions) + 1)
+		d.actionFocus = (d.actionFocus + delta + len(controls) + 1) % (len(controls) + 1)
+		m.resize()
 		return true, m.restoreFocus()
 	case "enter", "space", " ":
 		if d.actionFocus > 0 {
-			return true, m.browserAction(actions[d.actionFocus-1])
+			if d.actionFocus > len(controls) {
+				return true, nil
+			}
+			control := controls[d.actionFocus-1]
+			if control.local {
+				return true, m.openBrowserMore()
+			}
+			return true, m.browserAction(control.action)
 		}
 	case "left", "shift+left", "right", "shift+right":
-		if d.actionFocus > 0 {
+		if d.actionFocus > 0 && len(controls) > 0 {
 			delta := 1
 			if strings.Contains(msg.String(), "left") {
 				delta = -1
 			}
-			d.actionFocus = 1 + (d.actionFocus-1+delta+len(actions))%len(actions)
+			d.actionFocus = 1 + (d.actionFocus-1+delta+len(controls))%len(controls)
+			m.resize()
 			return true, nil
 		}
 	}
@@ -274,7 +376,7 @@ func (m *Model) initLaunchEditors() {
 		m.modalInput.SetValue("")
 	}
 	m.modalInput.CursorEnd()
-	m.modalInput.Placeholder = "First message"
+	m.modalInput.Placeholder = ""
 	m.launchTitle.SetValue(f.review.Input.Title)
 	if m.launchTitle.Value() != f.review.Input.Title || strings.ContainsAny(f.review.Input.Title, "\n\r\t") {
 		f.preservedTitle = f.review.Input.Title
@@ -367,7 +469,9 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.launchAction(actions[f.focus-2])
 		}
 		if f.focus == 1 {
-			f.focus = 2
+			if i := slices.Index(actions, "create"); i >= 0 {
+				f.focus = i + 2
+			}
 			return m.restoreFocus()
 		}
 		msg = tea.KeyPressMsg(tea.Key{Code: 'j', Mod: tea.ModCtrl})

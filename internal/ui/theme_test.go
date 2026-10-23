@@ -10,6 +10,35 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestThemeSemanticSlotPalettes(t *testing.T) {
+	for _, tc := range []struct {
+		name, accent, secondary, operation string
+	}{
+		{"violet", "#BBA5FA", "#84D7E4", "#C1D99B"},
+		{"cyan", "#84D7E4", "#C1D99B", "#BBA5FA"},
+		{"lime", "#C1D99B", "#BBA5FA", "#84D7E4"},
+		{"terminal", "4", "6", "5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := colors(tc.name)
+			if p.accent != tc.accent || p.secondary != tc.secondary || p.operation != tc.operation {
+				t.Fatalf("highlight slots = %q / %q / %q, want %q / %q / %q", p.accent, p.secondary, p.operation, tc.accent, tc.secondary, tc.operation)
+			}
+			for _, highlight := range []string{p.accent, p.secondary, p.operation} {
+				if highlight == p.error || highlight == p.warning {
+					t.Fatal("highlight reused a warning/error state")
+				}
+			}
+			if p.error == p.warning {
+				t.Fatal("warning/error states share a color")
+			}
+			if tc.name == "terminal" && (p.fg != "" || p.bg != "" || p.muted != "" || p.elevated != "" || p.error != "1" || p.warning != "3") {
+				t.Fatal("terminal default base or ANSI warning/error ownership changed")
+			}
+		})
+	}
+}
+
 // Default text and basic ANSI accents work with either light or dark terminal
 // palettes. Reject fixed RGB, 256-color grays and painted backgrounds in every
 // rendered surface, including nested Markdown styles and upstream defaults.

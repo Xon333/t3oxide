@@ -36,8 +36,9 @@ func TestCommandLifecycleEmptyAndFailedResultsRetireProgress(t *testing.T) {
 		result             client.Result
 		err                error
 	}{
-		{name: "latest", notice: "Working · /latest", want: "Latest navigation acknowledged"},
-		{name: "earlier", notice: "Loading earlier history", want: "Earlier navigation acknowledged"},
+		{name: "latest", notice: "Working · /latest"},
+		{name: "earlier", notice: "Loading earlier history"},
+		{name: "earlier", notice: "Loading earlier history", result: client.Result{Text: "No earlier messages"}, want: "No earlier messages"},
 		{name: "runtime", notice: "Working · /runtime", result: client.Result{DetailTitle: "Runtime", Detail: "Unreported"}},
 		{name: "resolve", notice: "Working · /resolve"},
 		{name: "requests", notice: "Reviewing T3 requests"},
@@ -111,7 +112,7 @@ func TestCommandLifecycleUpdateRejectsStaleCompletions(t *testing.T) {
 	}
 	m.notice = "Working · /latest"
 	m.Update(actionMsg{generation: 2, id: 4, name: "latest"})
-	if m.actionBusy || m.notice != "Latest navigation acknowledged" {
+	if m.actionBusy || m.notice != "" {
 		t.Fatalf("current completion left pending state: busy=%v, notice=%q", m.actionBusy, m.notice)
 	}
 }

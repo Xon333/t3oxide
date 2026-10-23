@@ -22,6 +22,14 @@ func TestEnvironmentDefaultsAreDistinctStableAndKeepGlobalFallback(t *testing.T)
 		for _, id := range ids {
 			key := s.ThemeFor(id, ids)
 			p := colors(key)
+			// Existing profile-derived context accents retain their sequence;
+			// the three semantic slots are independent of profile count.
+			_, variant, _ := environmentVariant(key)
+			accents := []string{"#BBA5FA", "#84D7E4", "#C1D99B", "#F0ADCA", "#90B9F5", "#E8B590", "#81D3B5", "#D9AFE1"}
+			offset := map[string]int{"violet": 0, "cyan": 1, "lime": 2}[base]
+			if p.accent != accents[(variant+offset)%len(accents)] {
+				t.Fatal("existing derived context/selection accent changed")
+			}
 			if seen[p.accent] || ValidTheme(key) {
 				t.Fatalf("environment default reused an accent or public theme: %q", key)
 			}
@@ -31,8 +39,16 @@ func TestEnvironmentDefaultsAreDistinctStableAndKeepGlobalFallback(t *testing.T)
 			if s.ThemeFor(id, append(reversed, id)) != key {
 				t.Fatal("browse/configuration order or duplicate changed environment identity")
 			}
-			if p.operation != colors(base).operation || p.warning != colors(base).warning || p.error != colors(base).error {
-				t.Fatal("environment identity changed operational semantics")
+			basePalette := colors(base)
+			wantSecondary, wantOperation := basePalette.secondary, basePalette.operation
+			if p.accent == wantSecondary {
+				wantSecondary = basePalette.accent
+			}
+			if p.accent == wantOperation {
+				wantOperation = basePalette.accent
+			}
+			if p.secondary != wantSecondary || p.operation != wantOperation || p.warning != basePalette.warning || p.error != basePalette.error {
+				t.Fatal("derived palette changed slots beyond context collisions or changed warning/error states")
 			}
 			if p.operation == p.accent || p.operation == p.secondary || p.operation == p.warning || p.operation == p.error {
 				t.Fatal("operational accent is ambiguous")
