@@ -22,15 +22,17 @@ Follow [installation](NATIVE.md) to prepare the host adapter and environment pro
 
 ## Features
 
-- Markdown transcript, native composer editing, slash completion, command palette, conversation filtering and lineage navigation.
+- A separate conversation browser with environment tabs, project/lineage navigation and Resume to the active conversation.
+- Markdown transcript, native composer editing, slash completion, searchable commands and portable controls without required function keys.
 - Exact external editing and bounded prompt recall, including recoverable rejected code pastes and explicit clears.
-- Multiple environment profiles, bounded history pages, per-thread drafts and explicit recovery of uncertain writes.
-- Current-thread and next-message model, reasoning and speed choices from the selected provider's advertised capabilities.
-- Human-authored messages with queue/steer intent, Stop with queue hold, and review of T3 requests.
-- Fixed violet, cyan and lime themes, plus a Terminal theme that inherits terminal foreground/background and uses ANSI palette accents. See [theme controls](NATIVE-GO.md#themes).
+- One New conversation review for the first message, title and supported local model/effort/tier choices in the selected existing workspace.
+- Smaller latest pages, Earlier/Latest navigation, per-thread drafts and explicit recovery of uncertain writes.
+- Current-thread, next-message and supported launch settings from the selected provider's advertised capabilities.
+- Human-authored messages with queue/steer intent, independent Stop with queue hold, request review and separate connection/run/receipt status.
+- Per-environment appearance with distinct defaults, fixed violet/cyan/lime choices and a Terminal theme that inherits terminal colors. See [theme controls](NATIVE-GO.md#themes).
 - Read-only `envs`, `threads`, `status` and `doctor` commands, with optional JSON output.
 
-T3 owns providers, execution, durable conversations, queues and workspaces. Only the selected environment's helper runs; existing T3 work continues when the client disconnects. Full tool payloads, attachment uploads, provider configuration and full-history search remain in T3. See [model/navigation semantics](docs/model-navigation.md).
+T3 owns providers, execution, durable conversations, queues and workspaces. The client keeps one detailed conversation attached; browsing other environments' lists uses temporary metadata helpers without opening their transcripts. Existing T3 work continues when the client disconnects. Full tool payloads, attachment uploads, provider configuration and full-history search remain in T3. See [controls and launch scope](NATIVE-GO.md) and [model/navigation semantics](docs/model-navigation.md).
 
 ## Development and CI
 

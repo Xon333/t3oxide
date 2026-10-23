@@ -2,6 +2,46 @@
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
+## Browser, launch and status refinement, 2026-10-23
+
+Version `0.5.0-bubbletea` adds a separate metadata browser, one local launch review, per-environment appearance and correlated send status while retaining the Go/Bubble Tea pins, Node adapter boundary, versioned client protocol and separate Swift state. [Controls and launch scope](../NATIVE-GO.md) and [architecture](architecture.md) describe the behavior. Source checks, focused synthetic native acceptance, installed-adapter compatibility and client delivery passed within the separate scopes below.
+
+### Source and build verification
+
+The accepted runtime source is commit `f00fc612844423ac5a4f33163e520a5ef49345d7`. The complete scripts passed on the earlier candidate `a1c47d1a92eca9882fbc385803cdf1f3070f92e81a262b06a8fe17f325ba915a`:
+
+- `bash scripts/check-go.sh`, exit 0: formatting, all six package suites, vet and the complete race run, including real Node adapter, Bubble Tea program and assembled-executable PTY integration.
+- `bash scripts/check.sh`, exit 0: all 157 Node tests, adapter/installer syntax checks, Swift model typecheck and App.swift parse, compiled Swift model/transport checks, and all five Python measurement tests.
+
+The accepted final binary differs from that source in exactly two production files: `internal/ui/model.go` corrects startup browser adoption, and `internal/ui/browser_launch.go` orders the exact offered launch controls before Create. The final 49-file source manifest verifies that delta. Adapter, client, wire, Swift and config production files retain the full-script evidence above. After both UI corrections, the complete UI suite, UI race run, UI vet, actual-startup/settings-order program race cases and affected integration race checks passed. Focused independent reviews reported no outstanding must-fix findings, including after the launch durability, run-ID authority and hidden-wheel fixes. The changed startup and launch paths also passed the final native replay below.
+
+The release reports `t3oxide 0.5.0-bubbletea · Bubble Tea v2.1.0`. Mach-O ARM64 architecture, strict ad-hoc signature and version checks passed. Binary SHA-256: `d4f29983f72c38577d9e054d4fcea8f69f491682316030ebee8c1aacaba4af24`. The canonical bundle and native-test copy matched that hash; the duplicate test copy was removed after acceptance. All 34 release-manifest entries, including `NOTICE` and `LICENSES/`, independently matched the exact package contents. Source/release manifests and the earlier build's evidence are retained privately with their original identities.
+
+### Focused native terminal acceptance
+
+The final hash passed in four simultaneous Ghostty windows using disposable state, the maintained synthetic causal fixture and the actual Node adapter. One operator serialized input. All 49 source-manifest entries matched before acceptance; the receipt indexes 55 actions and 56 screenshots. These are synthetic runtime results, not productive installed-instance validation.
+
+- Startup without `--thread` displayed the browser without a transcript/composer; opening an offered conversation adopted it. Deliberate Browser stayed open during correlated live output. Esc and Resume preserved the multiline draft, selection/caret and Earlier-history reading view.
+- Portable Tab → Ctrl+P opened Commands. Filtering, arrows, highlighted row, detail/footer and Enter resolved to the same action; returning from Details retained the query. Colored current-page search displayed one readable match without exposed ANSI fragments or repeated rows, and contextual help retained its query.
+- Launch review followed Message → Title → Editor → Model → Effort → Tier → Create → Cancel. A successful external-editor return followed by Ctrl+Q and normal reopen recovered the exact multiline first message. Local model/effort/tier choices produced no source setting effect; explicit Create produced one launch with exact title/message, provider/modes and existing-workspace binding. Controls remained reachable at 60×16. Explicit Cancel produced no additional launch or source effect. Title/settings persistence across process exit is not claimed; they remain session-local.
+- Matched initiating-message and row run-ID evidence advanced the receipt from acknowledged to responding and completed. A genuinely pending question stayed authoritative and reviewable after ordinary send and cancellation of its review; that smoke sent no answer command.
+
+Successful unchanged native evidence from the earlier `a1c…` build retains that hash: hidden checked profiles, tab query/selection/theme restoration, physical Ctrl+G/Shift selection and Option+E composition, Terminal/violet search, Earlier/Latest, exact offered approval decline, independent Stop, disconnect without replay and explicit same-ID retry. It is reused for those unchanged paths, not relabeled as new final-build native race coverage. The original baseline's recovery/Resolve evidence also retains its original labels.
+
+Physical Ctrl+Space was intercepted by macOS input-source switching, and the attempted physical Ctrl+@ chord did not open Commands. Portable Tab → Ctrl+P worked on both builds. Terminal/global mappings and grants were unchanged. Hidden-wheel timing, ACK overtaking, stale attachment/delivery and pathological editor-byte permutations remain source/program/PTY evidence rather than new native race results. No productive-account compatibility, receiving-client GUI acceptance, resource savings or isolated app latency was measured.
+
+### Installed adapter and client delivery
+
+The reviewed adapters were installed on existing macOS and Linux hosts with each host's existing Node runtime. Both select content-addressed release `847fa47abf574eda`; each no-flags installer ran once and exited successfully. Stable before/after checks confirmed unchanged configuration bytes, environment identity, credential path and metadata, write setting, state/sidecars, journal files and rollback releases. Installer locks and staging were absent afterward.
+
+Both installed hello probes reported T3 `0.1.2-nightly.20261021.3473`, client protocol 1 and orchestration protocol 2, with launch model selection and the existing model, override, runtime and navigation capabilities advertised. The reviewed installers' authenticated shell reads passed. These checks requested no productive thread list, watch, history, transcript or mutation. Existing helpers were left running and load the new modules on their owner's normal reconnect; no T3 restart or provider/account change occurred.
+
+The accepted ARM64 bundle was installed on a separate Apple Silicon client through its existing versioned-release and atomic `current` route. The staged and installed binary matched the full release hash above, and all 34 files, including `NOTICE` and `LICENSES/`, matched the approved manifest. Architecture, strict signature and version/help checks passed before and after publication.
+
+Stable immediate preservation snapshots matched the awake baseline. Client configuration, drafts, sidecars, settings, lock/token absence, launcher, legacy app and prior releases remained unchanged; the command symlink was preserved. No client was running or terminated, no productive connection was opened, and no service changed. Consumed staging and the temporary publication symlink were removed. This installation smoke does not claim receiving-client GUI or physical-key acceptance.
+
+Historical installation results below remain attached to their original releases.
+
 ## Native component UX reuse, 2026-10-23
 
 Version 0.4.0 keeps the existing Go/Bubble Tea pins and Node adapter boundary. [UX reuse](ux-reuse.md) maps the changes to inspected upstream APIs and behavior; [controls](../NATIVE-GO.md#controls) records the current keyboard contract. Swift source/state and adapter protocol/receipts are unchanged.
