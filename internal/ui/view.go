@@ -314,6 +314,12 @@ func framed(title, content string, width int, p palette, focused bool) string {
 }
 
 func (m *Model) footerView(width int) string {
+	if m.dialog != nil || m.detail != "" {
+		// The modal already renders its local controls. Keep only the shared
+		// global bindings below it, with Stop first at compact widths.
+		k := m.keyMap()
+		return m.bindingHelp(width, contextHelp{short: []key.Binding{k.Stop, k.Quit, k.Help, k.Error}})
+	}
 	if width < 40 {
 		k := m.keyMap()
 		palette, stop := k.Palette, k.Stop

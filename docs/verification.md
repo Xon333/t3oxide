@@ -14,7 +14,7 @@ Source and disposable-fixture checks passed on macOS 27.0.1, Go 1.27.2 darwin/ar
 - Config/client tests cover exact editor/recall bytes and targeted `.prompts.json` compatibility retention across previous-Go JSON rewrites and interrupted publications, including full 24-entry/512 KiB histories, protected retention limits, malformed copies and unchanged pending/Stop lanes.
 - Error tests cover complete viewport/copy diagnostics, quoted/escaped credential fields and authorization tokens, separate exact human-text copy, preserved request editors and context-dependent multiselect help. Compact pickers retain query, current selection, selected count and portable completion under filtering.
 - `go mod verify` and whitespace checks passed. No dependency versions changed. Adapter/shared scripts and Swift paths are unchanged, so their previously recorded checks are retained without a qualification replay.
-- `bash scripts/build-go.sh`: native Mach-O ARM64 release; version/help and strict ad-hoc signature verified. SHA-256: `a6402eec33f800d2594cb78f772e7c4fae13ca5e821efe4247c4169f0b3d02c0`.
+- `bash scripts/build-go.sh`: native Mach-O ARM64 release; version/help and strict ad-hoc signature verified. SHA-256: `bb27c891abb2ad84690aaf25e52a391326008b6bc9c9232e88df0d74009a127f`.
 
 Focused independent review findings were resolved and covered by regressions. The final review found no additional P1/P2 findings in its redaction and recovery scope. These are source/disposable-fixture results; native terminal acceptance and installed-client delivery are recorded separately. No isolated latency, resource savings, sustained-load or novice-usability claim is made.
 
