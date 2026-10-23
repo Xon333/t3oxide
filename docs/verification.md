@@ -38,7 +38,7 @@ Both installed hello probes reported T3 `0.1.2-nightly.20261021.3473`, client pr
 
 The accepted ARM64 bundle was installed on a separate Apple Silicon client through its existing versioned-release and atomic `current` route. The staged and installed binary matched the full release hash above, and all 34 files, including `NOTICE` and `LICENSES/`, matched the approved manifest. Architecture, strict signature and version/help checks passed before and after publication.
 
-Stable immediate preservation snapshots matched the awake baseline. Client configuration, drafts, sidecars, settings, lock/token absence, launcher, legacy app and prior releases remained unchanged; the command symlink was preserved. No client was running or terminated, no productive connection was opened, and no service changed. Consumed staging and the temporary publication symlink were removed. This installation smoke does not claim receiving-client GUI or physical-key acceptance.
+Stable immediate preservation snapshots matched the awake baseline. Client configuration, drafts, sidecars, settings, locks, recorded absences, launcher, legacy app and prior releases remained unchanged; the command symlink was preserved. No client was running or terminated, no productive connection was opened, and no service changed. Consumed staging and the temporary publication symlink were removed. This installation smoke does not claim receiving-client GUI or physical-key acceptance.
 
 Historical installation results below remain attached to their original releases.
 
