@@ -34,11 +34,11 @@ When distributing the executable, include `NOTICE` and `LICENSES/` alongside it.
 
 ## Browse and create
 
-Without `--thread`, the client starts in the browser. Environments selects one or more configured profiles; Enter toggles a row and Tab reaches Continue. Selected profiles remain checked when filtering hides them. Each selected environment has a tab; Tab/Shift+Tab reaches its tab and page actions, and Enter activates the focused action. Loading a tab or choosing Refresh reads bounded conversation metadata. Moving the cursor does not open a transcript. Typing filters the loaded rows; `/threads WORDS` or the browser's Search action asks the host for matching titles/projects, including rows outside the current bounded list.
+Without `--thread`, the client starts in the browser. Environments selects one or more configured profiles; Enter toggles a row and Tab reaches Continue. Selected profiles remain checked when filtering hides them. Tab/Shift+Tab follows the visible order: environment tabs, Environments, New, Settings, Resume and More, where offered. Enter activates the focused control. More contains Refresh, Search, thread types, expansion/parent actions and local Help; Esc returns to the original query and selection. Loading a tab or choosing Refresh reads bounded conversation metadata. Moving the cursor does not open a transcript. Typing filters the loaded rows; `/threads WORDS` or Search asks the host for matching titles/projects, including rows outside the current bounded list.
 
 Open the browser from a conversation with Ctrl+O or `/switch`. The conversation stays attached, its active work continues, and its composer and reading position are retained. Esc or Resume returns to it. Only explicitly opening an offered thread changes the attached conversation. New, Settings, Refresh and agent/thread-type actions are available in the browser. Select an exact conversation before New or conversation settings so its environment and workspace are known; a project label alone is not a launch target.
 
-New or `/new [TITLE]` opens one review with a multiline first message and single-line title. Tab moves from the message to the title, then Editor, supported Model/Effort/Tier controls, Create and Cancel; Shift+Tab moves back. Enter inserts a newline in the first message, leaves the title editor, or activates the focused control. **Create is the explicit submission action.** An empty title defaults to `New conversation`. The title is limited to 512 bytes and the first message to 64 KiB; payload text is preserved without trimming.
+New or `/new [TITLE]` opens one review with a multiline first message and single-line title. Tab moves from the message to the title, then Editor, supported Model/Effort/Tier controls, Create and Cancel; Shift+Tab moves back. Enter inserts a newline in the first message. In the title, Enter focuses the offered Create control without submitting; another explicit activation creates the conversation. **Create is the explicit submission action.** An empty title defaults to `New conversation`. The title is limited to 512 bytes and the first message to 64 KiB; payload text is preserved without trimming.
 
 Launch settings are local to that review. Changing them does not configure the source thread or change its next-message override. The new conversation uses the selected source's exact existing project/workspace, provider/account and modes; it does not copy history or create a new checkout. Choosing a different launch model uses that model's advertised defaults, and Create revalidates the selection. When explicit launch selection is unavailable, the review explains that the source model is inherited. Cancel and local exit preserve the separate launch message draft and leave the source composer intact. Title and selection survive review round trips in the current client session; the launch message uses the durable separate launch-draft slot, including external-editor returns and context shutdown.
 
@@ -46,11 +46,11 @@ Launch settings are local to that review. Changing them does not configure the s
 
 | Action | Control |
 |---|---|
-| Commands / contextual help | **Tab to reading, then Ctrl+P** / `/help`; Ctrl+P also opens commands from an empty composer |
+| Commands / contextual help | **Ctrl+P** from reading or an empty composer; otherwise **Tab, then Ctrl+P**. `/help` or reading-only **?** opens help |
 | Browser / environments | **Ctrl+O** or `/switch` / `/env`; Esc or Resume returns to the attached conversation |
 | Browser actions / environment tabs | **Tab/Shift+Tab**, then Enter; Left/Right moves between actions only while their strip owns focus |
 | Filter conversation titles/projects, including collapsed children | Type in the browser to filter loaded rows; `/threads WORDS` or browser Search queries the host |
-| Expand / collapse subagents; choose thread types | Space or Right / Left when the query editor is not active; browser Agents / threads action |
+| Expand / collapse subagents; choose thread types | **More**, then the offered Expand, Collapse or thread-type action |
 | Parent conversation | `/parent`; Option/Alt+Up with transcript focus |
 | Current thread settings | `/settings`, or `/model`, `/effort`, `/speed`; Option/Alt+M / E / S only with transcript focus |
 | Presets; next-message selection; runtime evidence | `/presets`; `/model next`, `/effort next`, `/speed next`; `/override`; `/runtime` |
@@ -64,14 +64,14 @@ Launch settings are local to that review. Changing them does not configure the s
 | Complete multiple selection | **Tab**, then **Enter** on the fixed Continue control; Ctrl+Enter also works, including with zero filter matches |
 | Read / write | **Tab** switches transcript/composer focus; PgUp/PgDown scroll the focused component |
 | Earlier page / Latest | `/earlier` / `/latest`; Option/Alt+Left/Right only with transcript focus |
-| Search current page | `/search TEXT`, or Ctrl+F with transcript focus; n/N moves between matches there |
+| Search current page | `/search TEXT`, or **/** / Ctrl+F with reading focus; n/N moves between matches there |
 | Copy | `/copy [page\|draft\|answer\|error\|detail]`; Ctrl+Y copies the current detail or preserved answer/draft, otherwise the last agent message |
 | Details / errors | **Ctrl+L** or `/details` reviews the current detail; `/error` opens errors when an exact draft/answer has detail priority. Ctrl+Y copies an open detail |
 | New conversation / recovery | `/new [TITLE]`; `/pending`, `/retry [stop]`, `/resolve [stop]`, `/reconnect` |
 | Theme / mouse / sidebar | `/theme [default\|terminal\|violet\|cyan\|lime]`, `/mouse [on\|off]`, `/sidebar [on\|off]` |
 | Full T3 / local exit | `/web` displays the configured address; **Ctrl+Q** or `/quit` exits. Ctrl+D exits only from an empty composer or transcript |
 
-The composer retains Bubbles' editing keys: Ctrl+A/E line start/end, Ctrl+B/F character movement, Ctrl+P/N line movement, Ctrl+T transpose, Ctrl+G Select All, Ctrl+D forward delete, and decoded Alt+Left/Right word movement. Option letters and Shift selection stay with focused editors. In a filter, Up/Down, PageUp/PageDown and Ctrl+P/N move through results; Left/Right edits the query. The highlighted row, selection detail and Enter refer to the same result. Checked membership is separate from the current row.
+The composer retains Bubbles' editing keys: Ctrl+A/E line start/end, Ctrl+B/F character movement, Ctrl+P/N line movement, Ctrl+T transpose, Ctrl+G Select All, Ctrl+D forward delete, and decoded Alt+Left/Right word movement. Option letters, Shift selection and literal `?`/`/` stay with focused editors. In a filter, Up/Down, PageUp/PageDown and Ctrl+P/N move through results; Left/Right edits the query. The highlighted row, useful selection detail and Enter refer to the same result; a complete unique title is not repeated in a footer. Checked membership is separate from the current row.
 
 Ctrl+Space and decoded Ctrl+@ are also bound to Commands; a terminal or OS input-source shortcut may intercept them. Recorded Ghostty acceptance confirmed portable Tab → Ctrl+P, while macOS intercepted physical Ctrl+Space and the attempted physical Ctrl+@ chord did not open Commands. Use the portable route when those chords are unavailable. Over a request or page-search editor, the Commands binding opens contextual help and preserves the editor. F1/F2/F3/F4/F5/F6/F8 remain compatible aliases for Help/Details/Commands/Editor/Recall/Browser/Error; no function key is required. Ctrl+T remains a browser alias from an empty composer or reading focus. Ctrl+E opens environments only with reading focus.
 
@@ -85,11 +85,22 @@ Prompt recall contains up to 24 acknowledged prompts, explicit clears and reject
 
 Mouse capture provides transcript scrolling; `/mouse off` enables native terminal selection. Click-to-focus is not implemented. Clipboard behavior depends on the terminal; copy also uses the existing desktop clipboard helper. Local dismissal and exit never mean remote Stop.
 
-`t3oxide envs`, `threads`, `status` and `doctor` are read-only. Use `--json` for machine-readable results. `--help` describes `--config`, `--state`, `--env`, `--thread`, `--theme` and `--no-mouse`.
+`t3oxide envs`, `threads`, `status` and `doctor` are read-only. Status always emits JSON; use `--json` for machine-readable envs, threads or doctor results. Bare `--json` requires a read-only command and cannot start the TUI. Explicit `-h`/`--help` works without configuration, including with malformed arguments. `--help` describes the available options and portable TUI routes.
 
 ## Themes
 
-`/theme` or Settings → Appearance changes the active browser profile or attached environment. Choose Environment default to clear that profile's override, or use `/theme default`. Defaults derive distinct location/selection accents for up to eight configured profile IDs, independent of browse order. The existing saved global theme remains the base; its initial value is violet. Run/receipt activity, warnings and errors keep their semantic colors across environment accents. Environment labels and status text remain visible without color.
+Each theme supplies colours for three fixed highlight roles. Changing themes changes their colours while keeping those roles on the same UI elements.
+
+| Theme | Context and selection | Supporting transcript, links and inline code | Operational status and streaming |
+|---|---|---|---|
+| Violet | Violet | Cyan | Lime |
+| Cyan | Cyan | Lime | Violet |
+| Lime | Lime | Violet | Cyan |
+| Terminal | ANSI blue (4) | ANSI cyan (6) | ANSI magenta (5) |
+
+Warnings and errors retain separate meanings. Terminal selections use the default colour pair in reverse. Textual location and state remain visible without colour; syntax tokens can use additional syntax colours.
+
+`/theme` or Settings → Appearance changes the active browser profile or attached environment. Choose Environment default to clear that profile's override, or use `/theme default`. Defaults derive context accents for up to eight configured profile IDs, independent of browse order, and keep all three highlight slots distinct. The existing saved global theme remains the base; its initial value is violet. Profile count and theme choice do not change the three roles.
 
 Use `/theme terminal` for the current profile to inherit your terminal's default foreground/background and ANSI palette, including syntax highlighting. Selections use inverse colors for light and dark backgrounds. Fixed violet, cyan and lime remain available with Dracula syntax highlighting. A saved global Terminal theme remains Terminal across profiles rather than adding fixed environment colors.
 
@@ -112,6 +123,8 @@ Prompt recall has a targeted compatibility copy at the explicit Go state path pl
 Drafts remain until an authoritative acknowledgment; newer typing survives delayed replies and switches. Normal actions and Stop have independent saved-operation lanes. A saved retry uses the original ID, payload and run/request target. Reconnect does not replay it. Damaged state fails closed rather than resetting recovery history.
 
 Earlier replaces the visible page and pauses live detail. Reconnect keeps a cached earlier page; use Latest to resume live data. Stop can target the last reviewed active run from history, but the adapter rejects a changed run rather than interrupting newer work.
+
+Known pending requests remain visible and reviewable while reading Earlier. Answers are checked against the current request identity and revision before dispatch. The cached count stays until Latest supplies a verified replacement; an answer acknowledgment alone does not establish that every request is resolved. Run and receipt details remain at their last observed state while live detail is paused.
 
 The adapter supplies bounded messages, notices, request controls and attachment counts. Model/effort/tier controls now use the selected provider's advertised choices. Full tool payloads, attachment uploads, provider switching/configuration and full-history search stay in T3. Current-page search and host-side thread filtering are separate controls.
 
