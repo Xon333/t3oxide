@@ -16,7 +16,26 @@ Source and disposable-fixture checks passed on macOS 27.0.1, Go 1.27.2 darwin/ar
 - `go mod verify` and whitespace checks passed. No dependency versions changed. Adapter/shared scripts and Swift paths are unchanged, so their previously recorded checks are retained without a qualification replay.
 - `bash scripts/build-go.sh`: native Mach-O ARM64 release; version/help and strict ad-hoc signature verified. SHA-256: `bb27c891abb2ad84690aaf25e52a391326008b6bc9c9232e88df0d74009a127f`.
 
-Focused independent review findings were resolved and covered by regressions. The final review found no additional P1/P2 findings in its redaction and recovery scope. These are source/disposable-fixture results; native terminal acceptance and installed-client delivery are recorded separately. No isolated latency, resource savings, sustained-load or novice-usability claim is made.
+Focused independent review findings were resolved and covered by regressions. The final review found no additional P1/P2 findings in its redaction and recovery scope.
+
+### Native terminal acceptance
+
+Actual Ghostty acceptance used isolated client state, local loopback mutations and an existing live connection restricted to read-only access. Broad keyboard/palette/composer acceptance first used an earlier candidate. The subsequent `a6402eec…02c0` candidate repeated affected exact-text, error, request and recovery flows. The final `bb27c891…a127f` build changes only duplicated modal footer hints; actual normal modal/detail and 60×16 filtered multiselect checks repeated that presentation and verified completion, independent Stop and local exit. The complete source/race/PTY suite above also passed after this final change.
+
+- Physical control-key editing, palette query preservation, slash suggestion acceptance, literal paths/known-command text and invalid editable arguments passed. Physical Option word motion and decoded Alt events were checked separately; terminal configuration still determines physical chord decoding.
+- Native clipboard paste, rejected-attempt recall and the external-editor lifecycle preserved tabs, CRLF and valid U+FFFD. Exact detail copy and fixture sending matched canonical bytes; acknowledgment restored immediate typing. Unsent exact drafts and settings survived exit/reopen.
+- Populated requests, preserved-answer review and context help retained their state. Multiselect query, selected count and Continue remained usable at 120×35, 80×24 and 60×16, including zero matches. The final compact footer showed local controls once and kept Stop/hold and local exit visible.
+- Full error display and diagnostic copy passed a synthetic definite rejection containing multiline 401 text and quoted/escaped credential values. All injected credential fragments were redacted while reported identity and recovery steps remained complete. Exact human-text copy remained separate. This did not recreate a real expired provider session or perform a new login.
+- Fixture receipts confirmed no hidden replay, explicit retry with the original operation ID/payload, exact offered request responses and independent Stop with queue hold while request/filter state remained intact. Mouse wheel reading and native terminal selection passed; click-to-focus remains outside the supported interaction contract.
+- Read-only live checks reported writes disabled. Original config, drafts, compatibility copies and journal hashes were unchanged. Task clients, fixture owners and their exact terminal windows exited; private mirrors and raw live captures were removed. Sanitized evidence and hash receipts are retained outside the repository.
+
+Ghostty scripted control modifiers did not produce the intended control events, so physical accessibility events supplied those checks. Its scripted text path also removed U+FFFD before application delivery; native clipboard paste supplied that exact-text case. Neither automation limitation is attributed to the client. No isolated latency, resource savings, sustained-load, screen-reader, physical power-loss or novice-usability claim is made.
+
+### Installed-client delivery
+
+The final ARM64 bundle was installed on a separate Apple Silicon client through its existing versioned-release and atomic `current` symlink route. The installed binary, `current` and unchanged command symlink resolve to the full release hash above. Architecture, strict signature, version/help and notice/license contents passed after publication. Original profiles, credentials, drafts, compatibility-copy absence, settings, launcher, legacy app and three existing rollback bundles matched their pre-install hashes.
+
+No active client needed termination, no productive connection was opened for the installation smoke check, and no service or provider configuration changed. Consumed staging and task scratch were removed. This delivery check does not claim new terminal/GUI or physical-key acceptance on the receiving client; the native terminal results above were collected separately.
 
 ## Primary Go client and Terminal theme, 2026-10-22
 
