@@ -20,7 +20,21 @@ export function threadList(shell, query = '', options = {}) {
   const open = new Set(expanded);
   const projects = new Map(shell.projects.map(p => [p.id, p.title]));
   const q = String(query).trim().toLocaleLowerCase().slice(0, 200);
-  const eligible = shell.threads.filter(t => !t.deletedAt && !t.archivedAt)
+  const activeOnly = options.activeOnly === true;
+  const rootLimit = activeOnly && !q ? 24 : LIMIT.threads;
+  const rowLimit = activeOnly && !q && expanded.length > 0 ? 48 : rootLimit;
+  const working = t => ['preparing', 'queued', 'starting', 'running', 'waiting'].includes(t.activityRunStatus ?? t.status);
+  const available = shell.threads.filter(t => !t.deletedAt && !t.archivedAt &&
+    (!activeOnly || q || t.settledOverride !== 'settled'));
+  // Count working children without loading them into the default navigation
+  // tree. Only an explicit expansion/type selection/search admits those rows.
+  const childCounts = new Map();
+  if (activeOnly) for (const t of available) {
+    const parent = lineage(t.lineage)?.parentThreadId;
+    if (threadType(t) === 'subagent' && parent && working(t)) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
+  }
+  const eligible = available.filter(t => !activeOnly || threadType(t) !== 'subagent' ||
+    (q || working(t) && (filter === 'subagents' || open.has(lineage(t.lineage)?.parentThreadId))))
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
   const all = new Map(), children = new Map();
   const positions = new Map(eligible.map((t,i) => [t.id,i]));
@@ -52,14 +66,14 @@ export function threadList(shell, query = '', options = {}) {
   const rank = t => ({main:0, fork:1, unknown:2, subagent:3}[threadType(t)]);
   const roots = [...included].map(id => all.get(id)).filter(t => !grouped || threadType(t) !== 'subagent' || !included.has(lineage(t.lineage)?.parentThreadId))
     .sort((a,b) => (grouped ? rank(a)-rank(b) : 0) || positions.get(a.id)-positions.get(b.id));
-  // Reserve room for every root before expanding children, preventing a busy
-  // subagent family from crowding primary conversations out of the 200 rows.
-  const chosenRoots = roots.slice(0, LIMIT.threads), nodes = [], visited = new Set();
-  let childBudget = LIMIT.threads - chosenRoots.length;
+  // Reserve room for roots before expanding children, preventing a busy
+  // subagent family from crowding primary conversations out of the page.
+  const chosenRoots = roots.slice(0, rootLimit), nodes = [], visited = new Set();
+  let childBudget = rowLimit - chosenRoots.length;
   let more = roots.length > chosenRoots.length;
   function add(t, depth) {
     if (visited.has(t.id)) return;
-    if (nodes.length >= LIMIT.threads) { more = true; return; }
+    if (nodes.length >= rowLimit) { more = true; return; }
     visited.add(t.id); nodes.push({t, depth});
     if (!grouped || !open.has(t.id)) return;
     for (const c of children.get(t.id) ?? []) {
@@ -82,7 +96,7 @@ export function threadList(shell, query = '', options = {}) {
     }
     for (const member of trail) reachesCycle.set(member, cycle);
     if (cycle) {
-      if (nodes.length < LIMIT.threads) { childBudget--; add(all.get(id), 0); }
+      if (nodes.length < rowLimit) { childBudget--; add(all.get(id), 0); }
       else more = true;
     }
   }
@@ -96,7 +110,7 @@ export function threadList(shell, query = '', options = {}) {
       status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text,
       model: clip(t.modelSelection?.model ?? '',256).text,
       lineage: l, threadType: threadType(t), parentTitle: clip(parent?.title ?? '',512).text,
-      childCount: (children.get(t.id) ?? []).length, depth,
+      childCount: activeOnly ? childCounts.get(t.id) ?? 0 : (children.get(t.id) ?? []).length, depth,
       expanded: open.has(t.id), contextOnly: q !== '' && !found.has(t.id) };
     const cost = Buffer.byteLength(JSON.stringify(row));
     if (bytes+cost > 288*1024) { more = true; break; }

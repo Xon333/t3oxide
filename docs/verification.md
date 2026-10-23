@@ -2,6 +2,12 @@
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
+## Lean browser loading, 2026-10-23
+
+Version `0.5.2-bubbletea` defaults to at most 24 unsettled conversations per environment. Subagents enter the navigation tree only through explicit expansion, type selection or search; ordinary expansion lists working children. Search retains access to settled conversations. Metadata-only list requests no longer acquire a WebSocket ticket or connection. The existing T3 HTTP shell endpoint still returns environment-wide metadata to the adapter; this change bounds the client projection, not the upstream fetch. No measured loading-time improvement or new GUI acceptance is claimed. The earlier 0.5.1 acceptance below retains its original identity.
+
+Focused checks passed: the 13 existing adapter-navigation cases, active-list checks with 192 settled conversations, explicit working-child expansion and settled search, no-WebSocket list behavior, and the Go client/CLI package suites. The ARM64 executable was built for the next installation. No full-stack or native interaction replay was performed for this narrow change.
+
 ## Further interaction refinement, 2026-10-23
 
 Version `0.5.1-bubbletea` aligns browser controls with traversal, puts secondary actions and local Help in More, makes Title Enter focus Create without submitting, and reduces repeated status/editor/help text. Contextual Ctrl+P and reading-only `?`/`/` retain editor ownership. Known request offers remain available in history, and three semantic highlight roles keep their UI meaning across themes. The CLI has current portable examples, configuration-free explicit help and a bare-JSON guard. [Reuse](ux-reuse.md) records inspected upstream patterns and retained APIs.

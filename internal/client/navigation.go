@@ -70,7 +70,7 @@ func ThreadChoices(threads []Thread) []Choice {
 			detail += " · " + t.Model
 		}
 		if t.ChildCount > 0 {
-			detail += fmt.Sprintf(" · %d subagent(s)", t.ChildCount)
+			detail += fmt.Sprintf(" · %d working subagent(s)", t.ChildCount)
 		}
 		if t.Lineage != nil && t.Lineage.ParentThreadID != nil {
 			parent := t.ParentTitle
@@ -114,7 +114,7 @@ func (a *Session) Parent(ctx context.Context) (*Session, error) {
 	return a.Target(env.ID, id)
 }
 func (a *Session) pickThreadFilter(ctx context.Context, current string) (string, error) {
-	answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Thread types", Prompt: "T3 lineage only. Forks are not subagents; missing lineage is unknown, never inferred from a title.", Initial: current, Choices: []Choice{{ID: "all", Label: "All", Description: "Main threads first; collapsible subagents; forks separate"}, {ID: "main", Label: "Main", Description: "Authoritative root conversations"}, {ID: "subagents", Label: "Subagents", Description: "All subagent threads, with parent context"}, {ID: "forks", Label: "Forks", Description: "Forks only, never classified as subagents"}}})
+	answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Thread types", Prompt: "Active conversations; subagents load only on request. Search can find settled conversations.", Initial: current, Choices: []Choice{{ID: "all", Label: "All", Description: "Active conversations; expand for working subagents"}, {ID: "main", Label: "Main", Description: "Authoritative root conversations"}, {ID: "subagents", Label: "Subagents", Description: "Working subagents, with parent context"}, {ID: "forks", Label: "Forks", Description: "Forks only, never classified as subagents"}}})
 	if err != nil {
 		return "", err
 	}

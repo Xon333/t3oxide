@@ -132,8 +132,9 @@ export class T3 {
     }, delay + Math.floor(Math.random() * Math.min(500, delay / 4)));
   }
   async list(query = '', options = {}) {
-    await this.connect();
-    return threadList(await this.http('/api/orchestration/shell'), query, options);
+    // Metadata browsing needs no WebSocket, ticket or transcript subscription.
+    if (!this.descriptor) await this.probe();
+    return threadList(await this.http('/api/orchestration/shell'), query, { ...options, activeOnly: true });
   }
   async models(threadId) {
     await this.connect();

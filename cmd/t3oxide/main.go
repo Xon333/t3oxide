@@ -22,7 +22,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.5.1-bubbletea"
+var version = "0.5.2-bubbletea"
 
 const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 

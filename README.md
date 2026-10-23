@@ -24,7 +24,7 @@ The client starts in the conversation browser. **Enter** opens a conversation; *
 
 ## Features
 
-- A separate conversation browser with environment tabs, project/lineage navigation and Resume to the active conversation.
+- A separate conversation browser with up to 24 active conversations per environment by default, project/lineage navigation and Resume to the active conversation. Settled threads stay out of the default list; working subagents load only on explicit expansion or selection. Search can find settled conversations.
 - Markdown transcript, native composer editing, slash completion, searchable commands and portable controls without required function keys.
 - Exact external editing and bounded prompt recall, including recoverable rejected code pastes and explicit clears.
 - One New conversation review for the first message, title and supported local model/effort/tier choices in the selected existing workspace.
