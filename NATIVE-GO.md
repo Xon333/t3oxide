@@ -2,6 +2,8 @@
 
 The primary t3oxide client uses Bubble Tea v2 directly, with Bubbles controls, Lip Gloss styling and Glamour Markdown. It connects through the existing T3oxide Node adapter. The retained Swift/AppKit client is a legacy rollback with separate state.
 
+See the [demo screenshots](README.md#screenshots) for the browser and conversation view.
+
 ## Build and open
 
 Build prerequisite: **Go 1.26.0+**. Native verification uses Go 1.27.2 on Apple Silicon; see [verification](docs/verification.md). Run the full pinned-toolchain checks below before adoption. The first build downloads pinned Go modules. The existing host adapter requires Node 22.4+; remote profiles use your normal OpenSSH configuration.

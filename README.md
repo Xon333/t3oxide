@@ -20,6 +20,8 @@ bash scripts/build-go.sh
 
 Follow [installation](NATIVE.md) to prepare the host adapter and environment profiles, then [Go setup and controls](NATIVE-GO.md) to install the executable on your PATH. Distributions include `NOTICE` and `LICENSES/` alongside the binary. Installation does not install, upgrade, start or restart T3.
 
+The client starts in the conversation browser. **Enter** opens a conversation; **Ctrl+O** returns to the browser, and **Esc** resumes the attached conversation. **Tab** switches between reading and writing; **Tab → Ctrl+P** opens commands from the composer. Use `/help` for the full controls.
+
 ## Features
 
 - A separate conversation browser with environment tabs, project/lineage navigation and Resume to the active conversation.
@@ -33,6 +35,18 @@ Follow [installation](NATIVE.md) to prepare the host adapter and environment pro
 - Read-only `envs`, `threads`, `status` and `doctor` commands, with optional JSON output.
 
 T3 owns providers, execution, durable conversations, queues and workspaces. The client keeps one detailed conversation attached; browsing other environments' lists uses temporary metadata helpers without opening their transcripts. Existing T3 work continues when the client disconnects. Full tool payloads, attachment uploads, provider configuration and full-history search remain in T3. See [controls and launch scope](NATIVE-GO.md) and [model/navigation semantics](docs/model-navigation.md).
+
+## Screenshots
+
+Version 0.5.1 in Ghostty, using synthetic demo conversations. Crops omit window chrome and unused margins.
+
+**Conversation browser** — browse projects and conversations while keeping the active conversation attached.
+
+![Conversation browser with a selected demo conversation and environment, New, Settings and Resume controls](docs/screenshots/browser.png)
+
+**Reading and search** — Markdown, run/request status and highlighted matches on the current page.
+
+![Demo conversation with Markdown links and inline code, awaiting-input status and one highlighted page-search match](docs/screenshots/conversation-search.png)
 
 ## Development and CI
 
