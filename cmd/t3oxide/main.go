@@ -22,7 +22,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.3.0-bubbletea"
+var version = "0.4.0-bubbletea"
 
 const help = `t3oxide — terminal companion for your existing T3 environments
 
@@ -45,8 +45,9 @@ Options:
 TUI: /switch environments/threads · /threads FILTER · /search TEXT
      /delivery auto|queue|steer · Ctrl+S Stop + queue hold · /requests
      /earlier (pauses live detail) · /latest · /retry [stop] · /theme
-     Enter sends · Ctrl+J newline · Ctrl+P palette · Ctrl+T threads
-     Ctrl+C clears draft (empty: quit) · Ctrl+D exits · Tab transcript focus
+     Enter sends · Ctrl+J newline · F3 commands · F6 conversations
+     Ctrl+C keeps draft · Ctrl+X clears (F5 recalls) · Ctrl+Q exits
+     F4 external editor · Tab transcript focus
 
 Only human actions in the TUI send writes. These CLI commands are read-only.
 Host credentials stay on the host. Existing T3 services are never started here.

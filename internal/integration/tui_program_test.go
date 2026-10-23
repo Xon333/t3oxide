@@ -349,7 +349,7 @@ func TestBubbleTeaProgramThreadSwitchHistoryReconnectAndSearch(t *testing.T) {
 	f.update("thread-b", "Beta changed while reading an earlier page", 0)
 	r.send("/latest\r")
 	r.waitText("Beta changed while reading an earlier page")
-	r.send("\x06Beta changed\r")
+	r.send("/search Beta changed\r")
 	r.waitText("Find 1/1 matching lines")
 	r.send("Unsent β draft after search")
 	deadline := time.Now().Add(3 * time.Second)
@@ -368,7 +368,7 @@ func TestBubbleTeaProgramThreadSwitchHistoryReconnectAndSearch(t *testing.T) {
 	if state.Draft("env-a", "thread-a") != "" {
 		t.Fatal("new conversation draft was written into retired conversation")
 	}
-	r.send("\x04")
+	r.send("\x11")
 	select {
 	case <-r.done:
 		if r.err != nil {
@@ -499,7 +499,7 @@ func TestBubbleTeaStopShortcutWorksDuringRequestModalAndPreservesComposer(t *tes
 	if effects, dispatches := f.counts(); effects != 1 || dispatches != 1 {
 		t.Fatal("Stop shortcut also submitted composer text")
 	}
-	r.send("\x04")
+	r.send("\x11")
 	select {
 	case <-r.done:
 		if r.err != nil {

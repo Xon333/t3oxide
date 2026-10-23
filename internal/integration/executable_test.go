@@ -226,7 +226,7 @@ func (r *executablePTY) waitText(want string) {
 }
 func (r *executablePTY) finish() {
 	r.t.Helper()
-	r.keys("\x04")
+	r.keys("\x11")
 	r.awaitCleanExit()
 }
 
@@ -425,9 +425,9 @@ func TestAssembledExecutablePTYUncertainSendStopPriorityAndExplicitRetry(t *test
 	if pending := readPending(); pending == nil || pending["id"] != id {
 		t.Fatalf("executable lost its stable uncertain identity: %#v", pending)
 	}
-	// Ctrl+C clears this local composer; it cannot stop remote work. The saved
+	// Ctrl+X explicitly clears this local composer; it cannot stop remote work. The saved
 	// record still contains the original text for explicit retry.
-	r.keys("\x03")
+	r.keys("\x18")
 	r.keys("/retry\r")
 	deadline = time.Now().Add(6 * time.Second)
 	for readPending() != nil {

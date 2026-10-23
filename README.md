@@ -22,7 +22,8 @@ Follow [installation](NATIVE.md) to prepare the host adapter and environment pro
 
 ## Features
 
-- Markdown transcript, composer, command palette, conversation filtering and lineage navigation.
+- Markdown transcript, native composer editing, slash completion, command palette, conversation filtering and lineage navigation.
+- Exact external editing and bounded prompt recall, including recoverable rejected code pastes and explicit clears.
 - Multiple environment profiles, bounded history pages, per-thread drafts and explicit recovery of uncertain writes.
 - Current-thread and next-message model, reasoning and speed choices from the selected provider's advertised capabilities.
 - Human-authored messages with queue/steer intent, Stop with queue hold, and review of T3 requests.

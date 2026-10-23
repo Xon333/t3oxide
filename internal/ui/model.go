@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -39,6 +40,7 @@ type actionMsg struct {
 	result         client.Result
 	err            error
 	stop           bool
+	commandDraft   string
 }
 type settingMsg struct {
 	kind, value string
@@ -62,6 +64,7 @@ type Model struct {
 	width, height, contentWidth, bodyHeight    int
 	modalWidth, modalHeight                    int
 	composer, modalInput                       textarea.Model
+	completion                                 commandCompletion
 	searchInput                                textinput.Model
 	viewport, detailViewport, questionViewport viewport.Model
 	status                                     client.Status
@@ -69,6 +72,7 @@ type Model struct {
 	dialog                                     *dialog
 	dialogSerial                               uint64
 	detailTitle, detail                        string
+	detailCopy                                 string
 	searching                                  bool
 	searchTerm                                 string
 	searchLines                                []int
@@ -77,6 +81,10 @@ type Model struct {
 	follow, transcriptFocus, focused           bool
 	draftEdits                                 uint64
 	preservedDraft                             string
+	localPrompts                               []localPrompt
+	editorBusy                                 bool
+	inputProblem, inputProblemKind             string
+	inputProblemID                             uint64
 	notice, problem                            string
 	streamProblem                              string
 	actionBusy, stopBusy                       bool
@@ -105,7 +113,7 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 		theme = "violet"
 	}
 	m := &Model{ctx: ctx, cancel: cancel, settings: settings, theme: theme, mouse: mouse, sidebar: sidebar, width: 80, height: 24, follow: true, focused: true, searchIndex: -1}
-	m.composer = newTextarea("Message T3 · Ctrl+P commands")
+	m.composer = newTextarea("Message")
 	m.composer.DynamicHeight = true
 	m.composer.MinHeight = 1
 	m.modalInput = newTextarea("Enter your answer")
@@ -140,7 +148,7 @@ func newTextarea(placeholder string) textarea.Model {
 	t.MaxWidth = 10000
 	t.SetHeight(3)
 	t.SetVirtualCursor(true)
-	t.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"), key.WithHelp("alt+enter", "newline"))
+	t.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"), key.WithHelp("Ctrl+J", "newline"))
 	return t
 }
 
@@ -180,12 +188,14 @@ func (m *Model) setSession(s *client.Session) {
 	m.snapshot = nil
 	m.status = client.Status{State: "connecting", Delivery: "auto"}
 	m.dialog = nil
-	m.detail, m.detailTitle = "", ""
+	m.detail, m.detailTitle, m.detailCopy = "", "", ""
 	m.problem, m.notice, m.streamProblem = "", "", ""
+	m.inputProblem, m.inputProblemKind = "", ""
 	m.actionBusy, m.stopBusy = false, false
 	m.actionName = ""
 	m.draftEdits = 0
 	m.preservedDraft = ""
+	m.completion = commandCompletion{}
 	m.transcript = ""
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
@@ -303,6 +313,8 @@ func (m *Model) startRender() tea.Cmd {
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
 	switch msg := message.(type) {
+	case editorFinishedMsg:
+		return m, m.finishEditor(msg)
 	case componentMsg:
 		if msg.generation != m.generation {
 			return m, nil
@@ -347,9 +359,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.restoreDraft(*event.Draft)
 		}
 		if event.DraftAccepted != nil && m.currentDraft() == *event.DraftAccepted {
+			m.clearInputProblem("composer", 0)
 			m.preservedDraft = ""
 			m.composer.SetValue("")
+			m.composer.Placeholder = "Message"
 			m.draftEdits++
+			m.refreshCompletion()
+			commands = append(commands, m.restoreFocus())
 		}
 		if event.Snapshot != nil {
 			m.snapshot = event.Snapshot
@@ -450,6 +466,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err == nil {
 			m.problem = ""
+			if msg.commandDraft != "" && m.currentDraft() == msg.commandDraft {
+				if err := m.storeDraft(""); err != nil {
+					m.problem = "Draft save: " + safeText(err.Error())
+				}
+			}
 			if msg.result.Detail != "" {
 				m.openDetail(msg.result.DetailTitle, msg.result.Detail)
 			}
@@ -538,10 +559,11 @@ func (m *Model) composerChanged(old string) {
 	value := m.composer.Value()
 	if len(value) > maxInputBytes || strings.Count(value, "\n") >= maxInputLines {
 		m.composer.SetValue(old)
-		m.problem = "Draft limit is 64 KiB / 9,999 lines; this input was not added"
+		m.setInputProblem("composer", 0, "Draft limit is 64 KiB / 9,999 lines; this input was not added"+m.retainAttempt(value))
 		value = m.composer.Value()
 	}
 	if value != old {
+		m.clearInputProblem("composer", 0)
 		m.draftEdits++
 		if m.session != nil {
 			if err := m.session.SetDraft(value); err != nil {
@@ -549,6 +571,7 @@ func (m *Model) composerChanged(old string) {
 			}
 		}
 		m.resize()
+		m.refreshCompletion()
 	}
 }
 
@@ -565,7 +588,7 @@ func (m *Model) currentDraft() string {
 // until the user copies/reviews it or explicitly clears it.
 func (m *Model) restoreDraft(text string) {
 	m.preservedDraft = ""
-	m.composer.Placeholder = "Message T3 · Ctrl+P commands"
+	m.composer.Placeholder = "Message"
 	if len(text) <= maxInputBytes && strings.Count(text, "\n") < maxInputLines {
 		m.composer.SetValue(text)
 		if m.composer.Value() == text {
@@ -575,9 +598,9 @@ func (m *Model) restoreDraft(text string) {
 	}
 	m.preservedDraft = text
 	m.composer.SetValue("")
-	m.composer.Placeholder = "Saved draft preserved · F2 reviews it"
+	m.composer.Placeholder = "Exact draft · F4 edit"
 	m.composer.Blur()
-	m.problem = "Saved draft preserved unchanged · F2 review · Ctrl+Y copy · Ctrl+C clear"
+	m.notice = "Exact draft preserved · F4 edit"
 }
 
 func (m *Model) restoreFocus() tea.Cmd {
@@ -594,7 +617,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 		return nil
 	}
 	if m.dialog != nil {
-		if m.dialog.details {
+		if m.dialog.details || m.dialog.finishFocused {
 			return nil
 		}
 		if m.dialog.kind == client.EnterText && m.dialog.preservedInitial == "" {
@@ -673,16 +696,25 @@ func (m *Model) execute(name, args string) tea.Cmd {
 }
 
 func (m *Model) send() tea.Cmd {
-	if m.preservedDraft != "" {
-		m.problem = "Saved draft needs review · F2 review · Ctrl+Y copy · Ctrl+C clear"
-		return nil
-	}
-	text := m.composer.Value()
+	text := m.currentDraft()
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") {
+	if m.isSlashCommand(text) {
 		return m.slash(text)
+	}
+	return m.sendText(text)
+}
+
+// sendText submits canonical bytes through Session.Send, including exact drafts
+// outside the textarea. Oversized legacy drafts remain reviewable but unsendable.
+func (m *Model) sendText(text string) tea.Cmd {
+	if !utf8.ValidString(text) || len(text) > maxInputBytes || strings.Count(text, "\n") >= maxInputLines {
+		m.problem = "Draft limit is 64 KiB / 9,999 lines; edit before sending"
+		return nil
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil
 	}
 	if m.session == nil {
 		m.problem = "Choose a conversation first"

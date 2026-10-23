@@ -36,39 +36,41 @@ When distributing the executable, include `NOTICE` and `LICENSES/` alongside it.
 
 | Action | Control |
 |---|---|
-| Command palette / shortcut help | **Ctrl+P** / `/help` |
-| Conversations / environments | **Ctrl+T** / **Ctrl+E**; `/switch` also works |
-| Filter conversation title/project, including collapsed children | `/threads SEARCH WORDS`; **Ctrl+F** inside the chooser |
-| Expand / collapse subagents | **Space** or **Right** / **Left** in thread chooser |
-| All / Main / Subagents / Forks | **F6** in chooser, or `/filter` |
-| Jump to authoritative parent | **Alt+Up** or `/parent` |
-| Current thread model / reasoning / speed | **Alt+M** / **Alt+E** / **Alt+S**, or `/model`, `/effort`, `/speed` |
-| Presets / favorites | `/presets`; `/presets save NAME` saves the current choice |
-| Stage next message model / effort / speed | `/model next`, `/effort next`, `/speed next` |
-| Inspect / clear staged choice | `/override`, `/override clear` |
-| Saved selection vs runtime evidence | `/runtime` |
-| Submit / insert newline | **Enter** / **Ctrl+J** (Alt+Enter is also supported) |
-| T3 delivery intent | `/delivery auto`, `/delivery queue`, `/delivery steer` |
-| Stop reviewed turn and hold queue | **Ctrl+S**, including while a request is open; `/stop` |
-| Review approval or question | **Ctrl+R** or `/requests`; Escape dismisses locally |
-| Read full selected request/choice details | **F2** in the picker; Escape returns without answering |
-| Focus transcript/composer | **Tab** |
-| Earlier page / live Latest | **Alt+Left** / **Alt+Right**, or `/earlier` / `/latest` |
-| Search displayed page | **Ctrl+F** or `/search TEXT` |
-| Copy last assistant message / displayed page | **Ctrl+Y** or `/copy`; `/copy page` |
-| New conversation in current workspace | `/new`, optionally followed by a title |
-| Inspect / retry saved action | `/pending`; `/retry` or `/retry stop` |
-| Explicitly resolve local retry record | `/resolve` or `/resolve stop`, after reviewing T3 |
-| Reconnect without replay | `/reconnect` |
-| Theme | `/theme` → terminal, violet, cyan or lime; choice persists |
-| Mouse capture / native selection | `/mouse`; `/mouse off` restores native terminal selection |
-| Optional context sidebar | **Ctrl+B** |
-| Full T3 address | `/web` displays the configured URL |
-| Quit locally | **Ctrl+D** or `/quit`; Ctrl+C clears nonempty input, then quits when empty |
+| Commands / contextual help | **F3** / **F1** or `/help`; Ctrl+P also opens commands in an empty composer or the transcript |
+| Conversations / environments | **F6** / `/env`; Ctrl+T also opens conversations in an empty composer or the transcript |
+| Filter conversation titles/projects, including collapsed children | `/threads WORDS`; Ctrl+F outside filter editing in the chooser |
+| Expand / collapse subagents; choose thread types | Space or Right / Left; F6 in the chooser |
+| Parent conversation | `/parent` or Option/Alt+Up |
+| Current thread model / reasoning / speed | Option/Alt+M / E / S, or `/model`, `/effort`, `/speed` |
+| Presets; next-message selection; runtime evidence | `/presets`; `/model next`, `/effort next`, `/speed next`; `/override`; `/runtime` |
+| Send / newline | **Enter** / **Ctrl+J**; Option/Alt+Enter and distinct Shift+Enter also insert a newline |
+| Slash completion / literal slash text | Type `/`, Up/Down selects, Tab completes; Enter accepts a partial name before execution. **Ctrl+Enter** sends literal text, including a known command name |
+| Exact text / prompt recall | **F4** opens `$VISUAL`, then `$EDITOR`, then `vi`; **F5** recalls prompts |
+| Clear / interrupt | **Ctrl+X** clears into recall; Ctrl+C dismisses a surface or keeps a nonempty draft (empty: exit) |
+| Delivery | `/delivery auto`, `/delivery queue`, `/delivery steer` |
+| Stop reviewed turn and hold queue | **Ctrl+S**, including inside requests and details; `/stop` |
+| Review T3 request / full question | **Ctrl+R** / **F2** in the picker |
+| Complete multiple selection | **Tab**, then **Enter** on the fixed Continue control; Ctrl+Enter also works, including with zero filter matches |
+| Read / write | **Tab** switches transcript/composer focus; PgUp/PgDown scroll the focused component |
+| Earlier page / Latest | `/earlier` / `/latest`; Option/Alt+Left/Right only with transcript focus |
+| Search current page | `/search TEXT`, or Ctrl+F with transcript focus; n/N moves between matches there |
+| Copy | `/copy [page|draft|answer|error|detail]`; Ctrl+Y copies the current detail or preserved answer/draft, otherwise the last assistant message |
+| Error details | **F2** or `/error`; **F8** opens errors while F2 reviews an exact draft or preserved answer. Ctrl+Y copies an open detail |
+| New conversation / recovery | `/new [TITLE]`; `/pending`, `/retry [stop]`, `/resolve [stop]`, `/reconnect` |
+| Theme / mouse / sidebar | `/theme`, `/mouse [on|off]`, `/sidebar [on|off]` |
+| Full T3 / local exit | `/web` displays the configured address; **Ctrl+Q** or `/quit` exits. Ctrl+D exits only from an empty composer or transcript |
 
-Clipboard and selection behavior depends on the terminal; the UI exposes copy controls and standard paste through Bubbles. Test your terminal/tmux combination during native acceptance. Quitting or canceling locally never means remote Stop.
+Focused editors retain Bubbles' editing keys: Ctrl+A/E line start/end, Ctrl+B/F character movement, Ctrl+P/N line movement, Ctrl+T transpose, Ctrl+D forward delete, and decoded Alt+Left/Right word movement. In a filter, Ctrl+P/N moves between results without resetting the query. F3 over a request or page-search editor opens help and preserves that editor.
 
-Input is bounded to 64 KiB and 9,999 editable lines. Oversized edits and pasted text that Bubbles would normalize are rejected as a whole, including through Ctrl+V. A restored draft that Bubbles would truncate or normalize remains preserved verbatim in a read-only state: F2 inspects it, Ctrl+Y copies it, and Ctrl+C explicitly clears it. A provider's initial answer has the same protection; Ctrl+U explicitly replaces it or Escape dismisses the request. Neither is silently shortened or submitted as altered text.
+On macOS, ⌥ means Option. Terminal mappings determine which key events arrive; the supplied Ghostty launcher uses left Option as Alt. Physical Option+Arrow and decoded Alt-arrow events are separate test cases. Palette and slash alternatives remain available.
+
+Unknown slash-prefixed text, including absolute paths, sends as ordinary text. Known single-line command names execute after validation; invalid local arguments remain editable, and remote rejection retains the exact command. Ctrl+Enter sends even a known slash name literally.
+
+Input is bounded to 64 KiB and 9,999 editable lines. Text Bubbles would change is rejected as a whole, with the previous draft intact and the attempted bytes recoverable in F5. Recall selects the exact buffer; F4 edits it externally and Enter sends within bounds. External editor results are never trimmed or normalized. An exact buffer stays outside the normalizing textarea; F2 reviews it and `/copy draft` copies its original bytes. Failed or stale editor returns retain unique attempts; oversized or invalid UTF-8 results retain their private file, whose location is shown in the error details.
+
+Prompt recall contains up to 24 acknowledged prompts, explicit clears and rejected attempts, scoped to the same environment and thread, with a 512 KiB total text budget. Opening or canceling recall leaves the live draft intact; accepting an entry preserves any displaced live draft in recall. A request's uneditable initial answer keeps its original review/copy and explicit Ctrl+U replacement path.
+
+Mouse capture provides transcript scrolling; `/mouse off` enables native terminal selection. Click-to-focus is not implemented. Clipboard behavior depends on the terminal; copy also uses the existing desktop clipboard helper. Local dismissal and exit never mean remote Stop.
 
 `t3oxide envs`, `threads`, `status` and `doctor` are read-only. Use `--json` for machine-readable results. `--help` describes `--config`, `--state`, `--env`, `--thread`, `--theme` and `--no-mouse`.
 
@@ -78,7 +80,9 @@ Use `/theme terminal` or launch with `t3oxide --theme terminal` to inherit your 
 
 ## State and recovery
 
-The first normal Go launch imports validated Swift `drafts.json` into `go-drafts.json` only when the Go file is absent. It never edits the Swift file. The Go state file includes optional preset/override fields and the `select-model` operation, with a single-owner lock and existing recovery records. Preserve the Go file when replacing executables; do not run an older Go build that does not understand these fields and operations against it. Swift rollback retains its separate, untouched state file and does not import new Go drafts or pending actions.
+The first normal Go launch imports validated Swift `drafts.json` into `go-drafts.json` only when the Go file is absent. It never edits the Swift file. The Go state file includes optional preset/override fields and the `select-model` operation, with a single-owner lock and existing recovery records. Preserve the Go file and its `.prompts.json` recall compatibility file when replacing executables; do not run an older Go build that does not understand these fields and operations against it. Swift rollback retains its separate, untouched state file and does not import new Go drafts or pending actions.
+
+Prompt recall has a targeted compatibility copy at the explicit Go state path plus `.prompts.json`, under the same process lock. It protects recall from older Go clients that drop unknown main-file fields. Interrupted publication can retain up to 48 entries/1 MiB of protected text; the encoded copy is capped at 6 MiB. Invalid or unresolved copies fail closed. It contains no executable operations, and the main file alone owns pending actions and Stop records. Keep both files together for migration or restore.
 
 Drafts remain until an authoritative acknowledgment; newer typing survives delayed replies and switches. Normal actions and Stop have independent saved-operation lanes. A saved retry uses the original ID, payload and run/request target. Reconnect does not replay it. Damaged state fails closed rather than resetting recovery history.
 

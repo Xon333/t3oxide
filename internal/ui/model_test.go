@@ -215,7 +215,7 @@ func TestRestoredDraftBeyondComponentLimitsIsPreservedUntilExplicitClear(t *test
 			if m.currentDraft() != original || s.Draft() != original || m.composer.Value() != "" || m.composer.Focused() {
 				t.Fatal("restored original was normalized/truncated/replaced by the editor")
 			}
-			if !strings.Contains(m.problem, "preserved unchanged") || m.handleKey(keyPress('y', tea.ModCtrl)) == nil {
+			if !strings.Contains(m.notice, "Exact draft preserved") || m.handleKey(keyPress('y', tea.ModCtrl)) == nil {
 				t.Fatal("preserved draft lacks explicit review/copy path")
 			}
 			m.handleKey(keyPress(tea.KeyF2))
@@ -223,7 +223,7 @@ func TestRestoredDraftBeyondComponentLimitsIsPreservedUntilExplicitClear(t *test
 				t.Fatal("preserved draft cannot be inspected")
 			}
 			m.handleKey(keyPress(tea.KeyEscape))
-			m.handleKey(keyPress('c', tea.ModCtrl))
+			m.handleKey(keyPress('x', tea.ModCtrl))
 			if m.preservedDraft != "" || s.Draft() != "" || !m.composer.Focused() || m.closed {
 				t.Fatal("explicit local clear did not retire preserved draft safely")
 			}
@@ -526,13 +526,13 @@ func TestLocalInterruptAndExitDoNotClaimRemoteStop(t *testing.T) {
 	m := testModel(t)
 	m.composer.SetValue("unsent")
 	m.handleKey(keyPress('c', tea.ModCtrl))
-	if m.closed || m.stopBusy || m.composer.Value() != "" || m.ctx.Err() != nil {
-		t.Fatal("Ctrl+C did not clear locally")
+	if m.closed || m.stopBusy || m.composer.Value() != "unsent" || m.ctx.Err() != nil {
+		t.Fatal("Ctrl+C did not preserve the local draft")
 	}
 	m.composer.SetValue("preserved until shutdown")
-	cmd := m.handleKey(keyPress('d', tea.ModCtrl))
+	cmd := m.handleKey(keyPress('q', tea.ModCtrl))
 	if !m.closed || m.ctx.Err() == nil || m.stopBusy || m.composer.Value() != "preserved until shutdown" {
-		t.Fatal("Ctrl+D changed remote state or lost draft")
+		t.Fatal("Ctrl+Q changed remote state or lost draft")
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatal("exit did not request normal Bubble Tea terminal cleanup")
@@ -552,6 +552,7 @@ func TestCurrentPageSearchAndReadingDoesNotFollowStreaming(t *testing.T) {
 	m.transcript = strings.Join(lines, "\n")
 	m.viewport.SetContent(m.transcript)
 	m.viewport.GotoBottom()
+	m.handleKey(keyPress(tea.KeyTab))
 	m.handleKey(keyPress(tea.KeyPgUp))
 	if m.follow || m.viewport.AtBottom() {
 		t.Fatal("reading older visible content did not pause follow")
@@ -628,7 +629,7 @@ func TestResponsiveViewsHaveBoundedUnicodeRowsAndNoRequiredSidebar(t *testing.T)
 				}
 			}
 			if !strings.Contains(plain, "t3oxide") || !strings.Contains(plain, "Stop") || !strings.Contains(strings.ToLower(plain), "message") {
-				t.Fatal("essential context/actions disappeared")
+				t.Fatalf("essential context/actions disappeared:\n%s", plain)
 			}
 			if size.Width == 80 || size.Width == 44 {
 				t.Log("Actual fixture View:\n" + plain)

@@ -14,8 +14,9 @@ import (
 
 const maxStateBytes = 2 * 1024 * 1024
 
-// State contains only drafts and exact, unacknowledged operation records. It is
-// not a conversation database. Every mutation is written before publication.
+// State contains drafts, bounded local prompt recall and exact, unacknowledged
+// operation records. It is not a conversation database. Every mutation is
+// written before publication.
 // A process lock prevents two Go clients from overwriting each other's recovery
 // records. Use go-drafts.json beside Swift's drafts.json to keep rollback intact.
 type State struct {
@@ -24,9 +25,14 @@ type State struct {
 	lock   *os.File
 	closed bool
 	saved  savedState
+	// Retain the compatibility baseline (including recovered attempts) until
+	// the main transaction succeeds, even if a prepared sidecar write succeeded.
+	promptCommitted    []PromptEntry
+	promptSidecarDirty bool
 }
 
 type savedState struct {
+	PromptHistory  []PromptEntry             `json:"promptHistory,omitempty"`
 	Drafts         map[string]string         `json:"drafts"`
 	Pending        map[string]map[string]any `json:"pending"`
 	PendingStops   map[string]map[string]any `json:"pendingStops"`
@@ -55,6 +61,10 @@ func OpenState(path string) (*State, error) {
 	s := &State{path: path, lock: lock, saved: savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}}}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
+		if err = s.loadPromptSidecar(nil); err != nil {
+			s.Close()
+			return nil, err
+		}
 		return s, nil
 	}
 	if err != nil {
@@ -87,6 +97,10 @@ func OpenState(path string) (*State, error) {
 	}
 	if s.saved.PendingStops == nil {
 		s.saved.PendingStops = map[string]map[string]any{}
+	}
+	if err = s.loadPromptSidecar(b); err != nil {
+		s.Close()
+		return nil, err
 	}
 	return s, nil
 }
@@ -152,10 +166,14 @@ func (s *State) ImportLegacy(path string) error {
 	if next.PendingStops == nil {
 		next.PendingStops = map[string]map[string]any{}
 	}
+	next.PromptHistory = mergePromptHistory(s.saved.PromptHistory, next.PromptHistory)
 	return s.commit(next)
 }
 
 func validateState(v savedState) error {
+	if err := validatePromptHistory(v.PromptHistory); err != nil {
+		return err
+	}
 	if err := validateModelPreferences(v); err != nil {
 		return err
 	}
@@ -314,6 +332,9 @@ func (s *State) Acknowledge(env string, stop bool, id, thread, message string) e
 		return errors.New("saved operation belongs to another thread")
 	}
 	delete(lane, env)
+	if old["op"] == "send" && message != "" && old["message"] == message {
+		rememberPrompt(&next, env, thread, "sent", message)
+	}
 	if old["op"] == "send" {
 		key := draftKey(env, thread)
 		if override, ok := next.ModelOverrides[key]; ok && old["modelOverrideId"] == override.ID {
@@ -347,7 +368,35 @@ func (s *State) commit(next savedState) error {
 	if len(b) > maxStateBytes {
 		return errors.New("saved drafts/actions exceed 2 MiB")
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".t3oxide-state-*")
+	// Older Go clients drop unknown main-file fields. Publish a compatibility
+	// copy before clearing any draft/pending record, retaining the previous
+	// committed history if the main publication fails.
+	checkpoint := s.promptSidecarDirty || !equalPromptHistory(next.PromptHistory, s.promptCommitted)
+	if checkpoint {
+		staged := promptSidecar{Version: 1, Committed: s.promptCommitted, Prepared: next.PromptHistory, StateSHA256: promptStateDigest(b)}
+		if err = s.writePromptSidecar(staged); err != nil {
+			return err
+		}
+		s.promptSidecarDirty = true
+	}
+	if err = writeStateFile(s.path, b); err != nil {
+		return err
+	}
+	s.saved = next
+	if checkpoint {
+		s.promptCommitted = append([]PromptEntry(nil), next.PromptHistory...)
+		// Main publication has succeeded. Finalization is optional: the durable
+		// prepared envelope can be reconciled by its digest after interruption.
+		// Do not turn a successful ACK into an apparent failed transaction.
+		s.promptSidecarDirty = s.writePromptSidecar(promptSidecar{Version: 1, Committed: s.promptCommitted}) != nil
+	}
+	return nil
+}
+
+// writeStateFile is the existing private, fsynced atomic state publication path,
+// shared by the main transaction and its prompt-only compatibility copy.
+func writeStateFile(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".t3oxide-state-*")
 	if err != nil {
 		return err
 	}
@@ -363,10 +412,10 @@ func (s *State) commit(next savedState) error {
 	if err != nil {
 		return err
 	}
-	if err = os.Rename(name, s.path); err != nil {
+	if err = os.Rename(name, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(filepath.Dir(s.path))
+	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
@@ -375,7 +424,6 @@ func (s *State) commit(next savedState) error {
 	if err != nil {
 		return err
 	}
-	s.saved = next
 	return nil
 }
 
@@ -392,6 +440,7 @@ func cloneRecord(v map[string]any) map[string]any {
 }
 func cloneState(v savedState) savedState {
 	n := savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}}
+	n.PromptHistory = append([]PromptEntry(nil), v.PromptHistory...)
 	for k, x := range v.Drafts {
 		n.Drafts[k] = x
 	}

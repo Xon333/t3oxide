@@ -81,7 +81,7 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	r.waitText("FORK fork")
 	r.send("\r")
 	r.waitText("[FORK]")
-	r.send("\x04")
+	r.send("\x11")
 	select {
 	case <-r.done:
 		if r.err != nil {
@@ -114,7 +114,7 @@ func TestBubbleTeaFeaturesStopWhileModelPickerIsOpen(t *testing.T) {
 	// Let Tea resolve the standalone Escape before sending the next key;
 	// adjacent bytes would describe Alt+Ctrl+D to a terminal input parser.
 	r.waitText("Dismissed locally")
-	r.send("\x04")
+	r.send("\x11")
 	select {
 	case <-r.done:
 		if r.err != nil {

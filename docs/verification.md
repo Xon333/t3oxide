@@ -2,6 +2,22 @@
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
+## Native component UX reuse, 2026-10-23
+
+Version 0.4.0 keeps the existing Go/Bubble Tea pins and Node adapter boundary. [UX reuse](ux-reuse.md) maps the changes to inspected upstream APIs and behavior; [controls](../NATIVE-GO.md#controls) records the current keyboard contract. Swift source/state and adapter protocol/receipts are unchanged.
+
+Source and disposable-fixture checks passed on macOS 27.0.1, Go 1.27.2 darwin/arm64 and Node 24.21.0:
+
+- `bash scripts/check-go.sh`: formatting, all six packages, vet and the complete race run, including real Node adapter, Bubble Tea program and assembled executable PTY integration. The final pass includes the quoted-authorization and full-capacity prompt-recovery fixes.
+- Top-level router regressions cover editor keys, palette reentry/context help, slash completion, literal paths/known-command text, invalid command retention, local interrupt/clear/exit and immediate typing after exact-draft acknowledgment.
+- New program integration sends a literal absolute path and recovers a tab/CRLF/U+FFFD paste through recall into an exact canonical send. Existing uncertain-action, independent Stop, same-ID retry, offered request IDs and terminal-restoration checks pass.
+- Config/client tests cover exact editor/recall bytes and targeted `.prompts.json` compatibility retention across previous-Go JSON rewrites and interrupted publications, including full 24-entry/512 KiB histories, protected retention limits, malformed copies and unchanged pending/Stop lanes.
+- Error tests cover complete viewport/copy diagnostics, quoted/escaped credential fields and authorization tokens, separate exact human-text copy, preserved request editors and context-dependent multiselect help. Compact pickers retain query, current selection, selected count and portable completion under filtering.
+- `go mod verify` and whitespace checks passed. No dependency versions changed. Adapter/shared scripts and Swift paths are unchanged, so their previously recorded checks are retained without a qualification replay.
+- `bash scripts/build-go.sh`: native Mach-O ARM64 release; version/help and strict ad-hoc signature verified. SHA-256: `a6402eec33f800d2594cb78f772e7c4fae13ca5e821efe4247c4169f0b3d02c0`.
+
+Focused independent review findings were resolved and covered by regressions. The final review found no additional P1/P2 findings in its redaction and recovery scope. These are source/disposable-fixture results; native terminal acceptance and installed-client delivery are recorded separately. No isolated latency, resource savings, sustained-load or novice-usability claim is made.
+
 ## Primary Go client and Terminal theme, 2026-10-22
 
 The Go/Bubble Tea client supersedes Swift as the primary documented installation and CI artifact. Swift source, build checks and separate recovery state remain available for legacy rollback.

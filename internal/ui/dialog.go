@@ -10,13 +10,10 @@ import (
 
 type choiceItem struct {
 	id, title, description, command, args string
-	checked, multiple, confirm, disabled  bool
+	checked, multiple, disabled           bool
 }
 
 func (i choiceItem) Title() string {
-	if i.confirm {
-		return "Continue with selected answers"
-	}
 	if i.multiple {
 		if i.checked {
 			return "✓ " + safeText(i.title)
@@ -39,18 +36,20 @@ type dialog struct {
 	detailText                string
 	preservedInitial          string
 	filterQuery               string
+	finishFocused             bool
 }
 
 func (m *Model) newList(title string, items []list.Item) list.Model {
 	l := list.New(items, list.NewDefaultDelegate(), m.modalWidth, max(1, m.modalHeight-5))
 	l.Title = title
 	l.SetShowTitle(false)
+	l.SetShowFilter(false)
 	l.SetShowStatusBar(false)
 	l.SetShowPagination(true)
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(true)
 	l.DisableQuitKeybindings()
-	l.FilterInput.Prompt = "Find: "
+	l.FilterInput.Prompt = "Filter: "
 	l.FilterInput.Placeholder = "Type to filter"
 	l.FilterInput.CharLimit = 256
 	l.FilterInput.SetVirtualCursor(true)
@@ -81,12 +80,9 @@ func (m *Model) openPrompt(p *client.Prompt) {
 			m.modalInput.Placeholder = "Original answer preserved · F2 reviews it"
 		}
 	} else {
-		items := make([]list.Item, 0, len(q.Choices)+1)
+		items := make([]list.Item, 0, len(q.Choices))
 		for _, c := range q.Choices {
 			items = append(items, choiceItem{id: c.ID, title: c.Label, description: c.Description, multiple: q.Kind == client.ChooseMany})
-		}
-		if q.Kind == client.ChooseMany {
-			items = append(items, choiceItem{title: "Continue with selected answers", confirm: true})
 		}
 		d.list = m.newList(q.Title, items)
 		for i, c := range q.Choices {
@@ -148,11 +144,11 @@ func (m *Model) chooseDialog() tea.Cmd {
 		m.notice = selected.description
 		return nil
 	}
-	if d.kind == client.ChooseMany && !selected.confirm {
+	if d.kind == client.ChooseMany {
 		d.selected[selected.id] = !d.selected[selected.id]
 		selected.checked = d.selected[selected.id]
 		for i, item := range d.list.Items() {
-			if row, ok := item.(choiceItem); ok && !row.confirm && row.id == selected.id {
+			if row, ok := item.(choiceItem); ok && row.id == selected.id {
 				// SetItem normally starts an async refilter. Compute through the
 				// same synchronous path as typing so it cannot outlive this query.
 				d.list.SetItem(i, selected)
@@ -164,17 +160,7 @@ func (m *Model) chooseDialog() tea.Cmd {
 		return nil
 	}
 	if d.prompt != nil {
-		answer := client.Answer{}
-		if d.kind == client.ChooseMany {
-			// Preserve host-offered order and values; never manufacture decisions.
-			for _, choice := range d.prompt.Question.Choices {
-				if d.selected[choice.ID] {
-					answer.ChoiceIDs = append(answer.ChoiceIDs, choice.ID)
-				}
-			}
-		} else {
-			answer.ChoiceIDs = []string{selected.id}
-		}
+		answer := client.Answer{ChoiceIDs: []string{selected.id}}
 		if !d.prompt.Respond(answer) {
 			m.notice = "This request was retired; no answer sent"
 		}
@@ -192,7 +178,7 @@ func (m *Model) chooseDialog() tea.Cmd {
 }
 
 func (m *Model) finishMultiple() tea.Cmd {
-	if m.dialog == nil || m.dialog.kind != client.ChooseMany {
+	if m.dialog == nil || m.dialog.kind != client.ChooseMany || m.dialog.prompt == nil {
 		return nil
 	}
 	d := m.dialog
@@ -211,80 +197,15 @@ func (m *Model) finishMultiple() tea.Cmd {
 }
 
 func (m *Model) openPalette() tea.Cmd {
+	if m.dialog != nil && m.dialog.local == "palette" {
+		return m.restoreFocus()
+	}
 	if m.dialog != nil && m.dialog.prompt != nil {
-		m.openDetail("Request controls", helpText)
+		m.openDetail("Request controls", m.helpText())
 		return nil
 	}
-	items := []list.Item{
-		choiceItem{title: "Switch environment or conversation", description: "Navigate your configured T3 profiles and threads", command: "switch"},
-		choiceItem{title: "Find in current page", description: "Search displayed transcript text", command: "search"},
-		choiceItem{title: "Earlier history", description: "Replace page and pause live detail", command: "earlier"},
-		choiceItem{title: "Latest / resume live", description: "Return to the current live page", command: "latest"},
-		choiceItem{title: "Review T3 requests", description: "Exact approvals and provider questions", command: "requests"},
-		choiceItem{title: "Keyboard help", description: "Controls and supported commands", command: "help"},
-		choiceItem{title: "New conversation", description: "Bind to this conversation's existing workspace", command: "new"},
-		choiceItem{title: "Stop + hold queue", description: "Stop the reviewed active turn · Ctrl+S", command: "stop"},
-		choiceItem{title: "Thread type filter", description: "All / Main / Subagents / Forks", command: "filter"},
-		choiceItem{title: "Parent conversation", description: "Jump via authoritative T3 lineage · Alt+Up", command: "parent"},
-		choiceItem{title: "Model · current thread", description: "Choose from this T3 provider's catalog · Alt+M", command: "model"},
-		choiceItem{title: "Reasoning effort · current thread", description: "Only model-supported choices · Alt+E", command: "effort"},
-		choiceItem{title: "Speed / service tier · current thread", description: "Advertised service tier or fast mode · Alt+S", command: "speed"},
-		choiceItem{title: "Model presets / favorites", description: "Saved per environment; revalidated before applying", command: "presets"},
-		choiceItem{title: "Next-message override", description: "Stage model/effort/speed for one dispatch; T3 may adopt it", command: "override"},
-		choiceItem{title: "Clear next-message override", description: "Does not alter a saved uncertain operation", command: "override", args: "clear"},
-		choiceItem{title: "Effective runtime details", description: "Saved preferences, run request and provider-reported settings", command: "runtime"},
-		choiceItem{title: "Delivery · auto", description: "T3 chooses delivery", command: "delivery", args: "auto"},
-		choiceItem{title: "Delivery · queue", description: "Queue human input for the next turn", command: "delivery", args: "queue"},
-		choiceItem{title: "Delivery · steer", description: "Deliver human input to the running turn", command: "delivery", args: "steer"},
-		choiceItem{title: "Saved operations", description: "Inspect uncertain operation identity and payload", command: "pending"},
-		choiceItem{title: "Retry saved action", description: "Explicitly reuse the exact original operation ID", command: "retry"},
-		choiceItem{title: "Retry saved Stop", description: "Recover original Stop without targeting newer work", command: "retry", args: "stop"},
-		choiceItem{title: "Resolve reviewed action", description: "Confirm local recovery-record clearance after reviewing T3", command: "resolve"},
-		choiceItem{title: "Resolve reviewed Stop", description: "Confirm local Stop recovery-record clearance", command: "resolve", args: "stop"},
-		choiceItem{title: "Theme", description: "Terminal colors, violet, cyan or lime", command: "theme"},
-		choiceItem{title: "Mouse capture", description: "Toggle scrolling capture / native terminal selection", command: "mouse"},
-		choiceItem{title: "Copy last assistant message", description: "OSC 52 plus native clipboard helper", command: "copy"},
-		choiceItem{title: "Copy current draft", description: "Preserve the full original draft text", command: "copy", args: "draft"},
-		choiceItem{title: "Reconnect", description: "Read-only reconnect; never replays writes", command: "reconnect"},
-		choiceItem{title: "Open full T3 address", description: "Display the profile's configured web URL", command: "web"},
-		choiceItem{title: "Quit", description: "Detach this client; leave T3 running", command: "quit"},
-	}
-	for i, item := range items {
-		row := item.(choiceItem)
-		reason := ""
-		switch row.command {
-		case "model", "effort", "speed":
-			if !m.status.ModelControls {
-				reason = "Unavailable: connect a writable thread with the bundled model-capable adapter"
-			}
-		case "presets":
-			if !m.status.ModelCatalog {
-				reason = "Unavailable: connect to an adapter that exposes the T3 model catalog"
-			}
-		case "override":
-			if row.args != "clear" && !m.status.ModelControls {
-				reason = "Unavailable: connect a writable model-capable thread"
-			}
-		case "filter":
-			if !m.status.ThreadNavigation {
-				reason = "Unavailable: host adapter does not advertise lineage navigation"
-			}
-		case "parent":
-			if !m.status.ParentAvailable {
-				reason = "Unavailable: T3 has not reported a parent for this conversation"
-			}
-		case "runtime":
-			if !m.status.RuntimeDetails {
-				reason = "Unavailable: no runtime details reported by this host adapter"
-			}
-		}
-		if reason != "" {
-			row.disabled = true
-			row.description += " · " + reason
-			items[i] = row
-		}
-	}
-	d := &dialog{kind: client.ChooseOne, title: "Commands", description: "Type to find a command", local: "palette", selected: make(map[string]bool)}
+	items := m.paletteItems()
+	d := &dialog{kind: client.ChooseOne, title: "Commands", local: "palette", selected: make(map[string]bool)}
 	m.dialogSerial++
 	d.serial = m.dialogSerial
 	d.list = m.newList("Commands", items)
@@ -303,12 +224,12 @@ func (m *Model) openPalette() tea.Cmd {
 
 func (m *Model) openThemes() tea.Cmd {
 	items := []list.Item{
-		choiceItem{title: "Terminal", description: "Use your terminal's colors · light or dark", command: "theme", args: "terminal"},
-		choiceItem{title: "Electric violet", description: "Violet + cyan · dark", command: "theme", args: "violet"},
-		choiceItem{title: "Electric cyan", description: "Cyan + violet · dark", command: "theme", args: "cyan"},
-		choiceItem{title: "Acid lime", description: "Lime + cyan · dark", command: "theme", args: "lime"},
+		choiceItem{title: "Terminal", description: "Your terminal colors · light or dark", command: "theme", args: "terminal"},
+		choiceItem{title: "Electric violet", command: "theme", args: "violet"},
+		choiceItem{title: "Electric cyan", command: "theme", args: "cyan"},
+		choiceItem{title: "Acid lime", command: "theme", args: "lime"},
 	}
-	d := &dialog{kind: client.ChooseOne, title: "Theme", description: "Saved for the next launch.", local: "theme"}
+	d := &dialog{kind: client.ChooseOne, title: "Theme", local: "theme"}
 	m.dialogSerial++
 	d.serial = m.dialogSerial
 	d.list = m.newList("Theme", items)
@@ -369,6 +290,15 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	switch msg.String() {
+	case "tab", "shift+tab":
+		if m.dialog.kind == client.ChooseMany {
+			m.dialog.finishFocused = !m.dialog.finishFocused
+			cmd := m.restoreFocus()
+			if m.dialog.finishFocused {
+				m.dialog.list.FilterInput.Blur()
+			}
+			return cmd
+		}
 	case "ctrl+u":
 		if m.dialog.preservedInitial != "" {
 			m.dialog.preservedInitial = ""
@@ -399,11 +329,17 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.chooseDialog()
 	case "enter":
+		if m.dialog.kind == client.ChooseMany && m.dialog.finishFocused {
+			return m.finishMultiple()
+		}
 		return m.chooseDialog()
 	case "space", " ":
-		if m.dialog.kind == client.ChooseMany && m.dialog.list.FilterState() != list.Filtering {
+		if m.dialog.kind == client.ChooseMany && !m.dialog.finishFocused && m.dialog.list.FilterState() != list.Filtering {
 			return m.chooseDialog()
 		}
+	}
+	if m.dialog.finishFocused {
+		return nil
 	}
 	if m.dialog.kind == client.EnterText {
 		return m.updateComponent("modal", m.dialog.serial, msg)
@@ -440,7 +376,7 @@ func (d *dialog) refilter(keepSelection bool) {
 // filtering itself stays on the event loop, with no stale result to commit.
 func (m *Model) updateDialogList(message tea.Msg) tea.Cmd {
 	d := m.dialog
-	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" || !m.focused {
+	if d == nil || d.kind == client.EnterText || d.details || d.finishFocused || m.detail != "" || !m.focused {
 		return nil
 	}
 	if _, stale := message.(list.FilterMatchesMsg); stale {
@@ -529,6 +465,17 @@ func (m *Model) refreshDialogDetails() {
 			}
 		}
 	}
+	if d.kind == client.ChooseMany && d.prompt != nil {
+		text += "\n\nSelected answers:"
+		for _, choice := range d.prompt.Question.Choices {
+			if d.selected[choice.ID] {
+				text += "\n" + safeText(choice.Label) + "\nID: " + safeText(choice.ID)
+				if choice.Description != "" {
+					text += "\n" + safeText(choice.Description)
+				}
+			}
+		}
+	}
 	if text != d.detailText {
 		d.detailText = text
 		if d.details {
@@ -543,6 +490,7 @@ func (m *Model) refreshDialogDetails() {
 func (m *Model) openDetail(title, text string) {
 	m.detailTitle = safeText(title)
 	m.detail = safeText(text)
+	m.detailCopy = redactFeedback(text)
 	m.detailViewport.SetContent(m.detail)
 	m.detailViewport.GotoTop()
 	m.composer.Blur()

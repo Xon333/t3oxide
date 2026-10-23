@@ -82,9 +82,9 @@ func TestPaletteNoMatchesAndDisabledActionsRemainOpen(t *testing.T) {
 		t.Fatal("no-match Enter selected an older or unfiltered command")
 	}
 	m.dialogKey(keyPress('u', tea.ModCtrl))
-	typeDialogQuery(m, "Model · current thread")
+	typeDialogQuery(m, "Thread model")
 	item := m.dialog.list.SelectedItem().(choiceItem)
-	if item.command != "model" || !item.disabled || !strings.Contains(item.description, "Alt+M") {
+	if item.command != "model" || !item.disabled || !strings.Contains(item.description, "Unavailable") {
 		t.Fatal("filter lost model capability guard or offered description")
 	}
 	m.dialogKey(keyPress(tea.KeyEnter))

@@ -4,7 +4,7 @@ The CLI entry point is `cmd/t3oxide`. The runtime path is:
 
 **Go CLI/TUI → OpenSSH or local stdio → Node NDJSON adapter → existing T3.**
 
-[Terminal redesign](terminal-redesign.md) records the UI decisions, keyboard/workflow guide and released upstream provenance. Start with Ctrl+P, type to find an action, then press Enter once. Ctrl+T chooses a conversation, Ctrl+E an environment and Ctrl+R a request; Enter sends and Ctrl+J adds a newline (Alt+Enter is an alias). F1 opens help; from the main workspace, Ctrl+P → `help` → Enter also works without a function key. F2 exposes full request/option details. Ctrl+S requests Stop + hold queue independently of ordinary actions; Ctrl+D quits locally while T3 continues.
+[Terminal redesign](terminal-redesign.md) records the base layout and [UX reuse](ux-reuse.md) records the current keyboard, composer and recovery choices. F3 opens commands; F6 chooses a conversation. Focused textareas keep their native editing keys. F4 opens an exact external editor, F5 recalls prompts, and Ctrl+X explicitly clears into recall. Ctrl+C keeps a nonempty draft. Ctrl+S requests Stop + hold queue independently of ordinary actions; Ctrl+Q detaches locally. See [controls](../NATIVE-GO.md#controls) for the complete current contract.
 
 ## Source boundary
 
@@ -13,7 +13,7 @@ The CLI entry point is `cmd/t3oxide`. The runtime path is:
 | `internal/ui` | Bubble Tea event loop; Bubbles textarea, viewport and lists; Lip Gloss layout/themes; Glamour Markdown; command palette, exact dialog surfaces and terminal lifecycle |
 | `internal/client` | Selected T3 session, reconnect, bounded view events, drafts, navigation, exact requests, delivery and explicit recovery operations |
 | `internal/wire` | Existing NDJSON framing, identity/revision validation, bounded keyed views, independent Stop admission and owned subprocess cleanup |
-| `internal/config` | Existing environment format, strict SSH options, bounded durable drafts/operation records and single-owner lock |
+| `internal/config` | Existing environment format, strict SSH options, bounded durable drafts, prompt recall, operation records and single-owner lock |
 | `adapter/` | T3 protocol integration, bounded model/lineage extensions, authentication and host receipts |
 
 There is no core-tui dependency or local interface fork. Text entry, scrolling and list navigation use the upstream Bubbles components. No local agent runner, model runtime, T3 HTTP client, transcript database, prompt queue, polling service or embedded browser is introduced.
@@ -28,7 +28,7 @@ Sends preserve literal human text and `auto`, `queue` or `steer` intent. Before 
 
 Request dialogs preserve T3 request IDs, revisions and offered values. Dismissal is local; supersession, switching and shutdown cancel the exact pending surface. An approval is never answered through a generic permission policy.
 
-Drafts remain separate by environment/thread. Acknowledgment clears only matching submitted text, preserving later editing and attachment switches. Shared persistence coordination prevents retiring attachments from overwriting newer drafts or restoring text after acknowledgment. The durable state contains drafts, staged selection overrides, environment-scoped presets and recovery records, not conversation history. Matching acknowledgment clears only the submitted override ID. The new-conversation acknowledgment is correlated with its source thread while clearing only its separate launch draft.
+Drafts remain separate by environment/thread. Acknowledgment clears only matching submitted text, preserving later editing and attachment switches. Shared persistence coordination prevents retiring attachments from overwriting newer drafts or restoring text after acknowledgment. The durable state contains drafts, bounded prompt recall, staged selection overrides, environment-scoped presets and recovery records, not remote conversation history. Matching acknowledgment clears only the submitted override ID. The new-conversation acknowledgment is correlated with its source thread while clearing only its separate launch draft.
 
 ## Rendering and unsupported operations
 

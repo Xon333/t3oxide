@@ -103,7 +103,9 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 		m.modalInput, cmd = m.modalInput.Update(message)
 		if len(m.modalInput.Value()) > maxInputBytes || strings.Count(m.modalInput.Value(), "\n") >= maxInputLines {
 			m.modalInput.SetValue(old)
-			m.problem = "Answer limit is 64 KiB / 9,999 lines; this input was not added"
+			m.setInputProblem("modal", id, "Answer limit is 64 KiB / 9,999 lines; this input was not added"+m.retainAttempt(inputText(message)))
+		} else if m.modalInput.Value() != old {
+			m.clearInputProblem("modal", id)
 		}
 	case "list":
 		if m.dialog == nil || m.dialog.serial != id || m.dialog.kind == client.EnterText || m.detail != "" {
@@ -130,23 +132,42 @@ func (m *Model) clipboardInput(message tea.Msg) tea.Msg {
 	return message
 }
 
-func (m *Model) rejectInput(message tea.Msg, label string) bool {
-	var text string
+func inputText(message tea.Msg) string {
 	switch msg := message.(type) {
 	case tea.PasteMsg:
-		text = msg.Content
+		return msg.Content
 	case tea.KeyPressMsg:
-		text = msg.Text
+		return msg.Text
 	}
-	if len(text) > maxInputBytes || strings.Count(text, "\n") >= maxInputLines {
-		m.problem = label + " limit is 64 KiB / 9,999 lines; this input was not added"
-		return true
+	return ""
+}
+
+func (m *Model) rejectInput(message tea.Msg, label string) bool {
+	text := inputText(message)
+	kind, id := "composer", uint64(0)
+	if label == "Answer" && m.dialog != nil {
+		kind, id = "modal", m.dialog.serial
 	}
-	for _, r := range text {
-		if r == utf8.RuneError || r == '\t' || r == '\r' || unicode.IsControl(r) && r != '\n' {
-			m.problem = label + " contains text this editor would change; this input was not added"
-			return true
+	reason := ""
+	current, selection := m.composer.Value(), m.composer.SelectedText()
+	if kind == "modal" {
+		current, selection = m.modalInput.Value(), m.modalInput.SelectedText()
+	}
+	combinedBytes := len(current) - len(selection) + len(text)
+	combinedNewlines := strings.Count(current, "\n") - strings.Count(selection, "\n") + strings.Count(text, "\n")
+	if len(text) > maxInputBytes || strings.Count(text, "\n") >= maxInputLines || text != "" && (combinedBytes > maxInputBytes || combinedNewlines >= maxInputLines) {
+		reason = label + " limit is 64 KiB / 9,999 lines; this input was not added"
+	} else {
+		for _, r := range text {
+			if r == utf8.RuneError || r == '\t' || r == '\r' || unicode.IsControl(r) && r != '\n' {
+				reason = label + " contains text this editor would change; this input was not added"
+				break
+			}
 		}
 	}
-	return false
+	if reason == "" {
+		return false
+	}
+	m.setInputProblem(kind, id, reason+m.retainAttempt(text))
+	return true
 }

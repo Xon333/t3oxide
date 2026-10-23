@@ -8,7 +8,11 @@ import (
 	"strings"
 )
 
-func (a *Session) Commands() []CommandSpec {
+func (a *Session) Commands() []CommandSpec { return CommandCatalog() }
+
+// CommandCatalog is also available before a session is selected. Consumers
+// reuse these supported names instead of maintaining a disconnected catalog.
+func CommandCatalog() []CommandSpec {
 	return []CommandSpec{
 		{Name: "model", Description: "Choose the current thread model; optional next stages one message"},
 		{Name: "effort", Description: "Choose supported reasoning effort; optional next"},

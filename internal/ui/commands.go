@@ -9,24 +9,33 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/Xon333/t3oxide/internal/client"
 )
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
-	switch msg.String() {
-	case "ctrl+s":
+	k := m.keyMap()
+	// Only deliberate global controls precede the active component.
+	switch {
+	case key.Matches(msg, k.Stop):
 		return m.stop()
-	case "ctrl+d":
+	case key.Matches(msg, k.Quit):
 		return m.quit()
-	case "f1":
+	case key.Matches(msg, k.Help):
 		return m.dispatch("help", "")
-	case "ctrl+y":
-		if m.dialog != nil && m.dialog.preservedInitial != "" {
-			return m.copyText("answer")
+	case key.Matches(msg, k.Error):
+		m.openFeedbackDetail()
+		return nil
+	case key.Matches(msg, k.Palette):
+		if m.searching {
+			m.openDetail("Search controls", m.helpText())
+			return nil
 		}
-	case "ctrl+c":
+		return m.openPalette()
+	}
+	if msg.String() == "ctrl+c" {
 		if m.detail != "" {
 			m.detail = ""
 			m.resize()
@@ -40,45 +49,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.resize()
 			return m.restoreFocus()
 		}
-		if m.preservedDraft != "" {
-			m.preservedDraft = ""
-			m.composer.Placeholder = "Message T3 · Ctrl+P commands"
-			m.draftEdits++
-			m.problem = ""
-			m.notice = "Saved draft cleared locally"
-			if m.session != nil {
-				if err := m.session.SetDraft(""); err != nil {
-					m.problem = "Draft save: " + safeText(err.Error())
-				}
-			}
-			return m.restoreFocus()
-		}
-		if m.composer.Value() != "" {
-			old := m.composer.Value()
-			m.composer.SetValue("")
-			m.composerChanged(old)
-			m.notice = "Draft cleared · Ctrl+D exits"
+		if m.currentDraft() != "" {
+			m.dismissCompletion()
+			m.notice = "Draft kept · Ctrl+X clear · Ctrl+Q exit"
 			return nil
 		}
 		return m.quit()
-	case "alt+m":
-		return m.execute("model", "")
-	case "alt+e":
-		return m.execute("effort", "")
-	case "alt+s":
-		return m.execute("speed", "")
-	case "alt+up":
-		if m.dialog == nil {
-			return m.execute("parent", "")
-		}
-	case "ctrl+t":
-		return m.execute("switch", "")
-	case "ctrl+e":
-		return m.execute("env", "")
-	case "ctrl+p":
-		return m.openPalette()
-	case "ctrl+r":
-		return m.execute("requests", "")
 	}
 	if m.detail != "" {
 		switch msg.String() {
@@ -86,12 +62,21 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.detail = ""
 			m.resize()
 			return m.restoreFocus()
+		case "ctrl+y":
+			return m.copyText("detail")
 		}
 		var cmd tea.Cmd
 		m.detailViewport, cmd = m.detailViewport.Update(msg)
 		return cmd
 	}
 	if m.dialog != nil {
+		// Error detail overlays the current request, never replacing its state.
+		if msg.String() == "f2" && !m.dialog.details && m.dialog.preservedInitial == "" && (m.problem != "" || m.streamProblem != "") && m.openFeedbackDetail() {
+			return nil
+		}
+		if msg.String() == "ctrl+y" && m.dialog.preservedInitial != "" {
+			return m.copyText("answer")
+		}
 		return m.dialogKey(msg)
 	}
 	if m.searching {
@@ -113,49 +98,66 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.resize()
 			return m.restoreFocus()
 		}
-		var cmd tea.Cmd
-		m.searchInput, cmd = m.searchInput.Update(msg)
-		return m.componentCmd("search", 0, cmd)
+		return m.updateComponent("search", 0, msg)
 	}
-	switch msg.String() {
-	case "ctrl+f":
+	switch {
+	case key.Matches(msg, k.Edit):
+		return m.editDraft()
+	case key.Matches(msg, k.Clear):
+		return m.clearDraft()
+	case key.Matches(msg, k.Recall):
+		return m.openRecall()
+	case key.Matches(msg, k.Threads):
+		return m.execute("switch", "")
+	case key.Matches(msg, k.Environments):
+		return m.execute("env", "")
+	case key.Matches(msg, k.Requests):
+		return m.execute("requests", "")
+	case key.Matches(msg, k.Model):
+		return m.execute("model", "")
+	case key.Matches(msg, k.Effort):
+		return m.execute("effort", "")
+	case key.Matches(msg, k.Speed):
+		return m.execute("speed", "")
+	case key.Matches(msg, k.Parent):
+		return m.execute("parent", "")
+	case key.Matches(msg, k.Search):
 		return m.beginSearch()
-	case "ctrl+b":
+	case key.Matches(msg, k.Sidebar):
 		return m.setting("sidebar", boolWord(!m.sidebar))
-	case "ctrl+y":
+	case key.Matches(msg, k.Earlier):
+		return m.execute("earlier", "")
+	case key.Matches(msg, k.Latest):
+		return m.execute("latest", "")
+	case key.Matches(msg, k.Detail):
+		if m.preservedDraft != "" {
+			m.openDetail("Exact draft", m.preservedDraft)
+			m.detailCopy = m.preservedDraft
+		} else {
+			m.openFeedbackDetail()
+		}
+		return nil
+	case key.Matches(msg, k.Copy):
 		if m.preservedDraft != "" {
 			return m.copyText("draft")
 		}
 		return m.copyText("")
-	case "f2":
-		if m.preservedDraft != "" {
-			m.openDetail("Preserved draft · Ctrl+Y copy after closing", m.preservedDraft)
-		}
-		return nil
-	case "alt+left":
-		return m.execute("earlier", "")
-	case "alt+right":
-		return m.execute("latest", "")
+	case key.Matches(msg, k.Literal):
+		return m.sendText(m.currentDraft())
+	}
+	if handled, cmd := m.completionKey(msg); handled {
+		return cmd
+	}
+	switch msg.String() {
 	case "tab":
 		m.transcriptFocus = !m.transcriptFocus
 		return m.restoreFocus()
 	case "esc":
-		m.problem = ""
-		m.notice = ""
+		m.problem, m.notice = "", ""
 		if m.transcriptFocus {
 			m.transcriptFocus = false
 			return m.restoreFocus()
 		}
-		return nil
-	case "pgup", "pgdown", "ctrl+up", "ctrl+down":
-		if msg.String() == "ctrl+up" {
-			m.viewport.ScrollUp(1)
-		} else if msg.String() == "ctrl+down" {
-			m.viewport.ScrollDown(1)
-		} else {
-			m.viewport, _ = m.viewport.Update(msg)
-		}
-		m.follow = m.viewport.AtBottom()
 		return nil
 	}
 	if m.transcriptFocus {
@@ -168,17 +170,23 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.viewport.GotoTop()
 			m.follow = false
 			return nil
-		case "n":
+		case "n", "N":
 			if len(m.searchLines) > 0 {
-				m.searchIndex = (m.searchIndex + 1) % len(m.searchLines)
+				delta := 1
+				if msg.String() == "N" {
+					delta = -1
+				}
+				m.searchIndex = (m.searchIndex + delta + len(m.searchLines)) % len(m.searchLines)
 				m.refreshSearch(true)
 			}
 			return nil
-		case "N":
-			if len(m.searchLines) > 0 {
-				m.searchIndex = (m.searchIndex - 1 + len(m.searchLines)) % len(m.searchLines)
-				m.refreshSearch(true)
-			}
+		case "ctrl+up":
+			m.viewport.ScrollUp(1)
+			m.follow = m.viewport.AtBottom()
+			return nil
+		case "ctrl+down":
+			m.viewport.ScrollDown(1)
+			m.follow = m.viewport.AtBottom()
 			return nil
 		}
 		var cmd tea.Cmd
@@ -186,7 +194,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.follow = m.viewport.AtBottom()
 		return cmd
 	}
-	if msg.String() == "enter" {
+	if key.Matches(msg, k.Send) {
 		return m.send()
 	}
 	return m.updateComponent("composer", 0, msg)
@@ -272,39 +280,48 @@ func commandOwnsNotice(name, notice string) bool {
 }
 
 func (m *Model) slash(text string) tea.Cmd {
-	trimmed := strings.TrimSpace(strings.TrimPrefix(text, "/"))
-	if trimmed == "" {
-		old := m.composer.Value()
-		m.composer.SetValue("")
-		m.composerChanged(old)
-		return m.openPalette()
-	}
-	name, args, _ := strings.Cut(trimmed, " ")
+	name, args, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
 	args = strings.TrimSpace(args)
-	known := name == "help" || name == "keys" || name == "quit" || name == "theme" || name == "mouse" || name == "search" || name == "copy" || name == "sidebar"
-	if m.session != nil {
-		for _, cmd := range m.session.Commands() {
-			if cmd.Name == name {
-				known = true
-				break
-			}
-		}
-	}
-	if !known {
-		m.problem = "Unknown command /" + name + " · Ctrl+P lists supported actions"
+	if err := m.validateCommand(name, args); err != nil {
+		m.setInputProblem("composer", 0, err.Error())
 		return nil
 	}
-	old := m.composer.Value()
-	m.composer.SetValue("")
-	m.composerChanged(old)
-	return m.dispatch(name, args)
+	if name == "override" && args == "clear" {
+		// Clearing a local override does not require model controls.
+	} else if reason := m.commandUnavailable(name); reason != "" {
+		m.problem = reason
+		return nil
+	}
+	local := name == "help" || name == "keys" || name == "theme" || name == "mouse" || name == "sidebar" || name == "search" || name == "copy" || name == "quit" || name == "edit" || name == "clear" || name == "recall" || name == "error"
+	if local {
+		old := m.composer.Value()
+		m.preservedDraft = ""
+		m.composer.SetValue("")
+		m.composerChanged(old)
+		return m.dispatch(name, args)
+	}
+	cmd := m.dispatch(name, args)
+	if cmd == nil {
+		return nil
+	}
+	// A remote argument or capability rejection leaves the exact command
+	// editable. Only its correlated successful result may clear it.
+	return func() tea.Msg {
+		msg := cmd()
+		if result, ok := msg.(actionMsg); ok {
+			result.commandDraft = text
+			return result
+		}
+		return msg
+	}
 }
+
 func (m *Model) dispatch(name, args string) tea.Cmd {
 	switch name {
 	case "quit":
 		return m.quit()
 	case "help", "keys":
-		m.openDetail("Keyboard and commands", helpText)
+		m.openDetail("Keyboard and commands", m.helpText())
 		return nil
 	case "stop":
 		return m.stop()
@@ -349,6 +366,17 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 		return nil
 	case "copy":
 		return m.copyText(args)
+	case "edit":
+		return m.editDraft()
+	case "clear":
+		return m.clearDraft()
+	case "recall":
+		return m.recallDraft(args)
+	case "error":
+		if !m.openFeedbackDetail() {
+			m.notice = "No error to review"
+		}
+		return nil
 	default:
 		return m.execute(name, args)
 	}
@@ -376,12 +404,16 @@ func (m *Model) setting(kind, value string) tea.Cmd {
 }
 
 func (m *Model) copyText(which string) tea.Cmd {
-	if m.snapshot == nil && which != "draft" && which != "answer" {
+	if m.snapshot == nil && which != "draft" && which != "answer" && which != "error" && which != "detail" {
 		m.notice = "No transcript to copy"
 		return nil
 	}
 	var text string
 	switch which {
+	case "error":
+		text = m.feedbackDetailText()
+	case "detail":
+		text = m.detailCopyText()
 	case "answer":
 		if m.dialog == nil || m.dialog.preservedInitial == "" {
 			m.notice = "No preserved initial answer to copy"
@@ -408,7 +440,7 @@ func (m *Model) copyText(which string) tea.Cmd {
 		}
 		text = strings.Join(parts, "\n\n")
 	default:
-		m.problem = "Use /copy, /copy page or /copy draft"
+		m.problem = "Use /copy [page|draft|answer|error|detail]"
 		return nil
 	}
 	if text == "" {
@@ -425,6 +457,13 @@ func (m *Model) copyText(which string) tea.Cmd {
 		return copyResultMsg{err}
 	})
 }
+func (m *Model) detailCopyText() string {
+	if m.detailCopy != "" {
+		return m.detailCopy
+	}
+	return redactFeedback(m.detail)
+}
+
 func nativeClipboard(parent context.Context, text string) error {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
@@ -467,76 +506,3 @@ func (m *Model) highlightSearchLine() {
 	}
 	m.notice = fmt.Sprintf("Find %d/%d matching lines · current page only", m.searchIndex+1, len(m.searchLines))
 }
-
-const helpText = `START HERE
-F1 /help /keys  Keyboard and command reference
-Ctrl+P          Type to filter commands; request help inside a dialog
-Ctrl+T /switch  Choose a grouped conversation
-Ctrl+E /env     Choose an environment
-
-WRITE AND REVIEW
-Enter           Submit one human-authored message
-Ctrl+J          Newline; Alt+Enter or Shift+Enter also work
-/delivery MODE  auto, queue or steer for subsequent sends
-Ctrl+R /requests Review exact T3 approvals and questions
-Ctrl+S /stop    Stop the reviewed active turn + hold queue
-/new [TITLE]    New conversation in this existing workspace
-Ctrl+C          Dismiss dialog/detail/search; clear draft; quit if empty
-Ctrl+D /quit    Detach locally; T3 continues running
-
-CONVERSATIONS AND HISTORY
-/threads WORDS  Filter thread titles/projects on the host
-Space / Right  Expand subagents in chooser; Left collapses
-F6 /filter     All / Main / Subagents / Forks in chooser
-Ctrl+F         Host search in chooser, including hidden children
-Alt+Up /parent Open the authoritative parent conversation
-Alt+Left /earlier  Replace page with history; pause live detail
-Alt+Right /latest  Resume the current live page
-
-READ AND COPY
-Tab            Switch composer/transcript focus
-PgUp / PgDown  Scroll transcript; Ctrl+Up/Down scroll one line
-Home / g       Top of page with transcript focus
-End / G        Bottom of page; resume following with transcript focus
-Ctrl+F /search Find in displayed page; repeat for next match
-n / N          Next/previous match with transcript focus
-Ctrl+Y /copy   Copy last assistant message
-/copy page     Copy displayed page; /copy draft copies complete draft
-F2             Review a preserved draft; Ctrl+Y copies it
-Escape         Close detail/search, clear feedback, or focus composer
-
-MODEL AND NEXT MESSAGE
-Alt+M /model   Current thread model (default scope)
-Alt+E /effort  Reasoning effort advertised by this model
-Alt+S /speed   Advertised service tier / fast mode
-/presets       Apply/save/remove model + effort + speed favorites
-/override      Inspect/stage next-message selection; /override clear
-/model next    Stage one dispatch without pre-setting the thread
-/effort next   Staged effort; /speed next stages speed
-/runtime       Saved settings vs run request vs provider evidence
-T3 may adopt a dispatched override as the thread preference.
-No hidden restore or automatic retry; missing telemetry is unreported.
-
-REQUEST DIALOGS
-Enter          Select/answer; Space toggles multiple choice
-Ctrl+Enter     Confirm multiple selection, or choose Continue
-Ctrl+Up/Down   Scroll the complete request description
-F2             Full question and selected-option details
-Ctrl+Y         Copy a preserved initial answer
-Ctrl+U         Replace a preserved, uneditable initial answer
-Escape         Dismiss locally without answering T3
-Ctrl+S         Stop remains available inside dialogs
-
-APPEARANCE AND RECOVERY
-/theme NAME    terminal, violet, cyan or lime; /theme opens chooser
-/mouse on|off  Mouse scrolling or native terminal selection
-Ctrl+B /sidebar Toggle optional detail sidebar on wide terminals
-/pending       Review saved operation IDs and original payloads
-/retry [stop]  Explicit same-ID retry in the original lane
-/resolve [stop] Clear local record only after reviewing T3
-/reconnect     Reconnect reads; never replay saved writes
-/web           Display this environment's configured full T3 address
-
-Drafts survive switches and uncertain acknowledgments. Local quit or
-cancellation never means remote Stop. Full tools, attachments, provider
-configuration and broader orchestration remain in full T3.`
