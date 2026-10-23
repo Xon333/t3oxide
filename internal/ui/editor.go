@@ -19,6 +19,7 @@ type editorFinishedMsg struct {
 	original, path, text string
 	err                  error
 	read                 bool
+	launchSerial         uint64
 }
 
 // Editor configuration is a trusted shell command, like Git's core.editor.
@@ -90,6 +91,9 @@ func readEditorResult(result editorFinishedMsg, runErr error) editorFinishedMsg 
 
 func (m *Model) finishEditor(msg editorFinishedMsg) tea.Cmd {
 	m.editorBusy = false
+	if msg.launchSerial != 0 {
+		return m.finishLaunchEditor(msg)
+	}
 	stale := msg.generation != m.generation || msg.edits != m.draftEdits || msg.original != m.currentDraft()
 	valid := msg.read && utf8.ValidString(msg.text) && len(msg.text) <= maxInputBytes && strings.Count(msg.text, "\n") < maxInputLines
 	if msg.read && !valid && msg.err == nil {
@@ -144,10 +148,63 @@ func (m *Model) finishEditor(msg editorFinishedMsg) tea.Cmd {
 		detail = "Editor result belongs to an older draft; current draft retained"
 	}
 	if preserved {
-		detail += " · F5 recalls any edited attempt"
+		detail += " · /recall retains the edited attempt"
 	} else {
 		detail += " · edited file retained at " + msg.path
 	}
 	m.problem = detail
+	return m.restoreFocus()
+}
+
+func (m *Model) editLaunch() tea.Cmd {
+	if m.editorBusy {
+		return nil
+	}
+	input := m.launchInput()
+	path, err := writeEditorFile(input.Message)
+	if err != nil {
+		m.problem = "Editor: " + safeText(err.Error())
+		return nil
+	}
+	result := editorFinishedMsg{generation: m.generation, original: input.Message, path: path, launchSerial: m.dialog.serial}
+	m.editorBusy = true
+	return tea.ExecProcess(editorCommand(m.ctx, path), func(runErr error) tea.Msg { return readEditorResult(result, runErr) })
+}
+
+func (m *Model) finishLaunchEditor(msg editorFinishedMsg) tea.Cmd {
+	stale := msg.generation != m.generation || m.dialog == nil || m.dialog.serial != msg.launchSerial || m.dialog.launch == nil
+	if !stale {
+		stale = m.launchInput().Message != msg.original
+	}
+	valid := msg.read && utf8.ValidString(msg.text) && len(msg.text) <= maxInputBytes && strings.Count(msg.text, "\n") < maxInputLines
+	if msg.err == nil && !stale && valid {
+		f := m.dialog.launch
+		f.preservedMessage = ""
+		m.modalInput.SetValue(msg.text)
+		if m.modalInput.Value() != msg.text {
+			f.preservedMessage = msg.text
+			m.modalInput.SetValue("")
+		}
+		m.modalInput.CursorEnd()
+		m.refreshLaunchDetails()
+		if err := m.storeLaunchDraft(); err != nil {
+			m.problem = "First message not saved; editor file retained at " + msg.path + " · " + safeText(err.Error())
+			return m.restoreFocus()
+		}
+		if err := os.Remove(msg.path); err != nil {
+			m.problem = "First message saved; editor file retained at " + msg.path
+		}
+		return m.restoreFocus()
+	}
+	if msg.read && msg.text == msg.original {
+		if err := os.Remove(msg.path); err == nil {
+			m.problem = "Editor returned; first message retained"
+			return m.restoreFocus()
+		}
+	}
+	m.problem = "First message retained; edited file retained at " + msg.path
+	if msg.err != nil {
+		m.problem += " · " + safeText(msg.err.Error())
+	}
 	return m.restoreFocus()
 }

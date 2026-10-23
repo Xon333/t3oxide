@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"github.com/Xon333/t3oxide/internal/config"
 	"github.com/Xon333/t3oxide/internal/wire"
 )
 
@@ -29,6 +30,21 @@ type Status struct {
 	Connected, Writable                                                            bool
 	ModelCatalog, ModelControls, ThreadNavigation, RuntimeDetails, ParentAvailable bool
 	Requests                                                                       int
+	ProfileIDs                                                                     []string
+	Location                                                                       Location
+	ConnectionState, RunState, ActiveRunID                                         string
+	PendingAction, PendingStop, DraftSaveFailed, Historical                        bool
+	Receipt                                                                        *Receipt
+}
+
+type Location struct {
+	ProfileID, EnvironmentID, Environment, ProjectID, ThreadID, Title, Workspace string
+}
+
+// Receipt is attachment-local send evidence, independent of run/request state.
+type Receipt struct {
+	OperationID, MessageID, ThreadID, Phase, RunID string
+	Sequence, ObservedSequence                     int64
 }
 
 type CommandSpec struct{ Name, Description string }
@@ -49,13 +65,54 @@ const (
 )
 
 type Choice struct{ ID, Label, Description string }
+type BrowserGroup struct {
+	ID, Label string
+	ChoiceIDs []string
+}
+type Surface string
+
+const (
+	SurfaceDialog  Surface = "dialog"
+	SurfaceBrowser Surface = "browser"
+	SurfaceLaunch  Surface = "launch"
+)
+
+type BrowserPage struct {
+	ProfileIDs []string
+	ProfileID  string
+	Location   string
+	Profiles   []Choice
+	Groups     []BrowserGroup
+	Actions    []string
+	Query      string
+	More       bool
+	Error      string
+}
+
+type LaunchInput struct{ Title, Message string }
+type LaunchReview struct {
+	Input       LaunchInput
+	Location    Location
+	Selection   *config.ModelSelection
+	Summary     string
+	Actions     []string
+	Unavailable string
+	// StoreDraft synchronously preserves this exact source's separate launch
+	// draft. It remains valid while the UI retires the prompt during shutdown.
+	StoreDraft func(LaunchInput) error
+}
 type Question struct {
+	Surface                             Surface
+	BrowserPage                         *BrowserPage
+	LaunchReview                        *LaunchReview
+	SingleLine                          bool
 	Navigation                          bool
 	Kind                                Kind
 	Title, Prompt, Placeholder, Initial string
 	Choices                             []Choice
 }
 type Answer struct {
+	Launch    *LaunchInput
 	Action    string
 	Cancelled bool
 	ChoiceIDs []string
@@ -84,6 +141,10 @@ func (p *Prompt) Respond(answer Answer) bool {
 		return false
 	}
 	answer.ChoiceIDs = append([]string(nil), answer.ChoiceIDs...)
+	if answer.Launch != nil {
+		copy := *answer.Launch
+		answer.Launch = &copy
+	}
 	p.response <- answer
 	return true
 }

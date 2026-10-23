@@ -88,7 +88,7 @@ func TestTerminalThemeRoundTripPreservesDraftAndStylesDialogs(t *testing.T) {
 		m.cancelDialog()
 	}
 	m.openThemes()
-	if m.dialog.list.Items()[0].(choiceItem).args != "terminal" {
-		t.Fatal("terminal theme missing from chooser")
+	if items := m.dialog.list.Items(); len(items) != 5 || items[0].(choiceItem).args != "default" || items[1].(choiceItem).args != "terminal" {
+		t.Fatal("environment default or terminal theme missing from chooser")
 	}
 }

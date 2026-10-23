@@ -32,6 +32,8 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"env", "Environments", "", "", k.Environments},
 		{"threads", "Find conversations", "[words]", "Titles and projects", key.Binding{}},
 		{"new", "New conversation", "[title]", "Uses the current workspace", key.Binding{}},
+		{"settings", "Settings", "", "Model, effort, tier and appearance", key.Binding{}},
+		{"details", "Details", "", "", k.Detail},
 		{"stop", "Stop + hold queue", "", "Reviewed active turn", k.Stop},
 		{"filter", "Conversation types", "[all|main|subagents|forks]", "", key.Binding{}},
 		{"parent", "Parent conversation", "", "", k.Parent},
@@ -49,7 +51,7 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"theme", "Theme", "[terminal|violet|cyan|lime]", "", key.Binding{}},
 		{"mouse", "Mouse capture", "[on|off]", "Off enables native selection", key.Binding{}},
 		{"sidebar", "Sidebar", "[on|off]", "", k.Sidebar},
-		{"copy", "Copy", "[page|draft|answer|error|detail]", "Last assistant message by default", k.Copy},
+		{"copy", "Copy", "[page|draft|answer|error|detail]", "Last agent message by default", k.Copy},
 		{"reconnect", "Reconnect", "", "Never replays writes", key.Binding{}},
 		{"web", "Full T3", "", "Configured address", key.Binding{}},
 		{"quit", "Exit", "", "Detaches locally", k.Quit},
@@ -138,10 +140,10 @@ func (m *Model) validateCommand(name, args string) error {
 	}
 	valid := true
 	switch name {
-	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error":
+	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details":
 		valid = args == ""
 	case "theme":
-		valid = args == "" || ValidTheme(args)
+		valid = args == "" || ValidTheme(args) || args == "default"
 	case "mouse", "sidebar":
 		valid = args == "" || args == "on" || args == "off"
 	case "delivery":

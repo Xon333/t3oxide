@@ -92,6 +92,36 @@ test('run with durable T3 act dispatches Stop before a stalled send ACK; other m
   assert.equal(h.reply('launch-c').result.threadId,'launch-c');
 });
 
+test('NDJSON launch selection reaches one journalled native launch and returns its exact receipt',async t=>{
+  const calls=[],source={id:'thread-a',projectId:'project-a',worktreePath:'/fixture/source-worktree',branch:'fixture-branch',
+    runtimeMode:'approval-required',interactionMode:'default',modelSelection:{instanceId:'provider-a',model:'source-model'}};
+  const original=structuredClone(source),chosen={instanceId:'provider-a',model:'new-model',options:[{id:'effort',value:'high'}]};
+  const h=await session(t,(config,emit)=>{
+    const b=new T3(config,emit,{journal:new Journal(config.journalDirectory,journalScope(config))});
+    b.connect=async()=>{b.descriptor={capabilities:{serverResolvedCommandContext:true}};};
+    b.bounded=async()=>({snapshotSequence:10,projection:{thread:source,runs:[],visibleTurnItems:[],runtimeRequests:[]}});
+    b.rpc={close(){},call(tag,payload){
+      calls.push({tag,payload:structuredClone(payload)});
+      return {promise:Promise.resolve(tag==='server.getConfig'?{providers:[{instanceId:'provider-a',status:'ready',
+        requiresNewThreadForModelChange:true,models:[{slug:'new-model',capabilities:{optionDescriptors:[
+          {id:'effort',type:'select',options:[{id:'high',isDefault:true}]}]}}]}]}:{threadId:payload.threadId})};
+    }};return b;
+  });
+  const extra={title:' Exact title ',message:'\nFirst message\n',modelSelection:chosen};
+  h.send('launch','launch-selected',extra);
+  // The durable journal fsyncs synchronously; one event-loop turn completes the
+  // real adapter's NDJSON lane, catalog validation, journal and receipt path.
+  await tick();
+  assert.deepEqual(h.reply('launch-selected'),{v:1,environmentId:'env-a',id:'launch-selected',result:{threadId:'launch-selected'}});
+  assert.deepEqual(calls.map(c=>c.tag),['server.getConfig','orchestration.launchThread']);
+  assert.deepEqual(calls[1].payload.modelSelection,chosen);
+  assert.deepEqual(calls[1].payload.workspaceStrategy,{type:'existing_worktree',worktreePath:source.worktreePath,branch:source.branch});
+  assert.equal(calls[1].payload.title,extra.title);assert.equal(calls[1].payload.initialMessage.text,extra.message);
+  assert.deepEqual(source,original);
+  h.send('launch','launch-selected',extra);await tick();assert.equal(calls.length,2);
+  assert.deepEqual(h.failures,[]);
+});
+
 test('admission bounds total work and reserves Stop capacity even when normal queue is full', async t => {
   const read = deferred(), stop = deferred(), calls = [];
   const h = await session(t,()=>({list:()=>read.promise,act:(op,a)=>{

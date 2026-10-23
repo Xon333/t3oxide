@@ -47,7 +47,7 @@ func TestPickerCompactLayoutsKeepQuerySelectionAndPortableCompletion(t *testing.
 				}
 			}
 			if lipgloss.Width(m.modalView()) > size[0] || lipgloss.Height(m.modalView()) > size[1] {
-				t.Fatalf("picker exceeds terminal: %dx%d", lipgloss.Width(m.modalView()), lipgloss.Height(m.modalView()))
+				t.Fatalf("picker exceeds terminal: %dx%d\n%s", lipgloss.Width(m.modalView()), lipgloss.Height(m.modalView()), panel)
 			}
 			if size[0] >= 60 && m.dialog.list.FilterInput.Width() < 40 {
 				t.Fatal("supported compact layout squeezed the native query editor")
@@ -149,7 +149,7 @@ func TestFeedbackDetailKeepsCompleteErrorsKnownTargetAndRedactsCredentials(t *te
 			t.Fatalf("detail exposed %q", secret)
 		}
 	}
-	if !strings.HasSuffix(ansi.Strip(m.feedbackView(60)), "F2 error") {
+	if !strings.HasSuffix(ansi.Strip(m.feedbackView(60)), "Ctrl+L error") {
 		t.Fatal("compact feedback truncated the error expansion affordance")
 	}
 	if m.problem != full+"\nAuthorization: Bearer secret-bearer-value\nhttps://user:password@example.invalid/callback?token=secret-query-value&code=123\n{\"api_key\":\"secret-key-value\", \"password\":\"secret-password-value\"}" {

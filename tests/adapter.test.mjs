@@ -68,6 +68,24 @@ test('new thread preserves selected project and workspace without copying histor
   assert.equal(c.projectId,'project-a'); assert.equal(c.workspaceStrategy.type,'existing_worktree');
   assert.equal(c.initialMessage.text,'Task'); assert.equal(c.threadId,action.id);
 });
+test('view workspace is the exact launch binding or root; malformed paths are never clipped or relabelled',()=>{
+  const s=snapshot();assert.equal(view(s,'thread-a').workspace,'root');
+  s.projection.thread.worktreePath='/fixture/existing-worktree';
+  const v=view(s,'thread-a');assert.equal(v.workspace,launch({...action,title:'New',message:'Task'},s.projection).workspaceStrategy.worktreePath);
+  assert.equal(v.projectId,'project-a');
+  for(const path of ['x'.repeat(4097),'漢'.repeat(1366),'bad\u001bpath','',{}]) {
+    s.projection.thread.worktreePath=path;assert.equal(Object.hasOwn(view(s,'thread-a'),'workspace'),false);
+  }
+});
+test('probe advertises launch selection additively with the native writable command capability',async()=>{
+  const server=new T3({environmentId:'env-a',allowWrites:true},()=>{});
+  try {
+    server.http=async()=>structuredClone(descriptor);
+    let hello=await server.probe();assert.equal(hello.protocol,1);assert.equal(hello.features.launchModelSelection,true);assert.equal(hello.writesEnabled,true);
+    server.http=async()=>({...descriptor,capabilities:{}});
+    hello=await server.probe();assert.equal(hello.features.launchModelSelection,false);assert.equal(hello.writesEnabled,false);
+  } finally {server.close();}
+});
 test('canonical fingerprints tolerate JSON key order, not changed content',()=>{
   assert.equal(hash({x:1,y:{b:2,a:3}}),hash({y:{a:3,b:2},x:1}));
   assert.notEqual(hash({x:1}),hash({x:2}));
@@ -138,4 +156,15 @@ test('HTTP response budget is enforced before JSON decoding; redirects refused',
     options=o;return new Response(new ReadableStream({start(c){c.enqueue(new Uint8Array(LIMIT.upstream+1));c.close();}}));
   }});
   await assert.rejects(server.http('/fixture'),{code:'too_large'});assert.equal(options.redirect,'error');server.close();
+});
+
+test('readable rows preserve native run identity for causal send receipts', () => {
+  const native = row('causal-output');
+  native.item.runId = 'run-new';
+  const projected = boundedRows([native])[0];
+  assert.equal(projected.runId, 'run-new');
+  for (const invalid of [null, '', 'bad\nrun', 7]) {
+    native.item.runId = invalid;
+    assert.equal(boundedRows([native])[0].runId, undefined);
+  }
 });

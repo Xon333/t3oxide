@@ -63,21 +63,34 @@ test('one update among 60 rows emits one upsert and reconstructs the exact view'
     const initial=emitted.at(-1).data;
     subscriptions[0].callback({kind:'synchronized'});server.flushView();
     assert.equal(emitted.at(-1).event,'delta'); assert.equal(emitted.at(-1).data.upserts.length,0);
-    update(server,30,11,'Only this row changed');server.flushView();
+    update(server,50,11,'Only this row changed');server.flushView();
     const delta=emitted.at(-1).data;
     assert.equal(emitted.at(-1).event,'delta'); assert.equal(delta.upserts.length,1);
-    assert.equal(delta.upserts[0].itemId,'i30'); assert.equal(delta.baseRevision,initial.revision+1);
+    assert.equal(delta.upserts[0].itemId,'i50'); assert.equal(delta.baseRevision,initial.revision+1);
     assert.equal(delta.revision,delta.baseRevision+1); assert.equal(delta.metadata.state,'live');
     const map=new Map(initial.items.map(r=>[r.key,r]));
     delta.removed.forEach(k=>map.delete(k));delta.upserts.forEach(r=>map.set(r.key,r));
     assert.deepEqual(delta.order.map(k=>map.get(k)),server.current.items);
   } finally {server.close();}
 });
-test('100 readable rows remain reachable after the 80-row initial trim',async()=>{
+test('100 readable rows remain reachable after the 24-row initial trim; Earlier retains its old bounds',async()=>{
   const rows=Array.from({length:100},(_,i)=>row(i));const {server}=backend(rows);
   try {await server.watch('thread-a');historySource(server,rows);
-    assert.equal(server.current.items.length,80);assert.equal(server.current.hasMore,true);
+    assert.equal(server.current.items.length,24);assert.equal(server.current.hasMore,true);
+    assert.ok(Buffer.byteLength(JSON.stringify(server.current.items))<=LIMIT.latestView);
     assert.deepEqual(await collectPages(server),rows.map(r=>r.sourceItemId));
+  } finally {server.close();}
+});
+test('Earlier pages retain 80-row bounds through flush; Latest restores the reduced tail',async()=>{
+  const rows=Array.from({length:200},(_,i)=>row(i)),{server}=backend(rows);
+  try {await server.watch('thread-a');historySource(server,rows);
+    await server.history(server.current.historyCursor);server.flushView();
+    assert.equal(server.current.historical,true);assert.equal(server.current.items.length,80);
+    assert.equal(server.current.items[0].itemId,'i96');assert.equal(server.current.items.at(-1).itemId,'i175');
+    assert.equal(server.current.historyCursor,historyAnchor(server.current.items[0],10));
+    await server.watch('thread-a');server.flushView();
+    assert.equal(server.current.historical,false);assert.equal(server.current.items.length,24);
+    assert.equal(server.current.items[0].itemId,'i176');assert.equal(server.current.items.at(-1).itemId,'i199');
   } finally {server.close();}
 });
 test('byte trimming on initial and history pages leaves every readable row reachable',async()=>{
@@ -173,6 +186,24 @@ test('escaped text still admits a bounded readable row and continues paging',asy
     assert.deepEqual(await collectPages(server),rows.map(r=>r.sourceItemId));
   } finally {server.close();}
 });
+test('single long escaped row keeps its existing text cap even above the latest page target',async()=>{
+  const body='\n'.repeat(LIMIT.text),rows=[row(0,'Earlier'),row(1,body)];
+  const {server}=backend(rows);
+  try {await server.watch('thread-a');server.flushView();
+    assert.equal(server.current.items.length,1);assert.equal(server.current.items[0].text,body);
+    assert.equal(server.current.items[0].truncated,false);assert.equal(server.current.limited,true);
+    assert.ok(Buffer.byteLength(JSON.stringify(server.current.items))>LIMIT.latestView);
+    assert.ok(Buffer.byteLength(JSON.stringify(server.current.items))<=LIMIT.view);
+    assert.equal(server.current.historyCursor,historyAnchor(server.current.items[0],10));
+    historySource(server,rows);assert.deepEqual(await collectPages(server),['i0','i1']);
+    await server.watch('thread-a');assert.equal(server.current.items[0].text,body);assert.equal(server.current.historical,false);
+  } finally {server.close();}
+});
+test('one over-target row has no invented Earlier cursor when no older rows exist',()=>{
+  const result=view(snapshot([row(0,'\n'.repeat(LIMIT.text))]),'thread-a');
+  assert.equal(result.items[0].text.length,LIMIT.text);assert.equal(result.items[0].truncated,false);
+  assert.equal(result.limited,true);assert.equal(result.hasMore,false);assert.equal(result.historyCursor,null);
+});
 test('delayed reconnect cannot restart a newer navigation',async()=>{
   const {server,subscriptions}=backend();
   try {await server.watch('thread-a');server.wantConnection=true;server.retryDelay=5;server.disconnected();
@@ -215,4 +246,21 @@ test('connection loss during Latest from history retains historical reconnect in
     assert.equal(server.following,false);assert.equal(server.current.historical,true);
     assert.equal(server.current.state,'unavailable');
   } finally {server.close();}
+});
+
+test('stream updates carry provided native run identity without changing row identity', async () => {
+  const {server} = backend();
+  await server.watch('thread-a');
+  server.onEvent({kind:'synchronized'});
+  const event = (sequence, fields) => server.onEvent({kind:'event',sequence,event:{type:'turn-item.updated',threadId:'thread-a',payload:{id:'i0',type:'assistant_message',text:'Streamed response',streaming:true,...fields}}});
+  event(11, {runId:'run-new'});
+  assert.equal(server.current.items[0].runId, 'run-new');
+  assert.equal(server.current.items[0].key, 'thread-a/i0');
+  event(12, {text:'More response'});
+  assert.equal(server.current.items[0].runId, 'run-new');
+  event(13, {runId:null});
+  assert.equal(server.current.items[0].runId, undefined);
+  event(14, {runId:'bad\nrun'});
+  assert.equal(server.current.items[0].runId, undefined);
+  server.close();
 });

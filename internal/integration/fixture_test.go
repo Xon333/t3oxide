@@ -51,6 +51,14 @@ type fixture struct {
 	catalog        object
 	catalogReads   int
 	violations     []string
+	requests       map[string]int
+	nextSendAck    *fixtureAckHold
+	nextLaunchAck  *fixtureAckHold
+}
+
+type fixtureAckHold struct {
+	started chan string
+	release chan struct{}
 }
 
 func clone[T any](value T) T {
@@ -91,7 +99,7 @@ func newEnvironmentFixture(t *testing.T, environmentID, profileID, label string)
 	}
 	f := &fixture{t: t, environmentID: environmentID, sequence: 10, threads: map[string]object{
 		"thread-a": projection("thread-a", "Alpha"), "thread-b": projection("thread-b", "Beta")},
-		sockets: map[*fixtureSocket]struct{}{}, receipts: map[string]object{}, commands: map[string]object{}, dropAck: map[string]bool{}, catalog: fixtureCatalog()}
+		sockets: map[*fixtureSocket]struct{}{}, receipts: map[string]object{}, commands: map[string]object{}, dropAck: map[string]bool{}, catalog: fixtureCatalog(), requests: map[string]int{}}
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
@@ -131,6 +139,9 @@ func jsonResponse(w http.ResponseWriter, value any) {
 }
 
 func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.requests[r.URL.Path]++
+	f.mu.Unlock()
 	if r.URL.Path == "/.well-known/t3/environment" {
 		jsonResponse(w, object{"environmentId": f.environmentID, "orchestrationProtocolVersion": 2,
 			"serverVersion": "0.0.0-go-fixture", "capabilities": object{"serverResolvedCommandContext": true}})
@@ -321,6 +332,10 @@ func (f *fixture) websocket(w http.ResponseWriter, r *http.Request) {
 func (f *fixture) rpc(s *fixtureSocket, frame object) {
 	payload, _ := frame["payload"].(object)
 	rid, _ := frame["id"].(string)
+	tag, _ := frame["tag"].(string)
+	f.mu.Lock()
+	f.requests["rpc:"+tag]++
+	f.mu.Unlock()
 	if frame["tag"] == "server.getConfig" {
 		f.mu.Lock()
 		f.catalogReads++
@@ -361,6 +376,9 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 		f.sequence++
 		if frame["tag"] == "orchestration.launchThread" {
 			f.threads[id] = projection(id, payload["title"].(string))
+			if selection := payload["modelSelection"]; selection != nil {
+				f.threads[id]["thread"].(object)["modelSelection"] = clone(selection)
+			}
 			receipt = object{"threadId": id}
 		} else {
 			thread, _ := payload["threadId"].(string)
@@ -377,7 +395,10 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 				if payload["createdBy"] != "user" || payload["creationSource"] != "web" {
 					f.violations = append(f.violations, "prompt lost human provenance")
 				}
-				p["visibleTurnItems"] = append(p["visibleTurnItems"].([]any), row(thread, id+"-reply", "Response after "+payload["text"].(string)))
+				reply := row(thread, id+"-reply", "Response after "+payload["text"].(string))
+				reply["item"].(object)["runId"] = "run-" + thread
+				p["visibleTurnItems"] = append(p["visibleTurnItems"].([]any), reply)
+				p["runs"] = []any{object{"id": "run-" + thread, "status": "running", "userMessageId": payload["messageId"]}}
 			case "run.interrupt":
 				if payload["holdQueue"] != true {
 					f.violations = append(f.violations, "Stop did not hold server queue")
@@ -403,7 +424,25 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 		f.receipts[id] = receipt
 	}
 	drop := f.dropAck[id] || (f.dropMessages && payload["type"] == "message.dispatch") || (f.dropSelections && payload["type"] == "thread.model-selection.set")
+	var hold *fixtureAckHold
+	if tag == "orchestration.launchThread" {
+		hold, f.nextLaunchAck = f.nextLaunchAck, nil
+	} else if payload["type"] == "message.dispatch" {
+		hold, f.nextSendAck = f.nextSendAck, nil
+	}
 	f.mu.Unlock()
+	if hold != nil {
+		hold.started <- id
+		// Delay only the receipt, so the socket can still process Stop and
+		// subscription traffic while authoritative events overtake this ACK.
+		go func() {
+			<-hold.release
+			if !drop {
+				_ = s.send(object{"_tag": "Exit", "requestId": rid, "exit": object{"_tag": "Success", "value": receipt}})
+			}
+		}()
+		return
+	}
 	if !drop {
 		_ = s.send(object{"_tag": "Exit", "requestId": rid, "exit": object{"_tag": "Success", "value": receipt}})
 	}
@@ -469,6 +508,43 @@ func (f *fixture) counts() (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.effects, len(f.dispatches)
+}
+
+func (f *fixture) requestCounts() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	counts := make(map[string]int, len(f.requests))
+	for path, count := range f.requests {
+		counts[path] = count
+	}
+	return counts
+}
+
+func (f *fixture) holdNextSendAck() (<-chan string, func()) {
+	return f.holdNextAck(false)
+}
+
+func (f *fixture) holdNextLaunchAck() (<-chan string, func()) {
+	return f.holdNextAck(true)
+}
+
+func (f *fixture) holdNextAck(launch bool) (<-chan string, func()) {
+	hold := &fixtureAckHold{started: make(chan string, 1), release: make(chan struct{})}
+	f.mu.Lock()
+	next := &f.nextSendAck
+	if launch {
+		next = &f.nextLaunchAck
+	}
+	if *next != nil {
+		f.mu.Unlock()
+		f.t.Fatal("an acknowledgement for this operation kind is already held")
+	}
+	*next = hold
+	f.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold.release) }) }
+	f.t.Cleanup(release)
+	return hold.started, release
 }
 
 func (f *fixture) waitCommand(t *testing.T, id string) {

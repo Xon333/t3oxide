@@ -1,10 +1,10 @@
 // Additive companion-v1 model controls. T3 contract provenance: docs/model-navigation.md.
 // No provider process, credentials, or model catalog is owned by this client.
-import { Fault, clip, command, identifier, requireThat, stable, text, view } from './core.mjs';
+import { Fault, clip, command, identifier, launch, requireThat, stable, text, view } from './core.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
 export const FEATURES = Object.freeze({ modelCatalog: true, modelSelection: true,
-  messageModelOverride: true, runtimeDetails: true, threadNavigation: true });
+  messageModelOverride: true, launchModelSelection: true, runtimeDetails: true, threadNavigation: true });
 
 export function selection(value) {
   requireThat(value && typeof value === 'object' && !Array.isArray(value), 'Missing model selection.');
@@ -34,6 +34,9 @@ export function selection(value) {
 export function optionalSelection(value) {
   try { return selection(value); } catch { return null; }
 }
+function optionalIdentifier(value) {
+  try { return identifier(value); } catch { return null; }
+}
 export function sameSelection(a, b) {
   return JSON.stringify(stable(selection(a))) === JSON.stringify(stable(selection(b)));
 }
@@ -58,7 +61,11 @@ export function runtimeDetails(p) {
   const session = providerThread && (p.providerSessions ?? []).find(s => s.id === providerThread.providerSessionId);
   return {
     scope: active ? 'active-run' : run ? 'last-run' : providerThread ? 'provider-thread' : 'unreported',
-    runId: run?.id ?? null, providerThreadId: providerThread?.id ?? null,
+    runId: run?.id ?? null,
+    // Native OrchestrationV2Run.userMessageId is the initiating message, not
+    // the most recent user row (which can belong to a queued later send).
+    runMessageId: optionalIdentifier(run?.userMessageId),
+    providerThreadId: providerThread?.id ?? null,
     providerSessionId: session?.id ?? null,
     status: clip(run?.status ?? providerThread?.status ?? 'unreported', 64).text,
     runModelSelection: optionalSelection(run?.modelSelection),
@@ -132,11 +139,12 @@ export function catalog(config, p) {
     available, models, more };
 }
 
-export function validateChoice(requested, current, modelCatalog) {
+export function validateChoice(requested, current, modelCatalog, scope = 'current') {
+  requireThat(['current', 'launch'].includes(scope), 'Unknown model selection scope.');
   const next = selection(requested), before = selection(current);
   requireThat(next.instanceId === before.instanceId, 'Provider switching is not enabled here; use full T3.', 'unsupported');
   requireThat(modelCatalog.available, 'This provider is unavailable for model selection.', 'unavailable');
-  requireThat(!modelCatalog.requiresNewThreadForModelChange || next.model === before.model,
+  requireThat(scope === 'launch' || !modelCatalog.requiresNewThreadForModelChange || next.model === before.model,
     'This provider requires a new conversation to change models; use full T3.', 'unsupported');
   const model = modelCatalog.models.find(m => m.slug === next.model);
   requireThat(model, 'Model is not in the current T3 catalog; reopen the picker.', 'stale');
@@ -144,12 +152,22 @@ export function validateChoice(requested, current, modelCatalog) {
   for (const option of next.options ?? []) {
     // Preserve untouched provider-specific options on the same model. Newly
     // introduced/changed options must be explicitly offered by T3.
-    if (next.model === before.model && old.has(option.id) && old.get(option.id) === option.value) continue;
+    if (scope === 'current' && next.model === before.model && old.has(option.id) && old.get(option.id) === option.value) continue;
     const d = model.options.find(d => d.id === option.id);
     requireThat(d && (d.type === 'boolean' ? typeof option.value === 'boolean' : d.options.some(o => o.id === option.value)),
       'Model option is no longer offered by T3; reopen the picker.', 'stale');
   }
   return next;
+}
+
+// The native V2 launch RPC accepts modelSelection in the original create
+// operation. Launch choices never configure the source thread or follow up
+// with another mutation. The caller journals this complete payload unchanged.
+export function launchCommand(a, p, d, modelCatalog) {
+  if (a.modelSelection === undefined) return launch(a, p);
+  requireThat(d.capabilities?.serverResolvedCommandContext === true,
+    'T3 launch model selection is unavailable.', 'incompatible');
+  return launch(a, p, validateChoice(a.modelSelection, p.thread.modelSelection, modelCatalog, 'launch'));
 }
 
 // Called only for a NEW write, before the existing durable host journal is

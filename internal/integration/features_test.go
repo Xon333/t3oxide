@@ -445,11 +445,11 @@ func TestFeaturesGroupedNavigatorExpandsFiltersAndJumpsToParent(t *testing.T) {
 		action   string
 		expanded bool
 	}{{"expand", true}, {"expand", true}, {"collapse", false}, {"collapse", false}, {"toggle", true}} {
-		p.Respond(client.Answer{Action: step.action, ChoiceIDs: []string{"thread-a"}})
+		p.Respond(client.Answer{Action: step.action, ChoiceIDs: []string{offeredThreadID(t, p, "thread-a")}})
 		p = featurePrompt(t, a)
 		hasChild := false
 		for _, c := range p.Question.Choices {
-			if c.ID == "child" {
+			if offeredThreadValue(t, c.ID) == "child" {
 				hasChild = strings.Contains(c.Label, "SUB") && strings.Contains(c.Description, "waiting")
 			}
 		}
@@ -457,7 +457,7 @@ func TestFeaturesGroupedNavigatorExpandsFiltersAndJumpsToParent(t *testing.T) {
 			t.Fatalf("%s did not preserve expected expansion: %+v", step.action, p.Question.Choices)
 		}
 	}
-	p.Respond(client.Answer{ChoiceIDs: []string{"child"}})
+	p.Respond(client.Answer{ChoiceIDs: []string{offeredThreadID(t, p, "child")}})
 	r := featureReply(t, nav)
 	if r.err != nil || r.result.Next == nil {
 		t.Fatalf("open child: %v", r.err)
@@ -476,7 +476,7 @@ func TestFeaturesGroupedNavigatorExpandsFiltersAndJumpsToParent(t *testing.T) {
 	parent.Close()
 	filter := featureCommand(child, "filter", "forks")
 	p = featurePrompt(t, child)
-	if len(p.Question.Choices) != 1 || p.Question.Choices[0].ID != "fork" || !strings.Contains(p.Question.Choices[0].Label, "FORK") {
+	if len(p.Question.Choices) != 1 || offeredThreadValue(t, p.Question.Choices[0].ID) != "fork" || !strings.Contains(p.Question.Choices[0].Label, "FORK") {
 		t.Fatal("forks conflated with subagents")
 	}
 	p.Respond(client.Answer{Cancelled: true})
@@ -497,12 +497,12 @@ func TestFeaturesNavigatorSearchRevealsHiddenSubagentsAndParentContext(t *testin
 	p = featurePrompt(t, a)
 	found := map[string]client.Choice{}
 	for _, c := range p.Question.Choices {
-		found[c.ID] = c
+		found[offeredThreadValue(t, c.ID)] = c
 	}
 	if len(found) != 3 || !strings.Contains(found["thread-a"].Description, "search context") || !strings.Contains(found["child"].Description, "search context") {
 		t.Fatalf("search lost ancestry: %+v", found)
 	}
-	p.Respond(client.Answer{Action: "parent", ChoiceIDs: []string{"grandchild"}})
+	p.Respond(client.Answer{Action: "parent", ChoiceIDs: []string{offeredThreadID(t, p, "grandchild")}})
 	r := featureReply(t, nav)
 	if r.err != nil || r.result.Next.Status().ThreadID != "child" {
 		t.Fatalf("search parent jump failed: %v", r.err)
@@ -539,7 +539,7 @@ func TestFeaturesLaunchAcknowledgesActualAdapterReceiptAndRetainsSourceDraft(t *
 	}
 	launch := featureCommand(a, "new", "New disposable fixture")
 	p := featurePrompt(t, a)
-	p.Respond(client.Answer{Text: "first new message"})
+	p.Respond(client.Answer{Action: "create", Launch: &client.LaunchInput{Title: p.Question.LaunchReview.Input.Title, Message: "first new message"}})
 	r := featureReply(t, launch)
 	if r.err != nil || r.result.Next == nil {
 		t.Fatalf("launch acknowledgment: %v", r.err)

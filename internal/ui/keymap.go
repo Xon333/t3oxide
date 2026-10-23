@@ -32,27 +32,27 @@ func optionKey(key string) string {
 
 var applicationKeys = appKeyMap{
 	Stop: bind("Ctrl+S", "Stop/hold", "ctrl+s"), Quit: bind("Ctrl+Q", "exit", "ctrl+q"),
-	Help: bind("F1", "help", "f1"), Palette: bind("F3", "commands", "f3"),
-	Threads: bind("F6", "conversations", "f6"), Environments: bind("Ctrl+E", "environments", "ctrl+e"),
+	Help: bind("/help", "help", "f1"), Palette: bind("Ctrl+Space", "commands", "ctrl+space", "ctrl+@", "f3"),
+	Threads: bind("Ctrl+O", "browser", "ctrl+o", "f6"), Environments: bind("Ctrl+E", "environments", "ctrl+e"),
 	Requests: bind("Ctrl+R", "requests", "ctrl+r"), Search: bind("Ctrl+F", "find", "ctrl+f"),
 	Sidebar: bind("Ctrl+B", "sidebar", "ctrl+b"), Model: bind(optionKey("M"), "model", "alt+m"),
 	Effort: bind(optionKey("E"), "effort", "alt+e"), Speed: bind(optionKey("S"), "speed", "alt+s"),
 	Parent: bind(optionKey("↑"), "parent", "alt+up"), Earlier: bind(optionKey("←"), "earlier", "alt+left"),
 	Latest: bind(optionKey("→"), "latest", "alt+right"), Copy: bind("Ctrl+Y", "copy", "ctrl+y"),
-	Detail: bind("F2", "details", "f2"), Focus: bind("Tab", "read/write", "tab"),
-	Clear: bind("Ctrl+X", "clear draft", "ctrl+x"), Edit: bind("F4", "editor", "f4"),
-	Recall: bind("F5", "prompts", "f5"), Literal: bind("Ctrl+Enter", "send text", "ctrl+enter"),
+	Detail: bind("Ctrl+L", "details", "ctrl+l", "f2"), Focus: bind("Tab", "read/write", "tab"),
+	Clear: bind("Ctrl+X", "clear draft", "ctrl+x"), Edit: bind("/edit", "editor", "f4"),
+	Recall: bind("/recall", "prompts", "f5"), Literal: bind("Ctrl+Enter", "send text", "ctrl+enter"),
 	Dismiss: bind("Esc", "back", "esc"), Send: bind("Enter", "send", "enter"),
-	Error: bind("F8", "error", "f8"),
+	Error: bind("/error", "error", "f8"),
 }
 
 func (m *Model) keyMap() appKeyMap {
 	k := applicationKeys
-	normal := m.detail == "" && m.dialog == nil && !m.searching
+	normal := m.detail == "" && m.dialog == nil && !m.searching && !m.browserPage && !m.launchPage
 	reading := normal && m.transcriptFocus
 	k.Error.SetEnabled(m.problem != "" || m.streamProblem != "")
 	if m.searching || m.dialog != nil && m.dialog.prompt != nil {
-		k.Palette.SetHelp("F3", "help")
+		k.Palette.SetHelp("Ctrl+Space", "help")
 	}
 	for _, b := range []*key.Binding{&k.Threads, &k.Requests, &k.Model, &k.Effort, &k.Speed, &k.Parent, &k.Focus, &k.Edit, &k.Clear, &k.Recall, &k.Literal, &k.Send} {
 		b.SetEnabled(normal)
@@ -60,9 +60,12 @@ func (m *Model) keyMap() appKeyMap {
 	for _, b := range []*key.Binding{&k.Environments, &k.Search, &k.Sidebar, &k.Earlier, &k.Latest} {
 		b.SetEnabled(reading)
 	}
+	for _, b := range []*key.Binding{&k.Model, &k.Effort, &k.Speed, &k.Parent} {
+		b.SetEnabled(reading)
+	}
 	if normal && (m.transcriptFocus || m.currentDraft() == "") {
-		k.Palette.SetKeys("f3", "ctrl+p")
-		k.Threads.SetKeys("f6", "ctrl+t")
+		k.Palette.SetKeys("ctrl+space", "ctrl+@", "f3", "ctrl+p")
+		k.Threads.SetKeys("ctrl+o", "f6", "ctrl+t")
 		k.Quit.SetKeys("ctrl+q", "ctrl+d")
 	}
 	k.Edit.SetEnabled(normal && !m.transcriptFocus)
@@ -90,7 +93,7 @@ func (m *Model) helpMap() contextHelp {
 	case m.dialog != nil:
 		active = []key.Binding{bind("Enter", "select", "enter"), k.Detail, k.Dismiss}
 		if m.dialog.details {
-			active = []key.Binding{bind("F2", "back", "f2"), k.Dismiss, m.questionViewport.KeyMap.Up, m.questionViewport.KeyMap.Down}
+			active = []key.Binding{bind("Ctrl+L", "back", "ctrl+l", "f2"), k.Dismiss, m.questionViewport.KeyMap.Up, m.questionViewport.KeyMap.Down}
 		} else if m.dialog.kind == client.EnterText {
 			active = []key.Binding{bind("Enter", "answer", "enter"), m.modalInput.KeyMap.InsertNewline, k.Detail, k.Dismiss}
 		} else if m.dialog.kind == client.ChooseMany {
@@ -150,7 +153,7 @@ func (m *Model) helpText() string {
 		}
 		parts = append(parts, line+"  "+spec.title)
 	}
-	parts = append(parts, "RECOVERY\nCtrl+C dismisses locally and keeps the draft. Ctrl+X clears it into F5 prompt history. Local exit leaves T3 running. Stop holds the reviewed turn's queue; retries reuse the saved operation ID.")
+	parts = append(parts, "RECOVERY\nCtrl+C dismisses locally and keeps the draft. Ctrl+X clears it into /recall prompt history. Local exit leaves T3 running. Stop holds the reviewed turn's queue; retries reuse the saved operation ID.\n\nPORTABLE CONTROLS\nTab to reading, Ctrl+P opens Commands. /new, /settings, /edit, /recall, /error and /details are also available. Ctrl+G selects all in the editor.")
 	if runtime.GOOS == "darwin" {
 		parts = append(parts, "⌥ is Option. Chords depend on terminal mapping; the Ghostty launcher uses left Option as Alt. Slash commands remain available regardless of terminal key mapping.")
 	}

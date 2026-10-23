@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
@@ -40,6 +41,7 @@ type actionMsg struct {
 	result         client.Result
 	err            error
 	stop           bool
+	browser        bool
 	commandDraft   string
 }
 type settingMsg struct {
@@ -70,6 +72,14 @@ type Model struct {
 	status                                     client.Status
 	snapshot                                   *wire.Snapshot
 	dialog                                     *dialog
+	browserPage                                bool
+	startupBrowser                             bool
+	launchPage                                 bool
+	browserDialog                              *dialog
+	browserStates                              map[string]browserState
+	launchTitle                                textinput.Model
+	launchDraftMu                              sync.Mutex
+	launchDraft                                *launchCheckpoint
 	dialogSerial                               uint64
 	detailTitle, detail                        string
 	detailCopy                                 string
@@ -93,6 +103,10 @@ type Model struct {
 	actionID                                   uint64
 	cancelAction                               context.CancelFunc
 	actionDone                                 <-chan struct{}
+	browserBusy                                bool
+	browserID                                  uint64
+	cancelBrowser                              context.CancelFunc
+	browserDone                                <-chan struct{}
 	renderer                                   transcriptRenderer
 	renderSerial                               uint64
 	rendering                                  bool
@@ -117,6 +131,9 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 	m.composer.DynamicHeight = true
 	m.composer.MinHeight = 1
 	m.modalInput = newTextarea("Enter your answer")
+	m.launchTitle = textinput.New()
+	m.launchTitle.CharLimit = 0
+	m.launchTitle.SetVirtualCursor(true)
 	m.searchInput = textinput.New()
 	m.searchInput.Prompt = "Find in this page: "
 	m.searchInput.CharLimit = 256
@@ -128,6 +145,7 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 	m.detailViewport.SoftWrap = true
 	m.questionViewport.SoftWrap = true
 	m.setSession(session)
+	m.refreshAppearance(m.status.ProfileID, m.status.ProfileIDs)
 	m.applyTheme()
 	m.resize()
 	m.restoreFocus()
@@ -154,21 +172,32 @@ func newTextarea(placeholder string) textarea.Model {
 
 // Run restores terminal modes through Bubble Tea on normal exit, cancellation,
 // or failure. Manager.Close remains the CLI's owner of durable final cleanup.
-func Run(ctx context.Context, session *client.Session, settings *Settings) error {
+func Run(ctx context.Context, session *client.Session, settings *Settings) (err error) {
 	m := NewModel(ctx, session, settings)
-	defer m.Close()
-	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	defer func() { err = errors.Join(err, m.Close()) }()
+	_, err = tea.NewProgram(m, tea.WithContext(ctx)).Run()
 	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
 		return nil
 	}
 	return err
 }
 
-// Close is safe after Program.Run, and cancellation is safe from another
-// goroutine. It never interprets local context cancellation as remote Stop.
-func (m *Model) Close() { m.cancel() }
+// Close saves the last launch checkpoint even if cancellation already retired
+// its prompt. The checkpoint is shared safely with shutdown callers; Close
+// never reads live component state or interprets cancellation as remote Stop.
+func (m *Model) Close() error {
+	err := m.persistLaunchCheckpoint()
+	m.cancel()
+	return err
+}
 
 func (m *Model) setSession(s *client.Session) {
+	if m.cancelBrowser != nil {
+		m.cancelBrowser()
+		m.cancelBrowser = nil
+	}
+	m.browserDone = nil
+	m.browserBusy = false
 	if m.detach != nil {
 		m.detach()
 	}
@@ -187,7 +216,11 @@ func (m *Model) setSession(s *client.Session) {
 	m.events = make(chan sessionMsg, 1)
 	m.snapshot = nil
 	m.status = client.Status{State: "connecting", Delivery: "auto"}
+	m.startupBrowser = s != nil && s.Status().ThreadID == ""
 	m.dialog = nil
+	m.browserDialog = nil
+	m.browserPage = false
+	m.launchPage = false
 	m.detail, m.detailTitle, m.detailCopy = "", "", ""
 	m.problem, m.notice, m.streamProblem = "", "", ""
 	m.inputProblem, m.inputProblemKind = "", ""
@@ -311,6 +344,7 @@ func (m *Model) startRender() tea.Cmd {
 }
 
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	defer m.captureLaunchDraft()
 	var commands []tea.Cmd
 	switch msg := message.(type) {
 	case editorFinishedMsg:
@@ -335,6 +369,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.focused = false
 		m.composer.Blur()
 		m.modalInput.Blur()
+		m.launchTitle.Blur()
 		m.searchInput.Blur()
 		if m.dialog != nil {
 			m.dialog.list.FilterInput.Blur()
@@ -354,6 +389,29 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.revision = event.Revision
 		m.status = event.Status
+		// Initial Events owns Browse internally and adopts its selected thread
+		// without an actionMsg. Retire only that startup surface on the first
+		// authoritative attachment; later Ctrl+O browsing owns its own lane.
+		if m.startupBrowser && m.status.ThreadID != "" {
+			m.startupBrowser = false
+			if !m.browserBusy {
+				m.browserPage = false
+				m.launchPage = false
+				if m.dialog != nil && m.dialog.prompt != nil && (m.dialog.surface == client.SurfaceBrowser || m.dialog.surface == client.SurfaceLaunch) {
+					select {
+					case <-m.dialog.prompt.Done:
+						m.dialog = nil
+					default:
+					}
+				}
+				commands = append(commands, m.restoreFocus())
+			}
+		}
+		oldTheme := m.theme
+		m.refreshAppearance(m.appearanceProfile(), m.appearanceProfiles())
+		if oldTheme != m.theme {
+			commands = append(commands, m.requestRender(false, false))
+		}
 		m.streamProblem = safeText(event.Error)
 		if event.Draft != nil && m.draftEdits == 0 {
 			m.restoreDraft(*event.Draft)
@@ -433,6 +491,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		commands = append(commands, m.restoreFocus())
 		return m, tea.Batch(commands...)
 	case promptClosedMsg:
+		if msg.generation == m.generation && m.browserDialog != nil && m.browserDialog.prompt.ID == msg.id {
+			m.browserDialog = nil
+			if m.dialog != nil && m.dialog.prompt == nil {
+				m.dialog = nil
+				m.resize()
+				return m, m.restoreFocus()
+			}
+		}
 		if msg.generation == m.generation && m.dialog != nil && m.dialog.prompt != nil && m.dialog.prompt.ID == msg.id {
 			m.dialog = nil
 			m.resize()
@@ -449,7 +515,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation != m.generation {
 			return m, nil
 		}
-		if msg.stop {
+		if msg.browser {
+			if msg.id != m.browserID {
+				return m, nil
+			}
+			m.browserBusy = false
+			m.cancelBrowser = nil
+			m.browserDone = nil
+		} else if msg.stop {
 			m.stopBusy = false
 		} else {
 			if msg.id != m.actionID {
@@ -460,12 +533,32 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelAction = nil
 			m.actionDone = nil
 		}
+		if !msg.stop && !m.browserBusy {
+			m.browserPage = false
+			m.launchPage = false
+			if m.dialog != nil && m.dialog.prompt != nil {
+				select {
+				case <-m.dialog.prompt.Done:
+					m.dialog = nil
+				default:
+				}
+			}
+			oldTheme := m.theme
+			m.refreshAppearance(m.status.ProfileID, m.status.ProfileIDs)
+			if oldTheme != m.theme {
+				commands = append(commands, m.requestRender(false, false))
+			}
+			m.resize()
+			commands = append(commands, m.restoreFocus())
+		}
 		m.finishCommandNotice(msg.name, msg.result, msg.err)
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.problem = safeText(msg.err.Error())
 		}
 		if msg.err == nil {
-			m.problem = ""
+			if !msg.browser && !msg.stop && (!m.durableProblem() || msg.name == "retry" || msg.name == "resolve") {
+				m.problem = ""
+			}
 			if msg.commandDraft != "" && m.currentDraft() == msg.commandDraft {
 				if err := m.storeDraft(""); err != nil {
 					m.problem = "Draft save: " + safeText(err.Error())
@@ -479,20 +572,31 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.listen()
 			}
 		}
-		return m, nil
+		return m, tea.Batch(commands...)
 	case settingMsg:
 		m.settingBusy = false
 		if msg.err != nil {
 			m.problem = "Settings were not saved: " + safeText(msg.err.Error())
+			if m.browserDialog != nil {
+				m.dialog, m.browserDialog = m.browserDialog, nil
+				m.resize()
+				return m, m.restoreFocus()
+			}
 			return m, nil
 		}
-		m.problem = ""
+		if !m.durableProblem() {
+			m.problem = ""
+		}
 		switch msg.kind {
 		case "theme":
-			m.theme = msg.value
-			m.applyTheme()
-			m.notice = "Theme · " + msg.value
-			return m, m.requestRender(false, false)
+			m.refreshAppearance(m.appearanceProfile(), m.appearanceProfiles())
+			m.notice = ""
+			if m.browserDialog != nil {
+				m.dialog, m.browserDialog = m.browserDialog, nil
+				m.resize()
+				commands = append(commands, m.restoreFocus())
+			}
+			return m, tea.Batch(append(commands, m.requestRender(false, false))...)
 		case "mouse":
 			m.mouse = msg.value == "on"
 			m.notice = "Mouse capture " + msg.value
@@ -512,6 +616,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
+		if (msg.String() == "esc" || msg.String() == "ctrl+c") && m.dialog != nil && m.dialog.launch != nil && !m.dialog.details && m.detail == "" {
+			if err := m.storeLaunchDraft(); err != nil {
+				m.problem = "Launch draft save: " + safeText(err.Error())
+				return m, nil
+			}
+			m.clearLaunchCheckpoint()
+		}
 		return m, m.handleKey(msg)
 	case tea.MouseWheelMsg:
 		if m.detail != "" {
@@ -531,6 +642,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.updateComponent(kind, m.dialog.serial, msg)
 		}
+		if m.browserPage || m.launchPage {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		m.follow = m.viewport.AtBottom()
@@ -544,7 +658,19 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if m.dialog.kind == client.EnterText {
 			kind = "modal"
 		}
+		if m.dialog.launch != nil {
+			if m.dialog.launch.focus == 0 {
+				kind = "modal"
+			} else if m.dialog.launch.focus == 1 {
+				kind = "launch-title"
+			} else {
+				return m, nil
+			}
+		}
 		return m, m.updateComponent(kind, m.dialog.serial, message)
+	}
+	if m.browserPage || m.launchPage {
+		return m, nil
 	}
 	if m.searching {
 		return m, m.updateComponent("search", 0, message)
@@ -598,14 +724,15 @@ func (m *Model) restoreDraft(text string) {
 	}
 	m.preservedDraft = text
 	m.composer.SetValue("")
-	m.composer.Placeholder = "Exact draft · F4 edit"
+	m.composer.Placeholder = "Exact draft · /edit"
 	m.composer.Blur()
-	m.notice = "Exact draft preserved · F4 edit"
+	m.notice = "Exact draft preserved · /edit"
 }
 
 func (m *Model) restoreFocus() tea.Cmd {
 	m.composer.Blur()
 	m.modalInput.Blur()
+	m.launchTitle.Blur()
 	m.searchInput.Blur()
 	if m.dialog != nil {
 		m.dialog.list.FilterInput.Blur()
@@ -620,12 +747,21 @@ func (m *Model) restoreFocus() tea.Cmd {
 		if m.dialog.details || m.dialog.finishFocused {
 			return nil
 		}
+		if m.dialog.launch != nil {
+			return m.focusLaunch()
+		}
 		if m.dialog.kind == client.EnterText && m.dialog.preservedInitial == "" {
 			return m.componentCmd("modal", m.dialog.serial, m.modalInput.Focus())
+		}
+		if m.dialog.actionFocus > 0 {
+			return nil
 		}
 		if m.dialog.kind != client.EnterText && m.dialog.list.FilterState() == list.Filtering {
 			return m.componentCmd("list", m.dialog.serial, m.dialog.list.FilterInput.Focus())
 		}
+		return nil
+	}
+	if m.browserPage || m.launchPage {
 		return nil
 	}
 	if m.searching {
@@ -638,6 +774,10 @@ func (m *Model) restoreFocus() tea.Cmd {
 }
 
 func (m *Model) quit() tea.Cmd {
+	if err := m.storeLaunchDraft(); err != nil {
+		m.problem = "Launch draft save: " + safeText(err.Error())
+		return nil
+	}
 	m.closed = true
 	m.cancel()
 	return tea.Quit
@@ -647,6 +787,9 @@ func (m *Model) execute(name, args string) tea.Cmd {
 	if m.session == nil {
 		m.problem = "No session selected"
 		return nil
+	}
+	if name == "switch" || name == "env" || name == "threads" {
+		return m.executeBrowser(name, args)
 	}
 	navigating := name == "switch" || name == "env" || name == "threads" || name == "filter" || name == "parent" || name == "reconnect"
 	var previousAction, previousPrompt <-chan struct{}
@@ -737,7 +880,7 @@ func (m *Model) sendText(text string) tea.Cmd {
 		defer close(done)
 		defer cancel()
 		err := session.Send(ctx, text)
-		return actionMsg{generation: generation, id: id, name: "send", err: err, result: client.Result{Text: "T3 acknowledged the message"}}
+		return actionMsg{generation: generation, id: id, name: "send", err: err}
 	}
 }
 

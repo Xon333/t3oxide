@@ -36,7 +36,7 @@ func (m *Model) resize() {
 	// so the display cap cannot truncate a long human draft (see components.go).
 	m.composer.SetWidth(max(1, inner-4))
 	m.composer.SetHeight(min(m.composer.Height(), max(1, min(5, m.height/6))))
-	m.bodyHeight = max(1, m.height-m.composer.Height()-7)
+	m.bodyHeight = max(1, m.height-m.composer.Height()-8)
 	m.viewport.SetWidth(m.contentWidth)
 	m.viewport.SetHeight(m.bodyHeight)
 	m.viewport.MouseWheelEnabled = m.mouse
@@ -56,6 +56,9 @@ func (m *Model) resize() {
 	if m.height < 16 {
 		m.modalHeight = max(1, m.height-2)
 	}
+	if m.browserPage || m.launchPage {
+		m.modalHeight = max(1, min(22, m.height-6))
+	}
 	m.detailViewport.SetWidth(m.modalWidth)
 	m.detailViewport.SetHeight(max(1, m.modalHeight-1))
 	m.detailViewport.MouseWheelEnabled = m.mouse
@@ -72,21 +75,25 @@ func (m *Model) resize() {
 	if m.dialog != nil && m.detail == "" {
 		if m.dialog.details {
 			m.questionViewport.SetHeight(max(1, m.modalHeight-1))
+		} else if m.dialog.launch != nil {
+			m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
+			m.modalInput.SetHeight(max(2, min(8, m.height-12)))
+			m.launchTitle.SetWidth(max(1, m.workspaceWidth()-12))
+			return
 		} else if m.dialog.kind == client.EnterText {
 			m.modalHeight = min(m.modalHeight, questionHeight+8)
 		} else {
 			m.styleList(&m.dialog.list)
-			rowHeight := 1
-			if m.height >= 24 && m.modalWidth >= 48 {
-				rowHeight = 2
-			}
 			// Query, current selection and help are fixed rows. Completion is
 			// outside the native filterable list, so even zero matches can finish.
 			fixed := questionHeight + 3
 			if m.dialog.kind == client.ChooseMany {
 				fixed++
 			}
-			m.modalHeight = min(m.modalHeight, fixed+max(1, rowHeight*len(m.dialog.list.Items())))
+			if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany {
+				fixed += 3
+			}
+			m.modalHeight = min(m.modalHeight, fixed+max(1, len(m.dialog.list.VisibleItems())))
 			m.dialog.list.SetShowPagination(m.height >= 24)
 			m.dialog.list.SetSize(m.modalWidth, max(1, m.modalHeight-fixed))
 			// The query is rendered independently of the native list's title
@@ -96,6 +103,9 @@ func (m *Model) resize() {
 	}
 	m.modalInput.SetWidth(m.modalWidth)
 	m.modalInput.SetHeight(max(1, m.modalHeight-questionHeight-1))
+	if m.dialog != nil && m.dialog.prompt != nil && m.dialog.prompt.Question.SingleLine {
+		m.modalInput.SetHeight(1)
+	}
 }
 
 func (m *Model) View() tea.View {
@@ -106,33 +116,39 @@ func (m *Model) View() tea.View {
 	if m.width < 20 || m.height < 8 {
 		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · Ctrl+Q exits"), m.width, m.height))
 	}
+	if m.browserPage || m.launchPage {
+		return m.terminalView(m.fullSurfaceView())
+	}
 	inner := m.workspaceWidth()
 	contextLine := m.status.Context
+	if m.status.Location.Environment != "" {
+		var parts []string
+		for _, value := range []string{m.status.Location.Environment, m.status.Location.ProjectID, m.status.Location.Title} {
+			if value != "" {
+				parts = append(parts, value)
+			}
+		}
+		contextLine = strings.Join(parts, " → ")
+	}
 	if contextLine == "" {
 		contextLine = "Your T3 workspace"
 	}
 	header := p.active().Render("t3oxide") + "  " + p.plain().Render(fitLine(contextLine, max(1, inner-9)))
-	model := p.subtle().Render(fitLine(modelStatusLine(m.status.ModelName), inner))
-	state := m.status.State
+	model := p.plain().Bold(true).Render(fitLine(modelStatusLine(m.status.ModelName), inner))
+	state := m.authoritativeStatus()
 	if state == "" {
 		state = "connecting"
-	}
-	if m.stopBusy {
-		state = commandProgress("stop")
-	} else if m.actionBusy {
-		if m.dialog != nil {
-			state = "Choose an option · draft preserved"
-		} else {
-			state = commandProgress(m.actionName)
-		}
 	}
 	position := "latest"
 	if m.snapshot != nil && m.snapshot.Metadata.Historical {
 		position = "history · /latest"
+	} else if m.snapshot != nil && m.snapshot.Metadata.HasMore && m.follow {
+		position = "Earlier messages · /earlier"
 	} else if !m.follow {
 		position = fmt.Sprintf("reading %d%% · End latest", int(m.viewport.ScrollPercent()*100))
 	}
-	status := edgeLine(p.subtle().Render(fitLine(state, max(1, inner-ansi.StringWidth(position)-3))), p.subtle().Render(position), inner)
+	status := edgeLine(p.operational().Render(fitLine(state, max(1, inner-ansi.StringWidth(position)-3))), p.subtle().Render(position), inner)
+	connection := p.subtle().Render(fitLine(m.connectionStatus(), inner))
 	body := m.bodyView()
 	if m.sidebar && m.width >= 110 {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.sidebarView(28, m.bodyHeight))
@@ -159,7 +175,7 @@ func (m *Model) View() tea.View {
 		composer = m.searchInput.View()
 	}
 	frame := framed(label, padBlock(composer, max(1, inner-4), m.composer.Height()), inner-4, p, m.composer.Focused() || m.searching)
-	content := strings.Join([]string{header, model, status, padBlock(body, inner, m.bodyHeight), feedback, frame, m.footerView(inner)}, "\n")
+	content := strings.Join([]string{header, model, status, connection, padBlock(body, inner, m.bodyHeight), feedback, frame, m.footerView(inner)}, "\n")
 	content = padBlock(content, inner, m.height)
 	margin := max(0, (m.width-inner)/2)
 	lines := strings.Split(content, "\n")
@@ -170,7 +186,7 @@ func (m *Model) View() tea.View {
 	if m.completionVisible() && m.height >= 12 && m.width >= 32 {
 		panel := m.completionView(inner)
 		x := margin
-		y := max(3, 3+m.bodyHeight-lipgloss.Height(panel))
+		y := max(4, 4+m.bodyHeight-lipgloss.Height(panel))
 		canvas = lipgloss.NewCompositor(lipgloss.NewLayer(canvas), lipgloss.NewLayer(panel).X(x).Y(y).Z(1)).Render()
 	}
 	// Use the pinned native compositor instead of string slicing ANSI cells.
@@ -202,7 +218,7 @@ func (m *Model) terminalView(content string) tea.View {
 func (m *Model) bodyView() string {
 	p := colors(m.theme)
 	if m.transcript == "" {
-		text := p.plain().Render("F6  Conversations") + "\n" + p.plain().Render("F3  Commands")
+		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render("Tab → Ctrl+P  Commands")
 		if m.snapshot != nil {
 			text = p.subtle().Render("Preparing conversation…")
 		}
@@ -214,6 +230,12 @@ func (m *Model) bodyView() string {
 func (m *Model) feedbackView(width int) string {
 	p := colors(m.theme)
 	text, style := m.notice, p.subtle()
+	if text == "" && m.actionBusy {
+		text = commandProgress(m.actionName)
+	}
+	if m.stopBusy {
+		text = commandProgress("stop")
+	}
 	if m.status.Requests > 0 && text == "" {
 		text = fmt.Sprintf("%d request(s) need you · Ctrl+R review", m.status.Requests)
 		style = p.active()
@@ -240,9 +262,12 @@ func (m *Model) modalView() string {
 		return ""
 	}
 	if d.details {
-		return framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-1))+"\n"+m.hints(w, "F2/Esc", "back", "↑/↓", "scroll"), w, p, true)
+		return framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-1))+"\n"+m.hints(w, "Ctrl+L/Esc", "back", "↑/↓", "scroll"), w, p, true)
 	}
 	var parts []string
+	if d.surface == client.SurfaceBrowser && d.kind != client.ChooseMany {
+		parts = append(parts, m.browserControls(w))
+	}
 	if m.questionViewport.Height() > 0 {
 		parts = append(parts, m.questionViewport.View())
 	}
@@ -250,23 +275,23 @@ func (m *Model) modalView() string {
 	if m.problem != "" || m.streamProblem != "" {
 		detailLabel = "error"
 	}
-	controls := m.hints(w, "Enter", "select", "type", "filter", "F2", detailLabel, "Esc", "close")
+	controls := m.hints(w, "Enter", "select", "Ctrl+L", detailLabel, "Esc", "close")
 	if d.kind == client.EnterText {
-		controls = m.hints(w, "Enter", "answer", "Ctrl+J", "newline", "F2", detailLabel, "Esc", "close")
+		controls = m.hints(w, "Enter", "answer", "Ctrl+J", "newline", "Ctrl+L", detailLabel, "Esc", "close")
 		if d.preservedInitial != "" {
-			controls = m.hints(w, "F2", "review", "Ctrl+Y", "copy", "Ctrl+U", "replace", "Esc", "close")
+			controls = m.hints(w, "Ctrl+L", "review", "Ctrl+Y", "copy", "Ctrl+U", "replace", "Esc", "close")
 		}
 		parts = append(parts, padBlock(m.modalInput.View(), w, max(1, h-m.questionViewport.Height()-1)), controls)
 		return framed(d.title, strings.Join(parts, "\n"), w, p, true)
 	}
 	if d.prompt != nil && d.prompt.Question.Navigation {
-		controls = m.hints(w, "Enter", "open", "type", "filter", "Space", "expand", "F2", detailLabel, "Esc", "close")
+		controls = m.hints(w, "Enter", "open", "Ctrl+L", detailLabel, "Esc", "close")
 	}
 	if d.kind == client.ChooseMany {
 		if d.finishFocused {
-			controls = m.hints(w, "Enter", "continue", "Tab", "choices", "F2", detailLabel, "Esc", "close")
+			controls = m.hints(w, "Enter", "continue", "Tab", "choices", "Ctrl+L", detailLabel, "Esc", "close")
 		} else {
-			controls = m.hints(w, "Tab", "continue", "Enter", "toggle", "type", "filter", "F2", detailLabel, "Esc", "close")
+			controls = m.hints(w, "Tab", "continue", "Enter", "toggle", "Ctrl+L", detailLabel, "Esc", "close")
 		}
 	}
 	// Keep the native query editor visible before typing and when completion
@@ -298,7 +323,12 @@ func (m *Model) modalView() string {
 func (m *Model) pickerSelectionView(width int) string {
 	d := m.dialog
 	if item, ok := d.list.SelectedItem().(choiceItem); ok {
-		return colors(m.theme).active().Render(fitLine("→ "+item.title, width))
+		text := "→ " + item.title
+		if item.description != "" && m.height >= 24 {
+			description, _, _ := strings.Cut(item.description, "\n")
+			text += " · " + description
+		}
+		return colors(m.theme).active().Render(fitLine(text, width))
 	}
 	return colors(m.theme).subtle().Render(fitLine("No matches", width))
 }
@@ -323,7 +353,7 @@ func (m *Model) footerView(width int) string {
 	if width < 40 {
 		k := m.keyMap()
 		palette, stop := k.Palette, k.Stop
-		palette.SetHelp("F3", "commands")
+		palette.SetHelp("^Space", "commands")
 		stop.SetHelp("^S", "Stop")
 		return m.bindingHelp(width, contextHelp{short: []key.Binding{palette, stop}})
 	}
@@ -358,7 +388,7 @@ func (m *Model) hints(width int, pairs ...string) string {
 	for i := 0; i+1 < len(pairs); i += 2 {
 		keys = append(keys, key.NewBinding(key.WithKeys(pairs[i]), key.WithHelp(pairs[i], pairs[i+1])))
 	}
-	return h.ShortHelpView(keys)
+	return ansi.Truncate(h.ShortHelpView(keys), width, "")
 }
 
 func (m *Model) sidebarView(width, height int) string {

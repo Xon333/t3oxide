@@ -86,10 +86,10 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 			m.resize()
 		}
 	case "modal":
-		if m.dialog == nil || m.dialog.serial != id || m.dialog.kind != client.EnterText || m.detail != "" {
+		if m.dialog == nil || m.dialog.serial != id || m.dialog.kind != client.EnterText && m.dialog.launch == nil || m.detail != "" {
 			return nil
 		}
-		if m.dialog.preservedInitial != "" || !m.modalInput.Focused() {
+		if m.dialog.preservedInitial != "" || m.dialog.launch != nil && m.dialog.launch.preservedMessage != "" || !m.modalInput.Focused() {
 			return nil
 		}
 		if msg, ok := message.(tea.KeyPressMsg); ok && key.Matches(msg, m.modalInput.KeyMap.Paste) {
@@ -106,6 +106,25 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 			m.setInputProblem("modal", id, "Answer limit is 64 KiB / 9,999 lines; this input was not added"+m.retainAttempt(inputText(message)))
 		} else if m.modalInput.Value() != old {
 			m.clearInputProblem("modal", id)
+		}
+	case "launch-title":
+		if m.dialog == nil || m.dialog.serial != id || m.dialog.launch == nil || m.detail != "" || !m.launchTitle.Focused() || m.dialog.launch.preservedTitle != "" {
+			return nil
+		}
+		if msg, ok := message.(tea.KeyPressMsg); ok && key.Matches(msg, m.launchTitle.KeyMap.Paste) {
+			return m.componentCmd(kind, id, readClipboard)
+		}
+		message = m.clipboardInput(message)
+		text := inputText(message)
+		if strings.ContainsAny(text, "\t\r\n") || !utf8.ValidString(text) || strings.ContainsRune(text, utf8.RuneError) || strings.IndexFunc(text, unicode.IsControl) >= 0 {
+			m.problem = "Title contains text this editor would change; use Details to review preserved text"
+			return nil
+		}
+		old := m.launchTitle
+		m.launchTitle, cmd = m.launchTitle.Update(message)
+		if len(m.launchTitle.Value()) > 512 {
+			m.launchTitle = old
+			m.problem = "Title exceeds 512 bytes"
 		}
 	case "list":
 		if m.dialog == nil || m.dialog.serial != id || m.dialog.kind == client.EnterText || m.detail != "" {
@@ -152,6 +171,10 @@ func (m *Model) rejectInput(message tea.Msg, label string) bool {
 	current, selection := m.composer.Value(), m.composer.SelectedText()
 	if kind == "modal" {
 		current, selection = m.modalInput.Value(), m.modalInput.SelectedText()
+		if m.dialog.prompt != nil && m.dialog.prompt.Question.SingleLine && strings.ContainsAny(text, "\r\n") {
+			m.setInputProblem(kind, id, "This field is one line; this input was not added"+m.retainAttempt(text))
+			return true
+		}
 	}
 	combinedBytes := len(current) - len(selection) + len(text)
 	combinedNewlines := strings.Count(current, "\n") - strings.Count(selection, "\n") + strings.Count(text, "\n")

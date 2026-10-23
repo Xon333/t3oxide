@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,8 @@ type Manager struct {
 	listeners        sync.WaitGroup
 	closed           bool
 	nav              map[string]NavigationState
+	profileScope     []string
+	launchDrafts     map[draftIdentity]launchDraft
 }
 
 type draftIdentity struct{ env, thread string }
@@ -119,6 +122,7 @@ type Thread struct {
 	ID          string        `json:"id"`
 	Title       string        `json:"title"`
 	Project     string        `json:"project"`
+	ProjectID   string        `json:"projectId,omitempty"`
 	Status      string        `json:"status"`
 	Model       string        `json:"model"`
 	Lineage     *wire.Lineage `json:"lineage,omitempty"`
@@ -171,6 +175,8 @@ type Session struct {
 	notices                    chan string
 	wake                       chan struct{}
 	reconnect                  chan struct{}
+	receipt                    *Receipt
+	receiptBaselineRows        map[string]string
 }
 
 // Prompts and Notices are bounded channels. A UI must retire each prompt when
@@ -272,10 +278,10 @@ func (a *Session) Events(parent context.Context) iter.Seq2[Event, error] {
 			return
 		}
 		a.mu.Lock()
-		needsEnvironment := a.environment == nil
+		needsBrowser := a.thread == ""
 		a.mu.Unlock()
-		if needsEnvironment {
-			env, err := a.chooseEnvironment(ctx)
+		if needsBrowser {
+			result, err := a.Browse(ctx, "")
 			if err != nil {
 				if ctx.Err() == nil {
 					a.notice(err.Error())
@@ -283,8 +289,16 @@ func (a *Session) Events(parent context.Context) iter.Seq2[Event, error] {
 				<-ctx.Done()
 				return
 			}
+			if result.Next == nil {
+				<-ctx.Done()
+				return
+			}
+			draft := result.Next.Draft()
 			a.mu.Lock()
-			a.environment = &env
+			a.environment, a.thread = result.Next.environment, result.Next.thread
+			a.store.Select(a.thread)
+			a.draft = draft
+			a.restoreDraft = true
 			a.mu.Unlock()
 		}
 		delay := time.Second
@@ -392,15 +406,15 @@ func (a *Session) prepare(ctx context.Context, conn *wire.Connection) error {
 			a.features[k] = boolValue(v)
 		}
 	}
-	a.connectionState = "connected"
+	a.connectionState = "synchronizing"
 	thread, historical := a.thread, a.cachedHistory
 	a.mu.Unlock()
 	a.signal()
-	threads, err := a.List(ctx, "")
-	if err != nil {
-		return err
-	}
 	if thread == "" {
+		threads, err := a.List(ctx, "")
+		if err != nil {
+			return err
+		}
 		thread, err = a.chooseThreadFrom(ctx, threads)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -454,6 +468,11 @@ func (a *Session) consume(ctx context.Context, conn *wire.Connection, setup <-ch
 				return synchronized, err
 			}
 			synchronized = true
+			a.mu.Lock()
+			if a.conn == conn && a.helloVerified && a.ready {
+				a.connectionState = "connected"
+			}
+			a.mu.Unlock()
 			if !yield(a.renderEvent(), nil) {
 				return synchronized, context.Canceled
 			}
@@ -500,6 +519,10 @@ func (a *Session) applyPacket(packet wire.Packet) error {
 			a.mu.Lock()
 			a.retained = s
 			a.cachedHistory = false
+			if s.Metadata.Live && a.helloVerified && a.ready {
+				a.connectionState = "connected"
+			}
+			a.observeReceiptLocked(s)
 			if !s.Metadata.Historical {
 				if s.Metadata.ActiveRunID != nil {
 					a.activeRun = *s.Metadata.ActiveRunID
@@ -648,6 +671,21 @@ func (a *Session) statusLocked(s *wire.Snapshot) Status {
 		state += " · " + a.lastAction
 	}
 	status := Status{Context: contextLine, ModelName: model, State: state, ThreadID: a.thread, Delivery: a.delivery, Connected: a.ready, Writable: a.ready && a.writable}
+	status.ProfileIDs = a.manager.ProfileIDs()
+	status.Location = a.locationLocked(s)
+	status.ConnectionState = a.connectionState
+	if strings.HasPrefix(status.ConnectionState, "blocked") {
+		status.ConnectionState = "blocked"
+	}
+	if status.ConnectionState == "connected" && s != nil && !s.Metadata.Live && !s.Metadata.Historical {
+		status.ConnectionState = "synchronizing"
+	}
+	status.ActiveRunID = a.activeRun
+	status.DraftSaveFailed = a.draftError != nil
+	if a.receipt != nil {
+		receipt := *a.receipt
+		status.Receipt = &receipt
+	}
 	status.ModelCatalog = a.ready && a.features["modelCatalog"]
 	status.ModelControls = status.Writable && a.features["modelSelection"]
 	status.ThreadNavigation = a.ready && a.features["threadNavigation"]
@@ -658,12 +696,16 @@ func (a *Session) statusLocked(s *wire.Snapshot) Status {
 	if a.environment != nil {
 		status.ProfileID = a.environment.ID
 		status.EnvironmentID = a.environment.EnvironmentID
+		status.PendingAction = a.manager.State.Pending(a.environment.EnvironmentID, false) != nil
+		status.PendingStop = a.manager.State.Pending(a.environment.EnvironmentID, true) != nil
 		if o := a.manager.State.Override(a.environment.EnvironmentID, a.thread); o != nil {
 			status.NextModel = o.Selection.Summary()
 		}
 	}
 	if s != nil {
 		status.Requests = len(s.Metadata.Requests)
+		status.RunState = s.Metadata.Status
+		status.Historical = s.Metadata.Historical
 	}
 	return status
 }

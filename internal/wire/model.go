@@ -28,6 +28,7 @@ type Row struct {
 	SourceThreadID  string  `json:"sourceThreadId"`
 	ItemID          string  `json:"itemId"`
 	MessageID       *string `json:"messageId"`
+	RunID           *string `json:"runId,omitempty"`
 	Kind            string  `json:"kind"`
 	Text            string  `json:"text"`
 	Truncated       bool    `json:"truncated"`
@@ -44,6 +45,7 @@ type Metadata struct {
 	ThreadID       string                 `json:"threadId"`
 	Title          string                 `json:"title"`
 	ProjectID      *string                `json:"projectId,omitempty"`
+	Workspace      *string                `json:"workspace,omitempty"`
 	Model          string                 `json:"model"`
 	Mode           *string                `json:"mode,omitempty"`
 	Status         string                 `json:"status"`
@@ -179,6 +181,9 @@ func decodeMetadata(o object) (Metadata, error) {
 	if m.ProjectID, err = o.optID("projectId"); err != nil {
 		return m, err
 	}
+	if m.Workspace, err = o.optStr("workspace", MaxIdentifierBytes); err != nil {
+		return m, err
+	}
 	if m.Model, err = o.str("model", 256); err != nil {
 		return m, err
 	}
@@ -257,6 +262,9 @@ func decodeRow(raw []byte) (Row, error) {
 		return r, errors.New("transcript row key does not match its identity")
 	}
 	if r.MessageID, err = o.optID("messageId"); err != nil {
+		return r, err
+	}
+	if r.RunID, err = o.optID("runId"); err != nil {
 		return r, err
 	}
 	if r.Kind, err = o.str("kind", 256); err != nil {
@@ -550,9 +558,11 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 	n.Items = append([]Row(nil), s.Items...)
 	for i := range n.Items {
 		n.Items[i].MessageID = clonePtr(n.Items[i].MessageID)
+		n.Items[i].RunID = clonePtr(n.Items[i].RunID)
 		n.Items[i].Position = clonePtr(n.Items[i].Position)
 	}
 	n.Metadata.ProjectID = clonePtr(n.Metadata.ProjectID)
+	n.Metadata.Workspace = clonePtr(n.Metadata.Workspace)
 	n.Metadata.Mode = clonePtr(n.Metadata.Mode)
 	n.Metadata.ActiveRunID = clonePtr(n.Metadata.ActiveRunID)
 	n.Metadata.HistoryCursor = clonePtr(n.Metadata.HistoryCursor)

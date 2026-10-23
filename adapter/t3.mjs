@@ -2,9 +2,9 @@
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
-import { Fault, LIMIT, SOURCE, pageRows, clip, command, hash, identifier, launch, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
+import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, identifier, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
-import { FEATURES, catalog, modelCommand, modelView } from './models.mjs';
+import { FEATURES, catalog, launchCommand, modelCommand, modelView } from './models.mjs';
 import { threadList } from './navigation.mjs';
 
 export async function readConfig(path) {
@@ -75,6 +75,7 @@ export class T3 {
     return { protocol: 1, adapterRevision: SOURCE, environmentId: d.environmentId,
       serverVersion: d.serverVersion, orchestrationProtocol: d.orchestrationProtocolVersion,
       features: { ...FEATURES, modelSelection: d.capabilities?.serverResolvedCommandContext === true,
+        launchModelSelection: d.capabilities?.serverResolvedCommandContext === true,
         messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },
       writesEnabled: this.config.allowWrites === true && d.capabilities?.serverResolvedCommandContext === true };
   }
@@ -248,6 +249,12 @@ export class T3 {
         (event.type === 'message.updated' ? r.messageId === payload?.id : r.itemId === payload?.id));
       if (row && typeof (payload.text ?? payload.markdown) === 'string') {
         Object.assign(row, clip(payload.text ?? payload.markdown), { streaming: payload.streaming === true });
+        // Native queued user items can acquire a run without changing item ID.
+        // A provided causal field is authoritative; omission keeps prior data.
+        if (Object.hasOwn(payload, 'runId')) {
+          delete row.runId;
+          if (payload.runId != null) { try { row.runId = identifier(payload.runId, 'run id'); } catch {} }
+        }
         if (this.refreshing) this.duringRefresh.set(row.key, { sequence: item.sequence, row: {...row} });
         this.emitView(); return;
       }
@@ -305,7 +312,7 @@ export class T3 {
       requireThat(Array.isArray(page.items), 'Unsupported T3 history page.', 'incompatible');
       if (epoch !== this.epoch || this.closed) return null;
       const sequence = page.snapshotSequence ?? this.current.sequence;
-      this.current = { ...this.current, ...pageRows(page.items, sequence, page.nextCursor, page.hasMoreHistory),
+      this.current = { ...this.current, ...pageRows(page.items, sequence, page.nextCursor, page.hasMoreHistory, HISTORY_BUDGET),
         sequence, observedAt: new Date().toISOString() };
       this.setState('historical'); this.emitView(); return { threadId: id };
     } catch (error) {
@@ -348,9 +355,9 @@ export class T3 {
           // First dispatch uses fresh control state. An explicit same-ID retry
           // reuses the exact command, even if the original Stop/answer took effect.
           const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
-          const choices = op === 'select-model' || op === 'send' && a.modelSelection !== undefined
+          const choices = op === 'select-model' || ['send', 'launch'].includes(op) && a.modelSelection !== undefined
             ? await this.modelCatalog(p) : null;
-          receipt.payload = op === 'launch' ? launch(a,p) : modelCommand(op,a,p,this.descriptor,choices);
+          receipt.payload = op === 'launch' ? launchCommand(a,p,this.descriptor,choices) : modelCommand(op,a,p,this.descriptor,choices);
           receipt.tag = op === 'launch' ? 'orchestration.launchThread' : 'orchestration.dispatchCommand';
         }
         requireThat(!this.closed && this.rpc, 'T3 disconnected before dispatch.', 'disconnected');

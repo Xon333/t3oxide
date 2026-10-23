@@ -10,13 +10,19 @@ import (
 	"sync"
 )
 
+// Eight configured profile IDs may each contain 4096 bytes. Allow their
+// JSON-escaped appearance keys while keeping settings reads and writes bounded.
+const maxSettingsBytes = 128 * 1024
+
 // Settings stores appearance only. T3 retains all conversation authority.
 type Settings struct {
-	mu      sync.Mutex
-	path    string
-	Theme   string
-	Mouse   bool
-	Sidebar bool
+	mu                sync.Mutex
+	path              string
+	Theme             string
+	Mouse             bool
+	Sidebar           bool
+	environmentThemes map[string]string
+	forcedTheme       string
 }
 
 func LoadSettings(path string) (*Settings, error) {
@@ -29,18 +35,32 @@ func LoadSettings(path string) (*Settings, error) {
 		return nil, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 16*1024+1))
+	data, err := io.ReadAll(io.LimitReader(f, maxSettingsBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > 16*1024 {
-		return nil, errors.New("terminal settings exceed 16 KiB")
+	if len(data) > maxSettingsBytes {
+		return nil, errors.New("terminal settings exceed 128 KiB")
 	}
-	if err = json.Unmarshal(data, s); err != nil {
+	var saved struct {
+		Theme             string
+		Mouse             bool
+		Sidebar           bool
+		EnvironmentThemes map[string]string
+	}
+	saved.Theme, saved.Mouse = s.Theme, s.Mouse
+	if err = json.Unmarshal(data, &saved); err != nil {
 		return nil, fmt.Errorf("terminal settings: %w", err)
 	}
+	s.Theme, s.Mouse, s.Sidebar = saved.Theme, saved.Mouse, saved.Sidebar
+	s.environmentThemes = saved.EnvironmentThemes
 	if !ValidTheme(s.Theme) {
 		return nil, fmt.Errorf("unknown saved theme %q; choose terminal, violet, cyan or lime", s.Theme)
+	}
+	for id, name := range s.environmentThemes {
+		if id == "" || !ValidTheme(name) {
+			return nil, errors.New("invalid saved environment theme")
+		}
 	}
 	return s, nil
 }
@@ -51,9 +71,16 @@ func (s *Settings) save() error {
 	if s.path == "" {
 		return nil
 	} // In-memory settings are useful for embedded/test programs.
-	data, err := json.MarshalIndent(map[string]any{"theme": s.Theme, "mouse": s.Mouse, "sidebar": s.Sidebar}, "", "  ")
+	saved := map[string]any{"theme": s.Theme, "mouse": s.Mouse, "sidebar": s.Sidebar}
+	if len(s.environmentThemes) > 0 {
+		saved["environmentThemes"] = s.environmentThemes
+	}
+	data, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {
 		return err
+	}
+	if len(data)+1 > maxSettingsBytes {
+		return errors.New("terminal settings exceed 128 KiB")
 	}
 	dir := filepath.Dir(s.path)
 	if err = os.MkdirAll(dir, 0700); err != nil {
@@ -93,6 +120,7 @@ func (s *Settings) SetTheme(name string) error {
 		s.Theme = old
 		return err
 	}
+	s.forcedTheme = ""
 	return nil
 }
 func (s *Settings) SetMouse(on bool) error {
@@ -121,5 +149,9 @@ func (s *Settings) SetSidebar(on bool) error {
 func (s *Settings) appearance() (string, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Theme, s.Mouse, s.Sidebar
+	theme := s.Theme
+	if s.forcedTheme != "" {
+		theme = s.forcedTheme
+	}
+	return theme, s.Mouse, s.Sidebar
 }

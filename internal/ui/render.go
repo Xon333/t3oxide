@@ -20,7 +20,7 @@ const (
 )
 
 type rowSignature struct {
-	kind, text           string
+	kind, text, role     string
 	streaming, truncated bool
 	attachmentCount      int64
 }
@@ -76,7 +76,7 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 		r.cache = make(map[string]cachedRow)
 	}
 	next := make(map[string]cachedRow, min(len(req.snapshot.Items), wire.MaxRows))
-	limitNotice := layout.wrap(p.subtle().Render("Rendered page limit reached · open full T3 for remaining content"))
+	limitNotice := layout.wrap(p.subtle().Render("Display limit · Details in full T3"))
 	var out strings.Builder
 	for index, row := range req.snapshot.Items {
 		if index >= wire.MaxRows {
@@ -85,7 +85,7 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		signature := rowSignature{row.Kind, row.Text, row.Streaming, row.Truncated, row.AttachmentCount}
+		signature := rowSignature{kind: row.Kind, text: row.Text, role: agentRole(req.snapshot, row), streaming: row.Streaming, truncated: row.Truncated, attachmentCount: row.AttachmentCount}
 		cached, ok := r.cache[row.Key]
 		if !ok || cached.signature != signature {
 			source := safeText(row.Text)
@@ -98,9 +98,9 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 				body = p.subtle().Render("(no text)")
 			}
 			if row.Truncated {
-				body += "\n\n" + p.subtle().Render("Shortened by T3oxide · open full T3 for the rest")
+				body += "\n\n" + p.subtle().Render("Message shortened · Details in full T3")
 			}
-			cached = cachedRow{signature, layout.message(row, body, p)}
+			cached = cachedRow{signature, layout.message(row, body, p, signature.role)}
 		}
 		separator := ""
 		if out.Len() > 0 {
@@ -180,14 +180,28 @@ func newTranscriptLayout(width int) transcriptLayout {
 	return l
 }
 
-func (l transcriptLayout) message(row wire.Row, body string, p palette) string {
+// Snapshot lineage describes only its own thread. A borrowed/source row cannot
+// acquire that relationship from its label, key, or the containing page.
+func agentRole(snapshot *wire.Snapshot, row wire.Row) string {
+	if row.SourceThreadID != "" && row.SourceThreadID == snapshot.Metadata.ThreadID {
+		switch snapshot.Metadata.Lineage.Type() {
+		case "subagent":
+			return "Subagent"
+		case "fork":
+			return "Agent · fork"
+		}
+	}
+	return "Agent"
+}
+
+func (l transcriptLayout) message(row wire.Row, body string, p palette, agentRole string) string {
 	title := strings.NewReplacer("\n", " ", "\t", " ").Replace(safeText(row.Kind))
 	marker, rail, tint := "·", "┊", p.muted
 	switch row.Kind {
 	case "user", "user_message":
 		title, marker, rail, tint = "you", "›", "┃", p.secondary
 	case "assistant", "assistant_message":
-		title, marker, rail, tint = "assistant", "●", "│", p.accent
+		title, marker, rail = agentRole, "●", "│"
 	case "proposed_plan":
 		title, marker, rail, tint = "proposed plan", "◇", "│", p.accent
 	case "system_notice":
@@ -198,9 +212,12 @@ func (l transcriptLayout) message(row wire.Row, body string, p palette) string {
 		title, marker, rail, tint = "T3 error", "!", "┃", p.error
 	}
 	roleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(tint))
-	heading := roleStyle.Bold(true).Render(title)
+	heading := p.subtle().Render(title)
+	if row.Kind == "error" {
+		heading = roleStyle.Bold(true).Render(title)
+	}
 	if row.Streaming {
-		heading += p.subtle().Render(" · streaming")
+		heading += p.operational().Render(" · streaming")
 	}
 	if row.AttachmentCount > 0 {
 		heading += p.subtle().Render(fmt.Sprintf(" · %d attachment(s)", row.AttachmentCount))

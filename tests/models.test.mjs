@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { selection, sameSelection, catalog, validateChoice, modelCommand, modelView, runtimeDetails } from '../adapter/models.mjs';
+import { selection, sameSelection, catalog, validateChoice, launchCommand, modelCommand, modelView, runtimeDetails } from '../adapter/models.mjs';
 import { Fault, hash } from '../adapter/core.mjs';
 import { Journal } from '../adapter/journal.mjs';
 import { T3 } from '../adapter/t3.mjs';
@@ -135,10 +135,33 @@ test('missing provider telemetry is unreported, not copied from saved settings',
   const r=runtimeDetails(p);assert.equal(r.providerReportedSelection,null);assert.equal(r.providerReportedAt,null);
   delete p.runs[0].modelSelection;assert.equal(runtimeDetails(p).runModelSelection,null);
 });
+test('run message identity comes only from the selected native run, never a queued user row',()=>{
+  const p=projection();p.runs[0].userMessageId='old-send:message';
+  p.runs.push({id:'queued-run',status:'queued',userMessageId:'new-send:message'});
+  p.visibleTurnItems=[{item:{id:'new-row',threadId:'thread-a',type:'user_message',messageId:'new-send:message',text:'Next'}}];
+  const active=runtimeDetails(p);
+  assert.equal(active.runId,'run-a');assert.equal(active.runMessageId,'old-send:message');assert.equal(active.status,'running');
+  p.runs.pop();p.runs[0].status='completed';
+  const last=runtimeDetails(p);assert.equal(last.scope,'last-run');assert.equal(last.runMessageId,'old-send:message');
+  assert.equal(modelView({projection:p,snapshotSequence:12},'thread-a').runtimeDetails.runMessageId,'old-send:message');
+  for(const value of [undefined,null,'','bad\u0000id','x'.repeat(4097),{id:'invented'}]) {
+    p.runs[0].userMessageId=value;assert.equal(runtimeDetails(p).runMessageId,null);
+  }
+  p.runs=[];assert.equal(runtimeDetails(p).runMessageId,null);
+});
+test('launch validation permits new-thread-only models but rejects stale options even when inherited',()=>{
+  const p=projection(),cfg=sourceCatalog();cfg.providers[0].requiresNewThreadForModelChange=true;
+  const c=catalog(cfg,p),a={...action,title:'New',message:'Task',modelSelection:{instanceId:'provider-a',model:'model-b',options:[{id:'fastMode',value:true}]}};
+  assert.deepEqual(launchCommand(a,p,desc,c).modelSelection,a.modelSelection);
+  assert.throws(()=>launchCommand(a,p,{capabilities:{}},c),{code:'incompatible'});
+  p.thread.modelSelection.options.push({id:'removed-option',value:'old'});
+  assert.throws(()=>launchCommand({...a,modelSelection:p.thread.modelSelection},p,desc,c),{code:'stale'});
+  assert.deepEqual(launchCommand({...a,modelSelection:undefined},p,desc,null).modelSelection,p.thread.modelSelection);
+});
 
 async function durableFixture(t) {
   const dir=await mkdtemp(join(tmpdir(),'t3oxide-models-'));t.after(()=>rm(dir,{recursive:true,force:true}));
-  const state={p:projection(),config:sourceCatalog(),calls:[],reads:0,catalogReads:0,fail:false};
+  const state={p:projection(),config:sourceCatalog(),calls:[],tags:[],reads:0,catalogReads:0,fail:false};
   const backend=()=>{
     const journal=new Journal(join(dir,'journal'),hash({environment:'env-a',subject:'fixture-models'}));
     const server=new T3({environmentId:'env-a',allowWrites:true},()=>{},{journal});
@@ -147,8 +170,10 @@ async function durableFixture(t) {
     server.rpc={close(){},call(tag,payload){
       if(tag==='server.getConfig'){state.catalogReads++;return {promise:Promise.resolve(structuredClone(state.config))};}
       state.calls.push(structuredClone(payload));
+      state.tags.push(tag);
       if(payload.type==='thread.model-selection.set')state.p.thread.modelSelection=structuredClone(payload.modelSelection);
-      return {promise:state.fail?Promise.reject(new Fault('disconnected','Lost ACK',true)):Promise.resolve({sequence:13})};
+      return {promise:state.fail?Promise.reject(new Fault('disconnected','Lost ACK',true)):
+        Promise.resolve(tag==='orchestration.launchThread'?{threadId:payload.threadId}:{sequence:13})};
     }};
     t.after(()=>server.close());return server;
   };return {state,backend};
@@ -179,4 +204,60 @@ test('model acknowledgment storage failure remains uncertain, recoverable and ne
   await assert.rejects(s.act('select-model',action),{uncertain:true});s.close();
   s=backend();await new Promise(resolve=>setImmediate(resolve));assert.equal(state.calls.length,1);
   assert.deepEqual(await s.act('select-model',action),{sequence:13});assert.equal(state.calls.length,2);
+});
+const launchAction={id:'launch-op',environmentId:'env-a',threadId:'thread-a',title:' Human title ',message:'\nExact first message\n',
+  modelSelection:{instanceId:'provider-a',model:'model-b',options:[{id:'fastMode',value:true}]}};
+test('launch dispatches selected model once with exact source account/worktree/modes and no source configuration',async t=>{
+  const {state,backend}=await durableFixture(t);
+  Object.assign(state.p.thread,{worktreePath:'/fixture/existing-worktree',branch:'fixture-branch',runtimeMode:'approval-required',interactionMode:'default'});
+  state.config.providers[0].requiresNewThreadForModelChange=true;
+  const original=structuredClone(state.p),s=backend();
+  assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id});
+  assert.deepEqual(state.tags,['orchestration.launchThread']);assert.equal(state.reads,1);assert.equal(state.catalogReads,1);
+  assert.deepEqual(state.calls,[{commandId:launchAction.id,creationSource:'web',threadId:launchAction.id,
+    projectId:'project',title:launchAction.title,modelSelection:launchAction.modelSelection,
+    runtimeMode:'approval-required',interactionMode:'default',
+    workspaceStrategy:{type:'existing_worktree',worktreePath:'/fixture/existing-worktree',branch:'fixture-branch'},
+    initialMessage:{messageId:`${launchAction.id}:message`,text:launchAction.message,attachments:[]}}]);
+  assert.deepEqual(state.p,original);
+});
+test('inherited launch stays compatible without catalog reads and preserves root binding',async t=>{
+  const {state,backend}=await durableFixture(t),s=backend();state.config.providers=[];
+  const a={...launchAction,modelSelection:undefined};
+  await s.act('launch',a);
+  assert.equal(state.catalogReads,0);assert.deepEqual(state.calls[0].workspaceStrategy,{type:'root'});
+  assert.deepEqual(state.calls[0].modelSelection,current);assert.deepEqual(state.tags,['orchestration.launchThread']);
+});
+test('fresh launch rejects missing model, stale options, changed account, and unavailable provider without a mutation',async t=>{
+  for(const [name,change] of Object.entries({
+    model:state=>{state.config.providers[0].models.pop();},
+    option:state=>{state.config.providers[0].models[1].capabilities.optionDescriptors=[];},
+    value:state=>{state.config.providers[0].models[1].capabilities.optionDescriptors=[{id:'fastMode',type:'select',options:[{id:'default'}]}];},
+    account:state=>{state.p.thread.modelSelection.instanceId='another-account';state.config.providers[0].instanceId='another-account';},
+    unavailable:state=>{state.config.providers[0].enabled=false;},
+    archived:state=>{state.p.thread.archivedAt='now';},
+  })) await t.test(name,async t=>{
+    const {state,backend}=await durableFixture(t);change(state);
+    await assert.rejects(backend().act('launch',launchAction));assert.deepEqual(state.calls,[]);
+  });
+});
+test('uncertain launch restart retries the exact journalled payload without reading changed context or catalog',async t=>{
+  const {state,backend}=await durableFixture(t);let s=backend();state.fail=true;
+  await assert.rejects(s.act('launch',launchAction),{uncertain:true});
+  const prepared=s.journal.access(launchAction.id,hash({op:'launch',...launchAction}));
+  assert.equal(prepared.result,undefined);assert.equal(prepared.tag,'orchestration.launchThread');
+  assert.deepEqual(prepared.payload,state.calls[0]);s.close();
+  state.config.providers=[];state.p.thread={id:'thread-a',projectId:'different-project',worktreePath:'/fixture/changed',modelSelection:{instanceId:'other-account',model:'changed'}};
+  state.fail=false;s=backend();await new Promise(resolve=>setImmediate(resolve));assert.equal(state.calls.length,1);
+  assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id});
+  assert.equal(state.reads,1);assert.equal(state.catalogReads,1);assert.deepEqual(state.calls[1],prepared.payload);
+  assert.deepEqual(s.journal.access(launchAction.id,hash({op:'launch',...launchAction})).result,{threadId:launchAction.id});
+  await assert.rejects(s.act('launch',{...launchAction,modelSelection:current}),{code:'invalid_request'});
+  s.close();s=backend();assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id});
+  assert.equal(state.calls.length,2);assert.equal(state.reads,1);assert.equal(state.catalogReads,1);
+});
+test('read-only launch selection refuses all reads and writes',async t=>{
+  const {state,backend}=await durableFixture(t),s=backend();s.config.allowWrites=false;
+  await assert.rejects(s.act('launch',launchAction),{code:'read_only'});
+  assert.equal(state.reads,0);assert.equal(state.catalogReads,0);assert.deepEqual(state.calls,[]);
 });

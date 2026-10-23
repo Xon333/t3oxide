@@ -143,6 +143,9 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 	}
 	a.mu.Lock()
 	a.lastAction = op + " awaiting acknowledgement"
+	if op == "send" {
+		a.beginReceiptLocked(id, thread, s)
+	}
 	a.mu.Unlock()
 	a.signal()
 	result, err := conn.Request(requestCtx, op, fields, id)
@@ -156,8 +159,14 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 		}
 		a.mu.Lock()
 		a.lastAction = "action unconfirmed"
+		if op == "send" && a.receipt != nil && a.receipt.OperationID == id && (a.receipt.Phase == "sending" || a.receipt.Phase == "acknowledged") {
+			a.receipt.Phase = "uncertain"
+		}
 		if savedID == "" && !wire.IsUncertain(err) {
 			a.lastAction = "action rejected"
+			if op == "send" && a.receipt != nil && a.receipt.OperationID == id {
+				a.receipt.Phase = "rejected"
+			}
 		}
 		a.mu.Unlock()
 		if savedID != "" || wire.IsUncertain(err) {
@@ -191,8 +200,15 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 		a.manager.acceptDraft(env.EnvironmentID, thread, message)
 	}
 	a.manager.draftPersistence.Unlock()
+	currentSnapshot := a.store.Snapshot()
 	a.mu.Lock()
 	a.lastAction = op + " accepted"
+	if op == "send" {
+		a.acknowledgeReceiptLocked(id, numberValue(result["sequence"]), currentSnapshot)
+		if a.receipt != nil && (a.receipt.Phase == "responding" || receiptTerminal(a.receipt.Phase)) {
+			a.lastAction = ""
+		}
+	}
 	if op == "stop" {
 		a.lastAction = "Stop accepted · queue held"
 	}

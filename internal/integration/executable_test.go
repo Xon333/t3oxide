@@ -281,7 +281,8 @@ func TestAssembledExecutablePTYSendThemeResizeStopAndTerminalRestore(t *testing.
 		data, _ := os.ReadFile(settingsPath)
 		var settings object
 		_ = json.Unmarshal(data, &settings)
-		if settings["theme"] == "cyan" {
+		themes, _ := settings["environmentThemes"].(map[string]any)
+		if themes["fixture"] == "cyan" && settings["theme"] == "violet" {
 			break
 		}
 		if time.Now().After(deadline) {

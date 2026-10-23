@@ -20,7 +20,7 @@ func TestWorkspaceComposerCursorKeepsVisibleCapAndExactDraft(t *testing.T) {
 			t.Fatalf("cursor %s changed display cap/draft: height=%d", k.String(), m.composer.Height())
 		}
 		view := ansi.Strip(m.View().Content)
-		if !strings.Contains(view, "F3") || !strings.Contains(view, "Stop/hold") || len(strings.Split(view, "\n")) != 32 {
+		if !strings.Contains(view, "Ctrl+Space") || !strings.Contains(view, "Stop/hold") || len(strings.Split(view, "\n")) != 32 {
 			t.Fatal("cursor movement clipped workspace controls")
 		}
 	}

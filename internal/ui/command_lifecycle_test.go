@@ -91,8 +91,8 @@ func TestCommandLifecycleUsesOnlySuccessfulExplicitResultText(t *testing.T) {
 		t.Fatal("failed command claimed successful acknowledgment")
 	}
 	m.finishCommandNotice("send", result, nil)
-	if m.notice != result.Text {
-		t.Fatal("successful result lost its authoritative acknowledgment")
+	if m.notice != "" {
+		t.Fatal("send completion created an uncorrelated sticky acknowledgment")
 	}
 }
 

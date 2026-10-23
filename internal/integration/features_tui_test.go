@@ -21,16 +21,16 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	r, _ := startAppTUI(t, a)
 	r.waitText("Initial Markdown for Alpha")
 	awaitStatus(t, a, func(s client.Status) bool { return s.ModelControls })
-	r.send("\x1bm")
+	r.send("/model\r")
 	r.modalReady("Model · Current thread")
 	r.send("\x1b[B\r")
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.ModelName, "fixture-other") })
 	r.waitText("Thread: fixture-other")
-	r.send("\x1be")
+	r.send("/effort\r")
 	r.modalReady("Reasoning · Current thread")
 	r.send("\x1b[B\x1b[B\x1b[B\r")
 	r.waitText("high effort")
-	r.send("\x1bs")
+	r.send("/speed\r")
 	r.modalReady("Service tier · Current thread")
 	r.send("\x1b[B\x1b[B\r")
 	r.waitText("fast tier")
@@ -53,7 +53,7 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 		t.Fatal("UI preset removal was not saved")
 	}
 	r.send("/model next fixture-model\r")
-	r.waitText("Next send staged:")
+	r.waitText("Next send · fixture-model")
 	r.send("One-dispatch UI override\r")
 	f.waitMessage(t, "One-dispatch UI override")
 	r.waitText("Response after One-dispatch UI override")
@@ -65,22 +65,28 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 		t.Fatal("accepted UI override not cleared")
 	}
 	r.send("/threads\r")
-	r.modalReady("Threads · all")
-	r.send(" ")
+	r.modalReady("Conversations")
+	// The query owns Space and arrow editing. Reach the offered group action
+	// through the browser's native controls instead.
+	r.send(strings.Repeat("\t", 10))
+	r.waitText("→ Expand")
+	r.send("\r")
 	r.waitText("SUB child")
 	r.send("\x1b[B\r")
-	r.waitText("[SUBAGENT]")
+	r.waitText("Subagent")
 	r.send("/parent\r")
 	r.waitText("Initial Markdown for Alpha")
 	r.send("/threads\r")
-	r.modalReady("Threads · all")
-	r.send("\x1b[17~") // F6 opens the authoritative thread-type filter.
+	r.modalReady("Conversations")
+	r.send(strings.Repeat("\t", 7))
+	r.waitText("→ Agents / threads")
+	r.send("\r")
 	r.modalReady("Thread types")
 	r.send("\x1b[B\x1b[B\x1b[B\r")
-	r.modalReady("Threads · forks")
+	r.modalReady("Conversations")
 	r.waitText("FORK fork")
 	r.send("\r")
-	r.waitText("[FORK]")
+	r.waitText("Agent · fork")
 	r.send("\x11")
 	select {
 	case <-r.done:
@@ -102,7 +108,7 @@ func TestBubbleTeaFeaturesStopWhileModelPickerIsOpen(t *testing.T) {
 	r, _ := startAppTUI(t, a)
 	r.waitText("Initial Markdown for Alpha")
 	awaitStatus(t, a, func(s client.Status) bool { return s.ModelControls })
-	r.send("\x1bm")
+	r.send("/model\r")
 	r.modalReady("Model · Current thread")
 	r.send("\x13")
 	waitCommandType(t, f, "run.interrupt")
@@ -113,7 +119,13 @@ func TestBubbleTeaFeaturesStopWhileModelPickerIsOpen(t *testing.T) {
 	r.send("\x1b")
 	// Let Tea resolve the standalone Escape before sending the next key;
 	// adjacent bytes would describe Alt+Ctrl+D to a terminal input parser.
-	r.waitText("Dismissed locally")
+	deadline := time.Now().Add(3 * time.Second)
+	for strings.Contains(r.views.text(), "Model · Current thread") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if strings.Contains(r.views.text(), "Model · Current thread") {
+		t.Fatal("Escape retained the model picker after Stop")
+	}
 	r.send("\x11")
 	select {
 	case <-r.done:

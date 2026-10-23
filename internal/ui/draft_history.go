@@ -63,14 +63,14 @@ func (m *Model) retainAttempt(text string) string {
 	}
 	if len(text) <= maxInputBytes && utf8.ValidString(text) {
 		if err := m.rememberPrompt("attempt", text); err == nil {
-			return " · F5 recall"
+			return " · /recall"
 		}
 	}
 	path, err := writeEditorFile(text)
 	if err != nil {
 		// Disk failure must not discard the only copy of a rejected paste.
 		m.rememberLocalPrompt("attempt", text)
-		return " · F5 recalls this attempt in memory; recovery save failed: " + safeText(err.Error())
+		return " · /recall retains this attempt in memory; recovery save failed: " + safeText(err.Error())
 	}
 	return " · exact attempt saved at " + path
 }
@@ -103,7 +103,7 @@ func (m *Model) clearDraft() tea.Cmd {
 		m.problem = "Draft retained: " + safeText(err.Error())
 		return nil
 	}
-	m.notice = "Draft cleared · F5 recall"
+	m.notice = "Draft cleared · /recall"
 	return m.restoreFocus()
 }
 

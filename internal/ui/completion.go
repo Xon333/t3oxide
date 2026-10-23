@@ -132,7 +132,7 @@ func (m *Model) completionView(width int) string {
 		return ""
 	}
 	l := m.completion.list
-	l.SetSize(max(1, width-4), min(4, max(1, m.height/6)))
+	l.SetSize(max(1, width-4), min(len(l.VisibleItems()), min(4, max(1, m.height/6))))
 	m.styleList(&l)
 	keys := contextHelp{short: []key.Binding{bind("Tab", "complete", "tab"), m.keyMap().Literal}}
 	return framed("Commands", l.View()+"\n"+m.bindingHelp(width-4, keys), width-4, colors(m.theme), true)

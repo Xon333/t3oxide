@@ -206,7 +206,11 @@ func TestBubbleTeaProgramDrivesActualAppComposerThemeResizeAndQuit(t *testing.T)
 		data, err := os.ReadFile(settingsPath)
 		if err == nil {
 			var settings map[string]any
-			if json.Unmarshal(data, &settings) == nil && settings["theme"] == "cyan" {
+			if json.Unmarshal(data, &settings) == nil {
+				environments, _ := settings["environmentThemes"].(map[string]any)
+				if environments["fixture"] != "cyan" {
+					continue
+				}
 				changed = true
 				break
 			}
@@ -335,7 +339,7 @@ func TestBubbleTeaProgramThreadSwitchHistoryReconnectAndSearch(t *testing.T) {
 	r, _ := startAppTUI(t, a)
 	r.waitText("Initial Markdown for Alpha")
 	r.send("/switch Beta\r")
-	r.modalReady("Threads · all")
+	r.modalReady("Conversations")
 	r.send("\r")
 	r.waitText("Initial Markdown for Beta")
 	f.update("thread-a", "A retired conversation must not render here", 0)

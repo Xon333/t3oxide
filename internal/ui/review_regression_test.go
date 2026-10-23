@@ -37,7 +37,7 @@ func TestMultiselectHelpMatchesFilterAndContinueFocus(t *testing.T) {
 	m.Update(keyPress('a'))
 	m.Update(keyPress(tea.KeyF1))
 	h := strings.Join(strings.Fields(ansi.Strip(m.detail)), " ")
-	if !strings.Contains(h, "Enter") || strings.Contains(h, "Space") {
+	if !strings.Contains(h, "Enter") || strings.Contains(h, "Space toggle") {
 		t.Fatal("filter help advertised a toggle key owned by query editing")
 	}
 	m.Update(keyPress(tea.KeyEscape))

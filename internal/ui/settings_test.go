@@ -46,7 +46,7 @@ func TestSettingsPersistAppearanceOnlyAndKeepPrivateMode(t *testing.T) {
 }
 
 func TestSettingsRejectInvalidAndRollbackFailedSave(t *testing.T) {
-	for name, content := range map[string]string{"invalid-json": "{", "unknown-theme": `{"theme":"solar"}`, "too-large": strings.Repeat(" ", 16*1024+1)} {
+	for name, content := range map[string]string{"invalid-json": "{", "unknown-theme": `{"theme":"solar"}`, "too-large": strings.Repeat(" ", maxSettingsBytes+1)} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "terminal.json")
 			if err := os.WriteFile(path, []byte(content), 0600); err != nil {

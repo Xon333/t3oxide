@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/Xon333/t3oxide/internal/client"
 )
 
 func TestBubbleTeaComposerLiteralPathsCompletionAndExactRecoveredPaste(t *testing.T) {
@@ -27,13 +28,13 @@ func TestBubbleTeaComposerLiteralPathsCompletionAndExactRecoveredPaste(t *testin
 	r.program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	r.waitText("Message")
 	r.send("/mouse invalid\r")
-	r.waitText("F2 error")
+	r.waitText("Ctrl+L error")
 	// Invalid local arguments leave their source editable; Ctrl+X is explicit
 	// recoverable clear, and cannot send a command or remote Stop.
 	r.send("\x18")
 	r.waitText("Draft cleared")
 	r.program.Send(tea.PasteMsg{Content: "\tindented\r\nreplacement �\n "})
-	r.waitText("F5 recall")
+	r.waitText("Input kept · /recall")
 	r.program.Send(tea.KeyPressMsg{Code: tea.KeyF5})
 	r.waitText("Recall prompt")
 	r.send("\r")
@@ -41,7 +42,9 @@ func TestBubbleTeaComposerLiteralPathsCompletionAndExactRecoveredPaste(t *testin
 	r.send("\r")
 	exact := "\tindented\r\nreplacement �\n "
 	f.waitMessage(t, exact)
-	r.waitText("T3 acknowledged the message")
+	awaitStatus(t, a, func(s client.Status) bool {
+		return s.Receipt != nil && s.Receipt.Phase == "responding" && !s.PendingAction
+	})
 	r.send("typed immediately")
 	r.waitText("typed immediately")
 	if state.Pending("env-a", false) != nil {

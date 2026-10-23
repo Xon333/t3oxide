@@ -79,21 +79,24 @@ func (a *Session) invoke(ctx context.Context, name, args string) (Result, error)
 		next, err := a.filterTarget(ctx, args)
 		return Result{Next: next}, err
 	case "switch":
-		next, err := a.switchTarget(ctx, args)
-		result.Next = next
-		return result, err
+		return a.Browse(ctx, args)
 	case "env":
-		env, err := a.chooseEnvironment(ctx)
+		a.mu.Lock()
+		profile := ""
+		if a.environment != nil {
+			profile = a.environment.ID
+		}
+		a.mu.Unlock()
+		scope, err := a.chooseScope(ctx, a.manager.browserScope(profile))
 		if err != nil {
 			return result, err
 		}
-		target, err := a.Target(env.ID, "")
-		result.Next = target
-		return result, err
+		if len(scope) == 0 {
+			return result, nil
+		}
+		return a.Browse(ctx, args)
 	case "threads":
-		target, err := a.filteredTarget(ctx, args)
-		result.Next = target
-		return result, err
+		return a.Browse(ctx, args)
 	case "earlier", "latest":
 		return result, a.Navigate(ctx, name == "earlier")
 	case "delivery":
@@ -142,11 +145,15 @@ func (a *Session) invoke(ctx context.Context, name, args string) (Result, error)
 		result.Detail = "```json\n" + string(encoded) + "\n```\n\n`/retry` / `/retry stop` reuse the exact operation ID. `/resolve` clears a local record only after review."
 		return result, nil
 	case "reconnect":
+		a.mu.Lock()
+		a.connectionState = "reconnecting"
+		a.ready, a.writable = false, false
+		a.mu.Unlock()
+		a.signal()
 		select {
 		case a.reconnect <- struct{}{}:
 		default:
 		}
-		result.Text = "Reconnecting; saved writes are not replayed."
 		return result, nil
 	case "web":
 		a.mu.Lock()
@@ -162,57 +169,6 @@ func (a *Session) invoke(ctx context.Context, name, args string) (Result, error)
 	default:
 		return result, fmt.Errorf("unsupported command /%s", name)
 	}
-}
-
-func (a *Session) newConversation(ctx context.Context, title string) (Result, error) {
-	var result Result
-	s := a.snapshot()
-	if s == nil || !s.Metadata.Live || s.Metadata.ProjectID == nil {
-		return result, errors.New("select a live conversation in the existing workspace first")
-	}
-	if title == "" {
-		answer, err := a.asker.Ask(ctx, Question{Kind: EnterText, Title: "New conversation", Prompt: "Title — uses this conversation's existing project, checkout, model and mode."})
-		if err != nil {
-			return result, err
-		}
-		if answer.Cancelled {
-			return result, nil
-		}
-		title = answer.Text
-	}
-	if title == "" || len(title) > 512 {
-		return result, errors.New("title is required and must be at most 512 bytes")
-	}
-	a.mu.Lock()
-	environment := a.environment.EnvironmentID
-	a.mu.Unlock()
-	draftThread := launchDraftThread(s.Metadata.ThreadID)
-	answer, err := a.asker.Ask(ctx, Question{Kind: EnterText, Title: "First message", Prompt: "Your first message. T3 creates the conversation in the selected existing workspace; no new worktree is created.", Initial: a.manager.State.Draft(environment, draftThread)})
-	if err != nil {
-		return result, err
-	}
-	if answer.Cancelled {
-		return result, nil
-	}
-	if strings.TrimSpace(answer.Text) == "" {
-		return result, errors.New("first message is required")
-	}
-	if err = a.manager.State.SetDraft(environment, draftThread, answer.Text); err != nil {
-		return result, fmt.Errorf("nothing sent: preserve new-conversation draft: %w", err)
-	}
-	reply, err := a.perform(ctx, "launch", map[string]any{"threadId": s.Metadata.ThreadID, "title": title, "message": answer.Text}, "", false)
-	if err != nil {
-		return result, err
-	}
-	a.mu.Lock()
-	env := a.environment
-	a.mu.Unlock()
-	target, err := a.Target(env.ID, stringValue(reply["threadId"]))
-	if err != nil {
-		return result, fmt.Errorf("T3 created conversation %s; choose it with /threads after saving the current draft: %w", stringValue(reply["threadId"]), err)
-	}
-	result.Next = target
-	return result, err
 }
 
 func launchDraftThread(thread string) string { return "\x00new/" + thread }

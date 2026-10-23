@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/Xon333/t3oxide/internal/client"
@@ -29,6 +30,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.openFeedbackDetail()
 		return nil
 	case key.Matches(msg, k.Palette):
+		if (m.browserPage || m.launchPage) && m.dialog == nil {
+			m.openDetail("Navigation controls", m.helpText())
+			return nil
+		}
 		if m.searching {
 			m.openDetail("Search controls", m.helpText())
 			return nil
@@ -71,13 +76,23 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.dialog != nil {
 		// Error detail overlays the current request, never replacing its state.
-		if msg.String() == "f2" && !m.dialog.details && m.dialog.preservedInitial == "" && (m.problem != "" || m.streamProblem != "") && m.openFeedbackDetail() {
+		if (msg.String() == "f2" || msg.String() == "ctrl+l") && !m.dialog.details && m.dialog.preservedInitial == "" && (m.problem != "" || m.streamProblem != "") && m.openFeedbackDetail() {
 			return nil
 		}
-		if msg.String() == "ctrl+y" && m.dialog.preservedInitial != "" {
+		if msg.String() == "ctrl+y" && (m.dialog.preservedInitial != "" || m.dialog.launch != nil && m.dialog.launch.preservedMessage != "") {
 			return m.copyText("answer")
 		}
 		return m.dialogKey(msg)
+	}
+	if m.browserPage || m.launchPage {
+		if msg.String() == "esc" {
+			if m.cancelBrowser != nil {
+				m.cancelBrowser()
+			} else if m.cancelAction != nil {
+				m.cancelAction()
+			}
+		}
+		return nil
 	}
 	if m.searching {
 		switch msg.String() {
@@ -234,7 +249,9 @@ func commandProgress(name string) string {
 }
 
 func (m *Model) beginCommandNotice(name string) {
-	m.problem = ""
+	if name != "stop" && !m.durableProblem() {
+		m.problem = ""
+	}
 	// Stop has its own lane; admitting it must not erase ordinary action feedback.
 	if name != "stop" {
 		m.notice = ""
@@ -249,6 +266,9 @@ func (m *Model) finishCommandNotice(name string, result client.Result, err error
 		m.notice = ""
 	}
 	if err != nil {
+		return
+	}
+	if name == "send" || name == "switch" || name == "env" || name == "threads" || name == "model" || name == "effort" || name == "speed" || name == "reconnect" || name == "settings" {
 		return
 	}
 	if result.Text != "" {
@@ -318,6 +338,21 @@ func (m *Model) slash(text string) tea.Cmd {
 
 func (m *Model) dispatch(name, args string) tea.Cmd {
 	switch name {
+	case "settings":
+		items := []list.Item{choiceItem{title: "Model", command: "model"}, choiceItem{title: "Effort", command: "effort"}, choiceItem{title: "Tier", command: "speed"}, choiceItem{title: "Appearance", command: "theme"}}
+		m.dialogSerial++
+		m.dialog = &dialog{serial: m.dialogSerial, kind: client.ChooseOne, title: "Settings", local: "settings"}
+		m.dialog.list = m.newList("Settings", items)
+		m.resize()
+		return m.restoreFocus()
+	case "details":
+		if m.preservedDraft != "" {
+			m.openDetail("Exact draft", m.preservedDraft)
+			m.detailCopy = m.preservedDraft
+		} else if !m.openFeedbackDetail() {
+			m.openDetail("Conversation details", m.status.Context+"\n"+m.status.ModelName+"\n"+m.status.RunState)
+		}
+		return nil
 	case "quit":
 		return m.quit()
 	case "help", "keys":
@@ -329,7 +364,7 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 		if args == "" {
 			return m.openThemes()
 		}
-		if !ValidTheme(args) {
+		if !ValidTheme(args) && args != "default" {
 			m.problem = "Choose /theme terminal, /theme violet, /theme cyan or /theme lime"
 			return nil
 		}
@@ -389,11 +424,16 @@ func (m *Model) setting(kind, value string) tea.Cmd {
 	}
 	m.settingBusy = true
 	settings := m.settings
+	profile := m.appearanceProfile()
 	return func() tea.Msg {
 		var err error
 		switch kind {
 		case "theme":
-			err = settings.SetTheme(value)
+			if profile != "" {
+				err = settings.SetEnvironmentTheme(profile, value)
+			} else {
+				err = settings.SetTheme(value)
+			}
 		case "mouse":
 			err = settings.SetMouse(value == "on")
 		case "sidebar":
@@ -415,6 +455,10 @@ func (m *Model) copyText(which string) tea.Cmd {
 	case "detail":
 		text = m.detailCopyText()
 	case "answer":
+		if m.dialog != nil && m.dialog.launch != nil {
+			text = m.launchInput().Message
+			break
+		}
 		if m.dialog == nil || m.dialog.preservedInitial == "" {
 			m.notice = "No preserved initial answer to copy"
 			return nil
@@ -500,7 +544,7 @@ func (m *Model) highlightSearchLine() {
 	p := colors(m.theme)
 	m.viewport.StyleLineFunc = func(i int) lipgloss.Style {
 		if i == line {
-			return p.highlight().Underline(true)
+			return p.highlight()
 		}
 		return lipgloss.NewStyle()
 	}

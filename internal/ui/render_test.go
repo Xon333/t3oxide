@@ -42,7 +42,7 @@ func TestMarkdownUsesRealWireKindsAndKeyedReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := ansi.Strip(content)
-	for _, want := range []string{"you", "assistant · streaming", "@not-a-file", "你好", "First", "-old", "+new", "T3 notice", "2 attachment(s)", "Shortened by T3oxide"} {
+	for _, want := range []string{"you", "Agent · streaming", "@not-a-file", "你好", "First", "-old", "+new", "T3 notice", "2 attachment(s)", "Message shortened"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("render does not contain %q:\n%s", want, plain)
 		}
@@ -68,10 +68,10 @@ func TestMarkdownUsesRealWireKindsAndKeyedReplacement(t *testing.T) {
 	if len(r.cache) != 1 {
 		t.Fatalf("cache retained an earlier page: %d rows", len(r.cache))
 	}
-	old := content
+	oldMarkdown := r.markdown
 	req.theme = "lime"
 	content, _ = r.render(context.Background(), req)
-	if content == old || r.theme != "lime" {
+	if r.markdown == oldMarkdown || r.theme != "lime" {
 		t.Fatal("theme change did not invalidate styled Markdown")
 	}
 	req.width = 20
@@ -131,10 +131,10 @@ func TestTranscriptRolesHaveSeparateHeadersAndReadableSpacing(t *testing.T) {
 	plain := strings.Join(lines, "\n")
 	for _, want := range []string{
 		" › you\n ┃\n ┃ A question",
-		" ● assistant · streaming\n │\n │ An answer",
+		" ● Agent · streaming\n │\n │ An answer",
 		" · T3 notice\n ┊\n ┊ A notice",
 		" ! T3 error\n ┃\n ┃ An error",
-		"A question\n\n ● assistant",
+		"A question\n\n ● Agent",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("missing role hierarchy or spacing %q:\n%s", want, plain)
@@ -232,7 +232,7 @@ func TestTranscriptByteCapIncludesSpacingAndLimitNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(content) > maxRenderedBytes || !strings.Contains(ansi.Strip(content), "Rendered page limit reached") {
+	if len(content) > maxRenderedBytes || !strings.Contains(ansi.Strip(content), "Display limit") {
 		t.Fatalf("render cap or limit notice failed: %d bytes", len(content))
 	}
 	if len(r.cache) >= len(rows) {

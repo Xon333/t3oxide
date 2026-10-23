@@ -91,6 +91,7 @@ export function threadList(shell, query = '', options = {}) {
   for (const {t, depth} of nodes) {
     const l = lineage(t.lineage), parent = all.get(l?.parentThreadId);
     const row = { id: t.id, title: clip(t.title,512).text,
+      ...(t.projectId == null ? {} : { projectId: identifier(t.projectId, 'project id') }),
       project: clip(projects.get(t.projectId) ?? '',256).text,
       status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text,
       model: clip(t.modelSelection?.model ?? '',256).text,

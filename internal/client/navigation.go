@@ -150,7 +150,8 @@ func (a *Session) filterTarget(ctx context.Context, filter string) (*Session, er
 	}
 	n.Filter = filter
 	a.manager.saveNavigation(env.EnvironmentID, n)
-	return a.filteredTarget(ctx, "")
+	result, err := a.Browse(ctx, "")
+	return result.Next, err
 }
 
 func (a *Session) chooseThreadFrom(ctx context.Context, threads []Thread, queries ...string) (string, error) {

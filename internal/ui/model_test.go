@@ -21,7 +21,7 @@ import (
 func testModel(t *testing.T) *Model {
 	t.Helper()
 	m := NewModel(context.Background(), nil, nil)
-	t.Cleanup(m.Close)
+	t.Cleanup(func() { _ = m.Close() })
 	return m
 }
 
@@ -168,7 +168,7 @@ func TestSessionSwitchCancelsAttachmentAndIsolatesDraftsAndStaleMessages(t *test
 	}
 	_ = b.SetDraft("draft B")
 	m := NewModel(context.Background(), a, nil)
-	t.Cleanup(m.Close)
+	t.Cleanup(func() { _ = m.Close() })
 	m.Update(tea.PasteMsg{Content: "draft A"})
 	oldGeneration, oldCtx := m.generation, m.sessionCtx
 	latePaste := m.componentCmd("composer", 0, func() tea.Msg { return tea.PasteMsg{Content: "late old clipboard"} })
@@ -209,7 +209,7 @@ func TestRestoredDraftBeyondComponentLimitsIsPreservedUntilExplicitClear(t *test
 				t.Fatal(err)
 			}
 			m := NewModel(context.Background(), s, nil)
-			t.Cleanup(m.Close)
+			t.Cleanup(func() { _ = m.Close() })
 			m.Update(tea.PasteMsg{Content: "do not replace"})
 			m.handleKey(keyPress('x'))
 			if m.currentDraft() != original || s.Draft() != original || m.composer.Value() != "" || m.composer.Focused() {
@@ -435,7 +435,7 @@ func TestFullChoiceDetailsAreReachableInNarrowPaneWithoutAnswering(t *testing.T)
 	label := strings.Repeat("long choice ", 12) + "EXACT LABEL END"
 	description := strings.Repeat("specific consequence\n", 20) + "COMPLETE DESCRIPTION END"
 	m.openPrompt(retiredPrompt(5, client.Question{Kind: client.ChooseOne, Title: "Permission", Prompt: "Review this operation", Choices: []client.Choice{{ID: "specific-allow", Label: label, Description: description}}}))
-	if !strings.Contains(ansi.Strip(m.View().Content), "F2 details") {
+	if !strings.Contains(ansi.Strip(m.View().Content), "Ctrl+L details") {
 		t.Fatalf("full choice details were not discoverable:\n%s", ansi.Strip(m.View().Content))
 	}
 	m.dialogKey(keyPress(tea.KeyF2))
@@ -477,7 +477,7 @@ func TestNavigationRetiresPriorDialogBeforeOpeningNext(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewModel(context.Background(), s, nil)
-	t.Cleanup(m.Close)
+	t.Cleanup(func() { _ = m.Close() })
 	readPrompt := func() *client.Prompt {
 		t.Helper()
 		select {
@@ -506,7 +506,7 @@ func TestNavigationRetiresPriorDialogBeforeOpeningNext(t *testing.T) {
 			t.Fatal("new navigation opened before the old request retired")
 		}
 		m.Update(<-first)
-		if !m.actionBusy {
+		if !m.browserBusy {
 			t.Fatal("late canceled command cleared replacement action state")
 		}
 		next.Respond(client.Answer{Cancelled: true})

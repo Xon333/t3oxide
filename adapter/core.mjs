@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 export const SOURCE = '0e7346ccd9427c06161e222319e718e6bd70887f';
 export const LIMIT = Object.freeze({ frame: 384 * 1024, input: 96 * 1024,
   upstream: 16 * 1024 * 1024, text: 24 * 1024, view: 144 * 1024,
-  items: 80, threads: 200, prompt: 64 * 1024 });
+  items: 80, latestItems: 24, latestView: 48 * 1024, threads: 200, prompt: 64 * 1024 });
 export class Fault extends Error {
   constructor(code, message, uncertain = false) { super(message); this.code = code; this.uncertain = uncertain; }
 }
@@ -52,7 +52,10 @@ export function messageRow(row) {
   const source = identifier(row.sourceThreadId ?? item.threadId, 'source thread');
   const id = identifier(row.sourceItemId ?? item.id, 'source item');
   const body = item.text ?? item.markdown ?? item.message ?? item.summary ?? item.failure?.message ?? '';
+  let runId;
+  if (item.runId != null) { try { runId = identifier(item.runId, 'run id'); } catch {} }
   return { key: `${source}/${id}`, sourceThreadId: source, itemId: id,
+    ...(runId ? { runId } : {}),
     messageId: item.messageId ?? null, kind: item.type,
     position: Number.isSafeInteger(row.position) && row.position >= 0 ? row.position : 0,
     ...clip(body), streaming: item.streaming === true,
@@ -65,14 +68,18 @@ function fitRow(row) {
   }
   return row;
 }
-export function boundedRows(rows) {
+const latestBudget = Object.freeze({ items: LIMIT.latestItems, view: LIMIT.latestView });
+export const HISTORY_BUDGET = Object.freeze({ items: LIMIT.items, view: LIMIT.view });
+export function boundedRows(rows, budget = latestBudget) {
   const result = []; let bytes = 2;
-  for (let i = rows.length - 1; i >= 0 && result.length < LIMIT.items; i--) {
+  for (let i = rows.length - 1; i >= 0 && result.length < budget.items; i--) {
     const candidate = messageRow(rows[i]);
     if (!candidate) continue;
     const row = fitRow(candidate);
     const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
-    if (bytes + cost > LIMIT.view) break;
+    // The page target must not shorten a single row beyond its existing cap:
+    // there is no continuation cursor for the remainder of a message.
+    if (result.length && bytes + cost > budget.view) break;
     result.unshift(row); bytes += cost;
   }
   return result;
@@ -86,24 +93,27 @@ export function historyAnchor(row, sequence) {
     si: row.itemId, p: row.position ?? 0 })).toString('base64url');
 }
 export function trimView(v) {
+  const budget = v.historical ? HISTORY_BUDGET : latestBudget;
   let bytes = 2; const kept = [];
   for (const candidate of [...v.items].reverse()) {
     const row = fitRow(candidate);
     const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
-    if (kept.length >= LIMIT.items || bytes + cost > LIMIT.view) break;
+    if (kept.length >= budget.items || kept.length && bytes + cost > budget.view) break;
     kept.unshift(row); bytes += cost;
   }
   if (kept.length < v.items.length) {
     v.limited = true; v.hasMore = true;
     v.historyCursor = historyAnchor(kept[0], v.sequence);
   }
+  if (bytes > budget.view) v.limited = true;
   v.items = kept; return v;
 }
-export function pageRows(rows, sequence, cursor, hasMore) {
-  const items = boundedRows(rows);
+export function pageRows(rows, sequence, cursor, hasMore, budget = latestBudget) {
+  const items = boundedRows(rows, budget);
   const trimmed = rows.filter(r => READABLE.has(r.item?.type)).length > items.length;
   return { items, historyCursor: trimmed ? historyAnchor(items[0], sequence) : cursor ?? null,
-    hasMore: trimmed || hasMore === true, limited: trimmed };
+    hasMore: trimmed || hasMore === true,
+    limited: trimmed || Buffer.byteLength(JSON.stringify(items)) > budget.view };
 }
 const DECISIONS = new Set(['accept', 'acceptForSession', 'acceptAlways', 'decline', 'cancel']);
 export function requests(p) {
@@ -132,10 +142,16 @@ export function requests(p) {
 }
 export function view(snapshot, expected) {
   const p = targetThread(snapshot, expected);
+  const path = p.thread.worktreePath;
+  // Display the same authoritative binding launch() uses. Never clip a path
+  // into a different apparent workspace or turn malformed data into root.
+  const workspace = path == null ? 'root' : typeof path === 'string' && path.length > 0 &&
+    Buffer.byteLength(path) <= 4096 && !/[\x00-\x1f\x7f]/u.test(path) ? path : null;
   const active = [...p.runs].reverse().find(r => ['preparing', 'starting', 'running', 'waiting'].includes(r.status));
   const pending = requests(p), page = pageRows(p.visibleTurnItems, snapshot.snapshotSequence, snapshot.historyCursor, snapshot.hasMoreHistory);
   return { threadId: expected, title: clip(p.thread.title, 512).text,
-    projectId: p.thread.projectId, model: clip(p.thread.modelSelection?.model ?? '',256).text,
+    projectId: p.thread.projectId, ...(workspace === null ? {} : { workspace }),
+    model: clip(p.thread.modelSelection?.model ?? '',256).text,
     mode: p.thread.runtimeMode, status: active?.status ?? p.runs.at(-1)?.status ?? 'idle',
     activeRunId: active?.id ?? null, requests: pending,
     ...page,
@@ -181,12 +197,14 @@ export function command(op, a, p, d) {
   }
   throw new Fault('invalid_request', 'Unknown command.');
 }
-export function launch(a, p) {
+export function launch(a, p, modelSelection = p.thread?.modelSelection) {
   const id = identifier(a.id), message = text(a.message), title = text(a.title, 512);
   requireThat(title.trim() && message.trim(), 'Title and message are required.');
   requireThat(p.thread?.projectId && p.thread.modelSelection, 'Select an existing project thread first.');
+  requireThat(p.thread.id === a.threadId, 'Thread mismatch.', 'identity_mismatch');
+  requireThat(!p.thread.deletedAt && !p.thread.archivedAt, 'This thread is deleted or archived.', 'unavailable');
   return { commandId: id, creationSource: 'web', threadId: id,
-    projectId: p.thread.projectId, title, modelSelection: p.thread.modelSelection,
+    projectId: p.thread.projectId, title, modelSelection,
     runtimeMode: p.thread.runtimeMode, interactionMode: p.thread.interactionMode,
     workspaceStrategy: p.thread.worktreePath ? { type: 'existing_worktree', worktreePath: p.thread.worktreePath,
       ...(p.thread.branch ? { branch: p.thread.branch } : {}) } : { type: 'root' },

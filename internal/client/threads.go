@@ -22,6 +22,7 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 	}
 	var rows []struct {
 		ID, Title, Project, Status, Model *string
+		ProjectID                         *string
 		Lineage                           json.RawMessage
 		ParentTitle                       string
 		ChildCount, Depth                 int
@@ -40,6 +41,13 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 			return nil, false, errors.New("invalid bounded thread display fields")
 		}
 		seen[*row.ID] = true
+		projectID := ""
+		if row.ProjectID != nil {
+			if *row.ProjectID == "" || len(*row.ProjectID) > 4096 || strings.IndexFunc(*row.ProjectID, func(r rune) bool { return r < 32 }) >= 0 {
+				return nil, false, errors.New("invalid project identity in list")
+			}
+			projectID = *row.ProjectID
+		}
 		var lineage *wire.Lineage
 		if len(row.Lineage) > 0 && string(row.Lineage) != "null" {
 			var fields map[string]json.RawMessage
@@ -61,7 +69,7 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		if len(row.ParentTitle) > 512 || row.ChildCount < 0 || row.ChildCount > 1000000 || row.Depth < 0 || row.Depth > 12 {
 			return nil, false, errors.New("invalid thread navigation metadata")
 		}
-		threads = append(threads, Thread{ID: *row.ID, Title: *row.Title, Project: *row.Project, Status: *row.Status, Model: *row.Model, Lineage: lineage, ParentTitle: row.ParentTitle, ChildCount: row.ChildCount, Depth: row.Depth, Expanded: row.Expanded, ContextOnly: row.ContextOnly})
+		threads = append(threads, Thread{ID: *row.ID, Title: *row.Title, Project: *row.Project, ProjectID: projectID, Status: *row.Status, Model: *row.Model, Lineage: lineage, ParentTitle: row.ParentTitle, ChildCount: row.ChildCount, Depth: row.Depth, Expanded: row.Expanded, ContextOnly: row.ContextOnly})
 	}
 	return threads, more, nil
 }

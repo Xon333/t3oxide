@@ -72,7 +72,7 @@ func (m *Model) feedbackDiagnosis() (diagnosis, next string) {
 	text := strings.ToLower(m.problem + "\n" + m.streamProblem)
 	switch {
 	case m.inputProblem != "" && m.problem == m.inputProblem && strings.Contains(m.inputProblem, "not added"):
-		return "Input kept · F5 recall", "F5 recalls the rejected text; F4 opens the draft in your external editor. The previous draft was kept."
+		return "Input kept · /recall", "Use /recall for the rejected text or /edit for the external editor. The previous draft was kept."
 	case strings.Contains(text, "401"), strings.Contains(text, "unauthorized"),
 		strings.Contains(text, "authentication"), strings.Contains(text, "expired token"),
 		strings.Contains(text, "token expired"):
@@ -96,9 +96,9 @@ func (m *Model) feedbackDiagnosis() (diagnosis, next string) {
 
 func (m *Model) feedbackSummary(width int) string {
 	diagnosis, _ := m.feedbackDiagnosis()
-	hint := "F2 error"
+	hint := "Ctrl+L error"
 	if m.preservedDraft != "" || m.dialog != nil && m.dialog.preservedInitial != "" {
-		hint = "F8 error"
+		hint = "/error"
 	}
 	return ansi.Truncate(diagnosis, max(1, width-len(hint)-3), "…") + " · " + hint
 }

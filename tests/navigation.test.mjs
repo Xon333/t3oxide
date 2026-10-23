@@ -57,6 +57,11 @@ test('legacy ungrouped list keeps recency order and old shape fields',()=>{
  assert.deepEqual(ids(threadList(shell([a,b]))),['child','main']);
  const row=threadList(shell([a])).threads[0];for(const field of ['id','title','project','status','model'])assert.equal(typeof row[field],'string');
 });
+test('list includes exact optional project identity without deriving it from display labels',()=>{
+ const t=thread('one');const r=threadList(shell([t])).threads[0];assert.equal(r.projectId,'project');
+ delete t.projectId;assert.equal(Object.hasOwn(threadList(shell([t])).threads[0],'projectId'),false);
+ t.projectId='bad\u0000project';assert.throws(()=>threadList(shell([t])));
+});
 test('orphan and cyclic lineages remain bounded and never fabricate a main classification',()=>{
  const data=shell([thread('orphan','subagent','missing'),thread('cycle-a','subagent','cycle-b'),thread('cycle-b','subagent','cycle-a'),thread('self','subagent','self')]);
  const result=threadList(data,'',{grouped:true,expanded:['cycle-a','cycle-b','self']});

@@ -22,7 +22,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.4.0-bubbletea"
+var version = "0.5.0-bubbletea"
 
 const help = `t3oxide — terminal companion for your existing T3 environments
 
@@ -162,7 +162,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	if a.theme != "" {
-		settings.Theme = a.theme
+		if err = settings.OverrideTheme(a.theme); err != nil {
+			return err
+		}
 	}
 	if a.noMouse {
 		settings.Mouse = false

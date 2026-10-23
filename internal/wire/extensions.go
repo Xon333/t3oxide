@@ -48,6 +48,7 @@ func (l *Lineage) Validate() error {
 type RuntimeDetails struct {
 	Scope                     string                 `json:"scope"`
 	RunID                     *string                `json:"runId"`
+	RunMessageID              *string                `json:"runMessageId,omitempty"`
 	ProviderThreadID          *string                `json:"providerThreadId"`
 	ProviderSessionID         *string                `json:"providerSessionId"`
 	Status                    string                 `json:"status"`
@@ -99,7 +100,7 @@ func decodeExtensions(o object, m *Metadata) error {
 		default:
 			return fieldError("runtimeDetails.scope")
 		}
-		for _, id := range []*string{r.RunID, r.ProviderThreadID, r.ProviderSessionID} {
+		for _, id := range []*string{r.RunID, r.RunMessageID, r.ProviderThreadID, r.ProviderSessionID} {
 			if id != nil && !identifier(*id, MaxIdentifierBytes) {
 				return fieldError("runtimeDetails.id")
 			}

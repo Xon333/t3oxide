@@ -1,12 +1,28 @@
 package ui
 
 import (
+	"io"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/client"
 )
+
+// Filtering owns the query editor, but the current result remains selected.
+// Reuse the native delegate's rendering with its public applied-filter state;
+// the real list, cursor, editor and synchronous filtering remain untouched.
+type compactChoiceDelegate struct{ list.DefaultDelegate }
+
+func (d compactChoiceDelegate) Render(w io.Writer, model list.Model, index int, item list.Item) {
+	if model.FilterState() == list.Filtering {
+		selected := model.Index()
+		model.SetFilterState(list.FilterApplied)
+		model.Select(selected)
+	}
+	d.DefaultDelegate.Render(w, model, index, item)
+}
 
 type choiceItem struct {
 	id, title, description, command, args string
@@ -37,6 +53,9 @@ type dialog struct {
 	preservedInitial          string
 	filterQuery               string
 	finishFocused             bool
+	actionFocus               int // 0 is the native list/editor; 1..N offered page controls
+	surface                   client.Surface
+	launch                    *launchForm
 }
 
 func (m *Model) newList(title string, items []list.Item) list.Model {
@@ -58,9 +77,25 @@ func (m *Model) newList(title string, items []list.Item) list.Model {
 }
 func (m *Model) openPrompt(p *client.Prompt) {
 	q := p.Question
-	d := &dialog{prompt: p, kind: q.Kind, title: q.Title, description: q.Prompt, selected: make(map[string]bool)}
+	d := &dialog{prompt: p, kind: q.Kind, title: q.Title, description: q.Prompt, selected: make(map[string]bool), surface: q.Surface}
 	m.dialogSerial++
 	d.serial = m.dialogSerial
+	if q.Surface == client.SurfaceBrowser {
+		m.browserPage = true
+		if q.BrowserPage != nil {
+			d.description = q.BrowserPage.Error
+			if q.BrowserPage.More {
+				if d.description != "" {
+					d.description += " · "
+				}
+				d.description += "More conversations · Search"
+			}
+		}
+	}
+	if q.Surface == client.SurfaceLaunch && q.LaunchReview != nil {
+		m.launchPage = true
+		d.launch = newLaunchForm(q.LaunchReview)
+	}
 	if q.Kind == client.EnterText {
 		m.modalInput.SetValue("")
 		if len(q.Initial) <= maxInputBytes && strings.Count(q.Initial, "\n") < maxInputLines {
@@ -71,13 +106,18 @@ func (m *Model) openPrompt(p *client.Prompt) {
 			m.modalInput.SetValue("")
 			m.modalInput.Blur()
 		}
+		if q.SingleLine && strings.ContainsAny(q.Initial, "\r\n\t") {
+			d.preservedInitial = q.Initial
+			m.modalInput.SetValue("")
+			m.modalInput.Blur()
+		}
 		m.modalInput.CursorEnd()
 		m.modalInput.Placeholder = safeText(q.Placeholder)
 		if q.Placeholder == "" {
 			m.modalInput.Placeholder = "Your answer"
 		}
 		if d.preservedInitial != "" {
-			m.modalInput.Placeholder = "Original answer preserved · F2 reviews it"
+			m.modalInput.Placeholder = "Original answer preserved · Ctrl+L reviews it"
 		}
 	} else {
 		items := make([]list.Item, 0, len(q.Choices))
@@ -91,8 +131,14 @@ func (m *Model) openPrompt(p *client.Prompt) {
 				break
 			}
 		}
+		if q.Surface == client.SurfaceBrowser {
+			m.restoreBrowserState(d)
+		}
 	}
 	m.dialog = d
+	if d.launch != nil {
+		m.initLaunchEditors()
+	}
 	m.detail = ""
 	m.searching = false
 	m.composer.Blur()
@@ -101,12 +147,30 @@ func (m *Model) openPrompt(p *client.Prompt) {
 }
 
 func (m *Model) cancelDialog() tea.Cmd {
+	if m.dialog != nil && m.dialog.prompt == nil && m.browserDialog != nil {
+		m.dialog, m.browserDialog = m.browserDialog, nil
+		m.resize()
+		return m.restoreFocus()
+	}
 	if m.dialog != nil && m.dialog.prompt != nil {
-		m.dialog.prompt.Respond(client.Answer{Cancelled: true})
-		m.notice = "Dismissed locally · no answer sent to T3"
+		answer := client.Answer{Cancelled: true}
+		if m.dialog.launch != nil {
+			input := m.launchInput()
+			answer.Launch = &input
+		}
+		m.dialog.prompt.Respond(answer)
 	}
 	m.dialog = nil
+	if !m.actionBusy && !m.browserBusy {
+		m.browserPage = false
+		m.launchPage = false
+	}
 	m.resize()
+	oldTheme := m.theme
+	m.refreshAppearance(m.status.ProfileID, m.status.ProfileIDs)
+	if oldTheme != m.theme {
+		return tea.Batch(m.restoreFocus(), m.requestRender(false, false))
+	}
 	return m.restoreFocus()
 }
 
@@ -115,9 +179,12 @@ func (m *Model) chooseDialog() tea.Cmd {
 		return nil
 	}
 	d := m.dialog
+	if d.launch != nil {
+		return m.launchAction("create")
+	}
 	if d.kind == client.EnterText {
 		if d.preservedInitial != "" {
-			m.problem = "Original answer preserved · F2 review · Ctrl+Y copy · Ctrl+U replace"
+			m.problem = "Original answer preserved · Ctrl+L review · Ctrl+Y copy · Ctrl+U replace"
 			return nil
 		}
 		if len(m.modalInput.Value()) > 64*1024 {
@@ -160,6 +227,7 @@ func (m *Model) chooseDialog() tea.Cmd {
 		return nil
 	}
 	if d.prompt != nil {
+		m.saveBrowserState(d)
 		answer := client.Answer{ChoiceIDs: []string{selected.id}}
 		if !d.prompt.Respond(answer) {
 			m.notice = "This request was retired; no answer sent"
@@ -172,6 +240,10 @@ func (m *Model) chooseDialog() tea.Cmd {
 	m.resize()
 	focus := m.restoreFocus()
 	if selected.command != "" {
+		if m.browserDialog != nil && selected.command == "browser-settings" {
+			m.dialog, m.browserDialog = m.browserDialog, nil
+			return m.navigationAction("settings")
+		}
 		return tea.Batch(focus, m.dispatch(selected.command, selected.args))
 	}
 	return focus
@@ -187,6 +259,10 @@ func (m *Model) finishMultiple() tea.Cmd {
 		if d.selected[choice.ID] {
 			answer.ChoiceIDs = append(answer.ChoiceIDs, choice.ID)
 		}
+	}
+	if d.surface == client.SurfaceBrowser && len(answer.ChoiceIDs) == 0 {
+		m.notice = "Select at least one environment"
+		return nil
 	}
 	if !d.prompt.Respond(answer) {
 		m.notice = "This request was retired; no answer sent"
@@ -224,12 +300,13 @@ func (m *Model) openPalette() tea.Cmd {
 
 func (m *Model) openThemes() tea.Cmd {
 	items := []list.Item{
+		choiceItem{title: "Environment default", command: "theme", args: "default"},
 		choiceItem{title: "Terminal", description: "Your terminal colors · light or dark", command: "theme", args: "terminal"},
 		choiceItem{title: "Electric violet", command: "theme", args: "violet"},
 		choiceItem{title: "Electric cyan", command: "theme", args: "cyan"},
 		choiceItem{title: "Acid lime", command: "theme", args: "lime"},
 	}
-	d := &dialog{kind: client.ChooseOne, title: "Theme", local: "theme"}
+	d := &dialog{kind: client.ChooseOne, title: "Theme · " + m.appearanceProfile(), local: "theme"}
 	m.dialogSerial++
 	d.serial = m.dialogSerial
 	d.list = m.newList("Theme", items)
@@ -246,9 +323,12 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.dialog == nil {
 		return nil
 	}
+	if m.dialog.launch != nil && !m.dialog.details {
+		return m.launchKey(msg)
+	}
 	if m.dialog.details {
 		switch msg.String() {
-		case "esc", "f2", "enter":
+		case "esc", "f2", "ctrl+l", "enter":
 			m.dialog.details = false
 			m.questionViewport.SetContent(safeText(m.dialog.description))
 			m.resize()
@@ -268,6 +348,11 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.questionViewport.GotoBottom()
 		}
 		return nil
+	}
+	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany {
+		if handled, cmd := m.browserKey(msg); handled {
+			return cmd
+		}
 	}
 	if m.dialog.prompt != nil && m.dialog.prompt.Question.Navigation && m.dialog.list.FilterState() != list.Filtering {
 		action := ""
@@ -290,6 +375,10 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	switch msg.String() {
+	case "ctrl+j", "alt+enter", "shift+enter":
+		if m.dialog.prompt != nil && m.dialog.prompt.Question.SingleLine {
+			return nil
+		}
 	case "tab", "shift+tab":
 		if m.dialog.kind == client.ChooseMany {
 			m.dialog.finishFocused = !m.dialog.finishFocused
@@ -309,7 +398,7 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.refreshDialogDetails()
 			return m.restoreFocus()
 		}
-	case "f2":
+	case "f2", "ctrl+l":
 		m.dialog.details = true
 		m.questionViewport.SetContent(m.dialog.detailText)
 		m.resize()
@@ -441,6 +530,7 @@ func (m *Model) updateDialogFilter(message tea.Msg) tea.Cmd {
 	if d.list.FilterValue() != previous {
 		d.refilter(false)
 		m.refreshDialogDetails()
+		m.resize()
 	}
 	return m.componentCmd("list", d.serial, cmd)
 }
@@ -453,6 +543,10 @@ func (m *Model) refreshDialogDetails() {
 		return
 	}
 	d := m.dialog
+	if d.launch != nil {
+		m.refreshLaunchDetails()
+		return
+	}
 	text := safeText(d.title) + "\n\n" + safeText(d.description)
 	if d.preservedInitial != "" {
 		text += "\n\nPreserved initial answer:\n" + safeText(d.preservedInitial)
@@ -537,10 +631,14 @@ func (m *Model) refreshSearch(move bool) {
 }
 
 func (m *Model) navigationAction(action string) tea.Cmd {
-	if m.dialog == nil || m.dialog.prompt == nil || !m.dialog.prompt.Question.Navigation {
+	if m.dialog == nil || m.dialog.prompt == nil || (!m.dialog.prompt.Question.Navigation && m.dialog.surface != client.SurfaceBrowser) {
+		return nil
+	}
+	if m.dialog.surface == client.SurfaceBrowser && !slices.Contains(m.browserActions(), action) {
 		return nil
 	}
 	answer := client.Answer{Action: action}
+	m.saveBrowserState(m.dialog)
 	if item, ok := m.dialog.list.SelectedItem().(choiceItem); ok {
 		answer.ChoiceIDs = []string{item.id}
 	}
