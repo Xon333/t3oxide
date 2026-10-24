@@ -1,5 +1,7 @@
 # Native remainder — t3oxide 0.7
 
+This preserves the machine-bound handoff from the portable implementation pass. The subsequent adoption and its actual limits are recorded in [verification](docs/verification.md#native-adoption-2026-10-24); completed checks do not need replaying.
+
 The implementation, portable tests and Darwin/ARM64 cross-build are complete. This pass used Linux, disposable fixtures and synthetic state. It has no macOS terminal/AX session, Apple signing identity, installed T3 host access, existing SSH authentication or personal state. No installation, live migration, provider action or publication occurred.
 
 Use the supplied source and verification record. No further architecture decision or ordinary implementation is assigned here.
@@ -32,7 +34,3 @@ Restore the recorded client and helper release targets; do not delete new or old
 ## Measurement before a transport rewrite or performance claim
 
 This is optional for adoption and required before claiming fleet resource savings. Use `scripts/measure.py` on both the client and the identified host helper for equivalent 0.6/0.7 idle, streaming and switching workloads, with three short repetitions. Separate client, SSH, helper and shared T3/provider work; RSS sums are not unique memory. Add native event-to-presentation timing if that is the decision criterion. The supplied absence-only observations and deterministic 80/120/400 ms scheduling tests are not RAM, battery or end-to-end latency measurements.
-# Native remainder from the portable 0.7 handoff
-
-This records the machine-bound work left by the portable implementation pass. The subsequent adoption and its actual limits are recorded in [verification](docs/verification.md#native-adoption-2026-10-24); these instructions do not require replaying completed checks.
-
