@@ -12,6 +12,7 @@ import (
 
 func TestTopLevelRouterPreservesFocusedEditorKeys(t *testing.T) {
 	m := testModel(t)
+	finishCommand(t, m, m.dispatch("keyboard", "legacy"))
 	m.Update(tea.PasteMsg{Content: "first\nsecond"})
 	m.Update(keyPress('a', tea.ModCtrl))
 	m.Update(keyPress('e', tea.ModCtrl))
@@ -84,7 +85,8 @@ func TestTopLevelPaletteAndContextHelpPreserveQuery(t *testing.T) {
 		t.Fatal("context help lost the original list editor")
 	}
 	m.cancelDialog()
-	m.openPrompt(retiredPrompt(3001, client.Question{Kind: client.EnterText, Initial: "first\nsecond"}))
+	p, result, _ := intuitivePrompt(t, client.Question{Kind: client.EnterText, Initial: "first\nsecond"})
+	m.openPrompt(p)
 	m.restoreFocus()
 	m.Update(keyPress('a', tea.ModCtrl))
 	m.Update(keyPress('e', tea.ModCtrl))
@@ -93,10 +95,14 @@ func TestTopLevelPaletteAndContextHelpPreserveQuery(t *testing.T) {
 		t.Fatal("modal Ctrl+E escaped native editing")
 	}
 	m.Update(keyPress(tea.KeyF3))
+	if m.dialog == nil || m.dialog.local != "palette" || m.dialog.paletteSource == nil || m.dialog.paletteSource.prompt != p {
+		t.Fatal("request commands lost their live source")
+	}
 	m.Update(keyPress(tea.KeyEscape))
-	if m.dialog == nil || m.modalInput.Value() != "first\nsecond!" || !m.modalInput.Focused() {
+	if m.dialog == nil || m.dialog.prompt != p || m.modalInput.Value() != "first\nsecond!" || !m.modalInput.Focused() {
 		t.Fatal("request help lost the exact answer")
 	}
+	assertIntuitiveNoReply(t, result)
 }
 
 func TestSlashCompletionAcceptsBeforeExecutionAndKeepsInvalidArguments(t *testing.T) {

@@ -140,6 +140,28 @@ export function requests(p) {
         short.truncated || tooLarge ? 'Full request exceeds this compact view; review in T3.' : null };
   });
 }
+// Native provider children do not necessarily own an app run. Display their
+// correlated provider activity without inventing a run ID or Stop capability.
+export function activity(p) {
+  const active = [...p.runs].reverse().find(r => ['preparing', 'starting', 'running', 'waiting'].includes(r.status));
+  if (active) return { status: active.status, activeRunId: active.id, source: 'app-run' };
+  const last = p.runs.at(-1);
+  const nativeChild = p.thread.lineage?.relationshipToParent === 'subagent';
+  const provider = (p.providerThreads ?? []).find(t => t.id === p.thread.activeProviderThreadId &&
+    (t.appThreadId == null || t.appThreadId === p.thread.id));
+  if (nativeChild && (!last || provider && provider.id !== last.providerThreadId)) {
+    if (!provider) return { status: 'unreported', activeRunId: null, source: 'unreported' };
+    const turns = (p.providerTurns ?? []).filter(t => t.providerThreadId === provider.id)
+      .sort((a,b) => (b.ordinal ?? 0) - (a.ordinal ?? 0));
+    const turn = turns[0];
+    let status = turn?.status;
+    if (status === 'pending') status = 'preparing';
+    if (!status) status = ({active:'running',idle:'idle',error:'failed'})[provider.status] ?? 'unreported';
+    if (['preparing','running'].includes(status) && p.runtimeRequests.some(r => r.status === 'pending')) status = 'waiting';
+    return { status, activeRunId: null, source: 'provider-turn', providerThreadId: provider.id, providerTurnId: turn?.id ?? null };
+  }
+  return { status: last?.status ?? 'idle', activeRunId: null, source: last ? 'app-run' : 'none' };
+}
 export function view(snapshot, expected) {
   const p = targetThread(snapshot, expected);
   const path = p.thread.worktreePath;
@@ -147,13 +169,13 @@ export function view(snapshot, expected) {
   // into a different apparent workspace or turn malformed data into root.
   const workspace = path == null ? 'root' : typeof path === 'string' && path.length > 0 &&
     Buffer.byteLength(path) <= 4096 && !/[\x00-\x1f\x7f]/u.test(path) ? path : null;
-  const active = [...p.runs].reverse().find(r => ['preparing', 'starting', 'running', 'waiting'].includes(r.status));
+  const currentActivity = activity(p);
   const pending = requests(p), page = pageRows(p.visibleTurnItems, snapshot.snapshotSequence, snapshot.historyCursor, snapshot.hasMoreHistory);
   return { threadId: expected, title: clip(p.thread.title, 512).text,
     projectId: p.thread.projectId, ...(workspace === null ? {} : { workspace }),
     model: clip(p.thread.modelSelection?.model ?? '',256).text,
-    mode: p.thread.runtimeMode, status: active?.status ?? p.runs.at(-1)?.status ?? 'idle',
-    activeRunId: active?.id ?? null, requests: pending,
+    mode: p.thread.runtimeMode, status: currentActivity.status,
+    activeRunId: currentActivity.activeRunId, requests: pending,
     ...page,
     limited: page.limited || snapshot.payloadBudgetExceeded === true || p.runtimeRequests.filter(r => r.status === 'pending').length > 8,
     sequence: snapshot.snapshotSequence, observedAt: new Date().toISOString() };

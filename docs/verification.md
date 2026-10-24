@@ -2,6 +2,18 @@
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
+## Interaction and state correctness, 2026-10-24
+
+Version `0.6.0-bubbletea` consolidates model/options into one staged settings review with searchable field choosers and one Apply. Picker sizing uses the available panel rows. Commands index canonical names, aliases and bound Copy/normal-recovery/Stop-recovery variants. Ctrl+P opens Commands by default; `/keyboard legacy` retains editor Ctrl+P. Browser and settings surfaces name the attached Stop target; browsing never retargets Stop.
+
+The pass adds revision-bound question Back/Next and inline required validation, complete source-bound launch drafts, offline local preset management, identity-based browser selection, lifecycle scope, snapshot observation time and bounded continuation. The quiet 24-conversation default remains. Runless native children use correlated provider activity without inventing a Stop run ID. Rendering admits monotonic completed frames within the same page and preserves row-key reading anchors through reflow and rolling-window updates.
+
+Source checks passed on the existing Go 1.27.2 darwin/arm64 and Node 24.21.0 toolchains: all six Go package suites, vet and complete race runs; the 161-test Node suite; adapter/script syntax; module verification and tidy-diff. The actual adapter/Bubble Tea/executable-PTY integration package passed normally (95.948s) and under race detection (113.124s). Focused regressions cover slow-render liveness, page/theme/attachment retirement, anchors, 60×16/120×35 menu and form layout, exact staged settings and answer dispatch, custom multi-answer retention, legacy shortcuts and complete launch restoration. The final page-size metadata adjustment receives a separate client race/vet check; unchanged layers retain the complete-script result.
+
+`golang.org/x/text` is pinned to v0.39.0 for GO-2026-5970 and Goldmark to v1.7.17 for the reachable GO-2026-5320 scanner finding. Existing license texts are unchanged; the license version index is updated. The pinned `scripts/check-security.sh` source scan reports zero reachable vulnerabilities; this is static call-path evidence, not an exploitability claim.
+
+The ARM64 bundle is ad-hoc signed and version/help/strict-signature checked. These source and native PTY checks do not claim a new physical-key, Ghostty GUI, resource or latency benchmark. Receiving-client file publication and nonproductive smoke are recorded separately. Earlier acceptance below retains its original build identity.
+
 ## Lean browser loading, 2026-10-23
 
 Version `0.5.2-bubbletea` defaults to at most 24 unsettled conversations per environment. Subagents enter the navigation tree only through explicit expansion, type selection or search; ordinary expansion lists working children. Search retains access to settled conversations. Metadata-only list requests no longer acquire a WebSocket ticket or connection. The existing T3 HTTP shell endpoint still returns environment-wide metadata to the adapter; this change bounds the client projection, not the upstream fetch. No measured loading-time improvement or new GUI acceptance is claimed. The earlier 0.5.1 acceptance below retains its original identity.

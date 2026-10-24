@@ -559,12 +559,15 @@ func TestFeaturesTierDefaultClearsLegacySpeedFallback(t *testing.T) {
 	f.mu.Lock()
 	f.threads["thread-a"]["thread"].(object)["modelSelection"] = object{"instanceId": "fixture-provider", "model": "fixture-model", "options": []any{object{"id": "fastMode", "value": true}}}
 	f.mu.Unlock()
-	_, _, a, _ := startFeatureSession(t, f, "thread-a")
+	_, state, a, _ := startFeatureSession(t, f, "thread-a")
 	featureOK(t, a, "speed", "default")
 	if fixtureOption(f, "thread-a", "fastMode") != nil || fixtureOption(f, "thread-a", "serviceTier") != nil {
 		t.Fatal("provider default retained a hidden legacy speed override")
 	}
 	featureOK(t, a, "presets", "save Normal")
+	if presets := state.Presets("env-a"); len(presets) != 1 || len(presets[0].Selection.Options) != 0 {
+		t.Fatal("preset save retained stale options after acknowledged tier reset")
+	}
 	featureOK(t, a, "speed", "fast")
 	featureOK(t, a, "presets", "apply Normal")
 	if fixtureOption(f, "thread-a", "serviceTier") != nil {

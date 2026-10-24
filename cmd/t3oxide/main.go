@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -22,7 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.5.2-bubbletea"
+var version = "0.6.0-bubbletea"
 
 const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 
@@ -31,7 +32,7 @@ Examples:
   t3oxide --env m1 --thread THREAD_ID        open a specific conversation
 
 In the TUI:
-  Ctrl+O conversations · Tab→Ctrl+P commands · /edit · /recall · /help
+  Ctrl+O conversations · Ctrl+P commands · /edit · /recall · /help
   Ctrl+S Stop + queue hold · Ctrl+C keeps draft · Ctrl+Q exits
   /retry [stop] reuses the saved operation ID; local exit leaves T3 running.
 
@@ -47,6 +48,10 @@ Options:
   --theme NAME      terminal, violet, cyan, or lime
   --no-mouse        native terminal selection; /mouse can change it later
   --json            JSON for envs, threads or doctor; status always emits JSON
+  --json-envelope   versioned threads JSON with completeness and continuation
+  --scope NAME      threads: active, all, completed, failed
+  --cursor N        threads: continuation offset from the previous envelope
+  --limit N         threads: 1–200 results
   --version         print version
   --help            print this help
 
@@ -55,9 +60,11 @@ Host credentials stay on the host. Existing T3 services are never started here.
 `
 
 type arguments struct {
-	command, config, state, env, thread, theme string
-	json, noMouse, version, help               bool
-	words                                      []string
+	command, config, state, env, thread, theme              string
+	json, jsonEnvelope, noMouse, version, help, listOptions bool
+	scope                                                   string
+	cursor, limit                                           int
+	words                                                   []string
 }
 
 func parse(args []string) (arguments, error) {
@@ -78,6 +85,32 @@ func parse(args []string) (arguments, error) {
 			a.version = true
 		case "--json":
 			a.json = true
+		case "--json-envelope":
+			a.json = true
+			a.jsonEnvelope = true
+		case "--scope", "--cursor", "--limit":
+			a.listOptions = true
+			if i+1 == len(args) {
+				return a, fmt.Errorf("%s needs a value", arg)
+			}
+			i++
+			value := args[i]
+			if arg == "--scope" {
+				a.scope = value
+				if value != "active" && value != "all" && value != "completed" && value != "failed" {
+					return a, errors.New("scope must be active, all, completed or failed")
+				}
+			} else {
+				n, err := strconv.Atoi(value)
+				if err != nil || n < 0 || arg == "--limit" && (n < 1 || n > 200) || n > 1000000 {
+					return a, errors.New("invalid list cursor/limit")
+				}
+				if arg == "--cursor" {
+					a.cursor = n
+				} else {
+					a.limit = n
+				}
+			}
 		case "--no-mouse":
 			a.noMouse = true
 		case "--config", "--state", "--env", "--thread", "--theme":
@@ -111,6 +144,9 @@ func parse(args []string) (arguments, error) {
 	}
 	if a.command != "" && a.command != "envs" && a.command != "threads" && a.command != "status" && a.command != "doctor" {
 		return a, fmt.Errorf("unknown command %q; use --help", a.command)
+	}
+	if (a.jsonEnvelope || a.listOptions) && a.command != "threads" {
+		return a, errors.New("list format, scope and paging options require threads")
 	}
 	if a.theme != "" && !ui.ValidTheme(a.theme) {
 		return a, errors.New("theme must be terminal, violet, cyan, or lime")
@@ -266,12 +302,15 @@ func headless(ctx context.Context, a arguments, envs []config.Environment, out i
 	if err != nil {
 		return err
 	}
-	result, err := inspect(ctx, env, strings.Join(a.words, " "), a.thread)
+	result, err := inspectList(ctx, env, strings.Join(a.words, " "), a.thread, map[string]any{"lifecycle": a.scope, "cursor": a.cursor, "limit": a.limit})
 	if err != nil {
 		return err
 	}
 	if a.command == "status" || a.json {
 		if a.command == "threads" {
+			if a.jsonEnvelope {
+				return writeJSON(out, map[string]any{"schemaVersion": 1, "profile": env.ID, "threads": result["threads"], "more": result["more"], "observedAt": result["observedAt"], "scope": result["lifecycle"], "cursor": result["cursor"], "nextCursor": result["nextCursor"]})
+			}
 			return writeJSON(out, result["threads"])
 		}
 		return writeJSON(out, result)
@@ -296,6 +335,9 @@ func headless(ctx context.Context, a arguments, envs []config.Environment, out i
 }
 
 func inspect(parent context.Context, env config.Environment, query, thread string) (map[string]any, error) {
+	return inspectList(parent, env, query, thread, nil)
+}
+func inspectList(parent context.Context, env config.Environment, query, thread string, options map[string]any) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
 	defer cancel()
 	conn, err := wire.Start(ctx, env)
@@ -315,15 +357,23 @@ func inspect(parent context.Context, env config.Environment, query, thread strin
 	if err = validateHello(hello, env.EnvironmentID); err != nil {
 		return nil, err
 	}
-	listing, err := conn.Request(ctx, "list", map[string]any{"query": query}, "")
+	fields := map[string]any{"query": query}
+	for key, value := range options {
+		if key == "lifecycle" && value == "" || key == "limit" && value == 0 {
+			continue
+		}
+		fields[key] = value
+	}
+	listing, err := conn.Request(ctx, "list", fields, "")
 	if err != nil {
 		return nil, err
 	}
-	threads, more, err := client.DecodeThreads(listing)
+	page, err := client.DecodeThreadPage(listing)
+	threads, more := page.Threads, page.More
 	if err != nil {
 		return nil, err
 	}
-	result := map[string]any{"profile": env.ID, "adapter": hello, "threads": threads, "more": more}
+	result := map[string]any{"profile": env.ID, "adapter": hello, "threads": threads, "more": more, "observedAt": page.ObservedAt, "lifecycle": page.Lifecycle, "cursor": page.Cursor, "nextCursor": page.NextCursor}
 	if thread == "" {
 		return result, nil
 	}

@@ -15,6 +15,7 @@ func (a *Session) Commands() []CommandSpec { return CommandCatalog() }
 func CommandCatalog() []CommandSpec {
 	return []CommandSpec{
 		{Name: "model", Description: "Choose the current thread model; optional next stages one message"},
+		{Name: "settings", Description: "Stage the current model and advertised options, then apply once"},
 		{Name: "effort", Description: "Choose supported reasoning effort; optional next"},
 		{Name: "speed", Description: "Choose advertised service tier / fast mode; optional next"},
 		{Name: "presets", Description: "Apply, save or remove environment-scoped model favorites"},
@@ -62,6 +63,8 @@ func (a *Session) Command(ctx context.Context, name, args string) (result Result
 func (a *Session) invoke(ctx context.Context, name, args string) (Result, error) {
 	var result Result
 	switch name {
+	case "settings":
+		return a.settings(ctx)
 	case "model":
 		return a.pickModel(ctx, args)
 	case "effort", "speed":

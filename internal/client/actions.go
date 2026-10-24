@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/Xon333/t3oxide/internal/wire"
@@ -285,20 +284,11 @@ func (a *Session) List(ctx context.Context, query string) ([]Thread, error) {
 	if conn == nil {
 		return nil, errors.New("adapter is not connected")
 	}
-	fields := map[string]any{"query": query}
-	if navigation && env != nil {
-		n := a.manager.navigation(env.EnvironmentID)
-		expanded := []string{}
-		for id, open := range n.Expanded {
-			if open {
-				expanded = append(expanded, id)
-			}
-		}
-		sort.Strings(expanded)
-		fields["grouped"] = true
-		fields["typeFilter"] = n.Filter
-		fields["expanded"] = expanded
+	n := NavigationState{}
+	if env != nil {
+		n = a.manager.navigation(env.EnvironmentID)
 	}
+	fields := listFields(query, n, navigation)
 	result, err := conn.Request(ctx, "list", fields, "")
 	if err != nil {
 		return nil, err

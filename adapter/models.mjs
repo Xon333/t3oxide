@@ -1,6 +1,6 @@
 // Additive companion-v1 model controls. T3 contract provenance: docs/model-navigation.md.
 // No provider process, credentials, or model catalog is owned by this client.
-import { Fault, clip, command, identifier, launch, requireThat, stable, text, view } from './core.mjs';
+import { Fault, activity, clip, command, identifier, launch, requireThat, stable, text, view } from './core.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
 export const FEATURES = Object.freeze({ modelCatalog: true, modelSelection: true,
@@ -53,8 +53,9 @@ export function lineage(value) {
 }
 
 export function runtimeDetails(p) {
+  const observed = activity(p);
   const active = [...p.runs].reverse().find(r => ACTIVE.has(r.status));
-  const run = active ?? p.runs.at(-1);
+  const run = observed.source === 'provider-turn' ? null : active ?? p.runs.at(-1);
   // Never relabel an old provider thread as the runtime of a newly starting run.
   const providerThreadId = run ? run.providerThreadId : p.thread.activeProviderThreadId;
   const providerThread = (p.providerThreads ?? []).find(t => t.id === providerThreadId);
@@ -67,7 +68,8 @@ export function runtimeDetails(p) {
     runMessageId: optionalIdentifier(run?.userMessageId),
     providerThreadId: providerThread?.id ?? null,
     providerSessionId: session?.id ?? null,
-    status: clip(run?.status ?? providerThread?.status ?? 'unreported', 64).text,
+    status: clip(observed.source === 'provider-turn' ? observed.status : run?.status ?? providerThread?.status ?? 'unreported', 64).text,
+    activitySource: observed.source,
     runModelSelection: optionalSelection(run?.modelSelection),
     providerReportedSelection: optionalSelection(providerThread?.nativeMetadata?.modelSelection),
     providerReportedAt: clip(providerThread?.nativeMetadata?.updatedAt ?? '', 128).text || null,

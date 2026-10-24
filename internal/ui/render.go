@@ -27,15 +27,45 @@ type rowSignature struct {
 type cachedRow struct {
 	signature rowSignature
 	rendered  string
+	lines     int
 }
+type renderedRow struct {
+	key          string
+	start, lines int
+}
+
+// A reading position belongs to an authoritative item, rather than a line in
+// the concatenated page. Keep the desired offset even when a reflow temporarily
+// makes that item shorter; restoring the earlier layout can then restore it.
+type readingAnchor struct {
+	key    string
+	offset int
+}
+
+type renderPageIdentity struct {
+	thread, cursor string
+	historical     bool
+}
+
+func pageIdentity(snapshot *wire.Snapshot) renderPageIdentity {
+	meta := snapshot.Metadata
+	id := renderPageIdentity{thread: meta.ThreadID, historical: meta.Historical}
+	if meta.Historical && meta.HistoryCursor != nil {
+		id.cursor = *meta.HistoryCursor
+	}
+	return id
+}
+
 type transcriptRenderer struct {
 	width    int
 	theme    string
 	markdown *glamour.TermRenderer
 	cache    map[string]cachedRow
+	rows     []renderedRow
 }
 type renderRequest struct {
 	generation, revision, serial uint64
+	page                         uint64
 	snapshot                     *wire.Snapshot
 	width                        int
 	theme                        string
@@ -45,11 +75,16 @@ type renderedMsg struct {
 	request renderRequest
 	content string
 	err     error
+	rows    []renderedRow
 }
 
 // render is used by one asynchronous Tea command at a time. Its cache is
 // bounded by the currently displayed authoritative page, not conversation age.
 func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (string, error) {
+	r.rows = nil
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if req.snapshot == nil {
 		return "", nil
 	}
@@ -78,6 +113,7 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 	next := make(map[string]cachedRow, min(len(req.snapshot.Items), wire.MaxRows))
 	limitNotice := layout.wrap(p.subtle().Render("Display limit · Details in full T3"))
 	var out strings.Builder
+	var line int
 	for index, row := range req.snapshot.Items {
 		if index >= wire.MaxRows {
 			break
@@ -100,7 +136,8 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 			if row.Truncated {
 				body += "\n\n" + p.subtle().Render("Message shortened · Details in full T3")
 			}
-			cached = cachedRow{signature, layout.message(row, body, p, signature.role)}
+			rendered := layout.message(row, body, p, signature.role)
+			cached = cachedRow{signature: signature, rendered: rendered, lines: strings.Count(rendered, "\n") + 1}
 		}
 		separator := ""
 		if out.Len() > 0 {
@@ -116,6 +153,8 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 			break
 		}
 		next[row.Key] = cached
+		r.rows = append(r.rows, renderedRow{key: row.Key, start: line, lines: cached.lines})
+		line += cached.lines + 1 // two newlines between the last and next row
 		out.WriteString(separator)
 		out.WriteString(cached.rendered)
 	}
@@ -124,6 +163,50 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 		out.WriteString(layout.wrap(p.subtle().Render("No messages on this page.\nUse the composer when Latest is synchronized.")))
 	}
 	return out.String(), nil
+}
+
+func anchorAt(rows []renderedRow, line int) readingAnchor {
+	for _, row := range rows {
+		if line < row.start+row.lines {
+			return readingAnchor{key: row.key, offset: max(0, line-row.start)}
+		}
+	}
+	if len(rows) > 0 {
+		row := rows[len(rows)-1]
+		return readingAnchor{key: row.key, offset: row.lines - 1}
+	}
+	return readingAnchor{}
+}
+
+func remapAnchor(anchor readingAnchor, old, next []renderedRow) (readingAnchor, int) {
+	index := make(map[string]renderedRow, len(next))
+	for _, row := range next {
+		index[row.key] = row
+	}
+	if row, ok := index[anchor.key]; ok {
+		return anchor, row.start + min(anchor.offset, row.lines-1)
+	}
+	// Prefer the closest surviving neighbour, breaking ties toward the next
+	// item. A fully replaced rolling window falls back to its first item.
+	for i, row := range old {
+		if row.key != anchor.key {
+			continue
+		}
+		for distance := 1; distance < len(old); distance++ {
+			for _, j := range []int{i + distance, i - distance} {
+				if j >= 0 && j < len(old) {
+					if retained, ok := index[old[j].key]; ok {
+						return readingAnchor{key: retained.key}, retained.start
+					}
+				}
+			}
+		}
+		break
+	}
+	if len(next) > 0 {
+		return readingAnchor{key: next[0].key}, next[0].start
+	}
+	return readingAnchor{}, 0
 }
 
 // Base styles and rendering contracts are reused from released Glamour v2.0.1,

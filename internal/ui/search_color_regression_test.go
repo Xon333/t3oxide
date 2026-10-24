@@ -27,7 +27,7 @@ func TestSearchColorPreservesStyledUnicodeThroughRouter(t *testing.T) {
 			t.Cleanup(func() { _ = m.Close() })
 			m.Update(tea.WindowSizeMsg{Width: 100, Height: 45})
 			var renderer transcriptRenderer
-			req := renderRequest{generation: m.generation, width: m.contentWidth, theme: theme, reset: true}
+			req := renderRequest{generation: m.generation, page: m.renderPage, width: m.contentWidth, theme: theme, reset: true}
 			req.snapshot = &wire.Snapshot{Items: []wire.Row{{
 				Key: "synthetic", Kind: "assistant_message",
 				Text: "Initial **Markdown** for Alpha — Café 界 👩🏽‍💻\n\nSecond **Markdown** result.",

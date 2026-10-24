@@ -32,7 +32,7 @@ func optionKey(key string) string {
 
 var applicationKeys = appKeyMap{
 	Stop: bind("Ctrl+S", "Stop/hold", "ctrl+s"), Quit: bind("Ctrl+Q", "exit", "ctrl+q"),
-	Help: bind("/help", "help", "f1"), Palette: bind("Ctrl+Space", "commands", "ctrl+space", "ctrl+@", "f3"),
+	Help: bind("/help", "help", "f1"), Palette: bind("Ctrl+P", "commands", "ctrl+p", "ctrl+space", "ctrl+@", "f3"),
 	Threads: bind("Ctrl+O", "browser", "ctrl+o", "f6"), Environments: bind("Ctrl+E", "environments", "ctrl+e"),
 	Requests: bind("Ctrl+R", "requests", "ctrl+r"), Search: bind("Ctrl+F", "find", "ctrl+f"),
 	Sidebar: bind("Ctrl+B", "sidebar", "ctrl+b"), Model: bind(optionKey("M"), "model", "alt+m"),
@@ -48,11 +48,12 @@ var applicationKeys = appKeyMap{
 
 func (m *Model) keyMap() appKeyMap {
 	k := applicationKeys
+	legacy := m.settings != nil && m.settings.legacyEditorCtrlP()
 	normal := m.detail == "" && m.dialog == nil && !m.searching && !m.browserPage && !m.launchPage
 	reading := normal && m.transcriptFocus
 	k.Error.SetEnabled(m.problem != "" || m.streamProblem != "")
 	if m.searching || m.dialog != nil && m.dialog.prompt != nil {
-		k.Palette.SetHelp("Ctrl+Space", "help")
+		k.Palette.SetHelp("Ctrl+P", "commands")
 	}
 	for _, b := range []*key.Binding{&k.Threads, &k.Requests, &k.Model, &k.Effort, &k.Speed, &k.Parent, &k.Focus, &k.Edit, &k.Clear, &k.Recall, &k.Literal, &k.Send} {
 		b.SetEnabled(normal)
@@ -64,14 +65,16 @@ func (m *Model) keyMap() appKeyMap {
 		b.SetEnabled(reading)
 	}
 	if normal && (m.transcriptFocus || m.currentDraft() == "") {
-		k.Palette.SetKeys("ctrl+space", "ctrl+@", "f3", "ctrl+p")
-		k.Palette.SetHelp("Ctrl+P", "commands")
 		k.Threads.SetKeys("ctrl+o", "f6", "ctrl+t")
 		k.Quit.SetKeys("ctrl+q", "ctrl+d")
-	} else if normal {
-		// Ctrl+P belongs to the nonempty editor. Tab transfers focus before
-		// the portable palette shortcut becomes available.
-		k.Palette.SetHelp("Tab→Ctrl+P", "commands")
+	}
+	if legacy && (m.searching || m.dialog != nil || normal && !m.transcriptFocus && m.currentDraft() != "") {
+		k.Palette.SetKeys("ctrl+space", "ctrl+@", "f3")
+		if normal {
+			k.Palette.SetHelp("Shift+Tab→Ctrl+P", "commands")
+		} else {
+			k.Palette.SetHelp("F3", "commands")
+		}
 	}
 	if reading {
 		k.Help.SetKeys("f1", "?")
@@ -183,7 +186,7 @@ func (m *Model) helpText() string {
 		}
 		parts = append(parts, line+"  "+spec.title)
 	}
-	parts = append(parts, "RECOVERY\nCtrl+C dismisses locally and keeps the draft. Ctrl+X clears it into /recall prompt history. Local exit leaves T3 running. Stop holds the reviewed turn's queue; retries reuse the saved operation ID.\n\nPORTABLE CONTROLS\nTab to reading, Ctrl+P opens Commands. /new, /settings, /edit, /recall, /error and /details are also available. Ctrl+G selects all in the editor.")
+	parts = append(parts, "RECOVERY\nCtrl+C dismisses locally and keeps the draft. Ctrl+X clears it into /recall prompt history. Local exit leaves T3 running. Stop holds the reviewed turn's queue; retries reuse the saved operation ID.\n\nPORTABLE CONTROLS\nCtrl+P opens Commands without changing draft text. /new, /settings, /edit, /recall, /error and /details are also available. Ctrl+G selects all in the editor. /keyboard legacy restores editor Ctrl+P; Shift+Tab then Ctrl+P opens Commands, including from slash completion. /keyboard modern restores the default.")
 	if runtime.GOOS == "darwin" {
 		parts = append(parts, "⌥ is Option. Chords depend on terminal mapping; the Ghostty launcher uses left Option as Alt. Slash commands remain available regardless of terminal key mapping.")
 	}

@@ -20,15 +20,17 @@ bash scripts/build-go.sh
 
 Follow [installation](NATIVE.md) to prepare the host adapter and environment profiles, then [Go setup and controls](NATIVE-GO.md) to install the executable on your PATH. Distributions include `NOTICE` and `LICENSES/` alongside the binary. Installation does not install, upgrade, start or restart T3.
 
-The client starts in the conversation browser. **Enter** opens a conversation; **Ctrl+O** returns to the browser, and **Esc** resumes the attached conversation. **Tab** switches between reading and writing; **Tab → Ctrl+P** opens commands from the composer. Use `/help` for the full controls.
+The client starts in the conversation browser. **Enter** opens a conversation; **Ctrl+O** returns to the browser, and **Esc** resumes the attached conversation. **Tab** switches between reading and writing; **Ctrl+P** opens commands from the composer without changing its text. Use `/help` for the full controls.
 
 ## Features
 
 - A separate conversation browser with up to 24 active conversations per environment by default, project/lineage navigation and Resume to the active conversation. Settled threads stay out of the default list; working subagents load only on explicit expansion or selection. Search can find settled conversations.
-- Markdown transcript, native composer editing, slash completion, searchable commands and portable controls without required function keys.
+- Markdown transcript with stable reading anchors, native composer editing, slash completion and searchable commands with portable controls.
+- One settings review for model and supported options, with searchable field choices and a single Apply. Question forms retain progress through Back/Next and validate before submission.
 - Exact external editing and bounded prompt recall, including recoverable rejected code pastes and explicit clears.
 - One New conversation review for the first message, title and supported local model/effort/tier choices in the selected existing workspace.
-- Smaller latest pages, Earlier/Latest navigation, per-thread drafts and explicit recovery of uncertain writes.
+- Smaller latest pages, Earlier/Latest navigation, complete new-conversation drafts and explicit recovery of uncertain writes.
+- Explicit lifecycle filters and bounded list continuation; optional versioned JSON output retains scope and completeness.
 - Current-thread, next-message and supported launch settings from the selected provider's advertised capabilities.
 - Human-authored messages with queue/steer intent, independent Stop with queue hold, request review and separate connection/run/receipt status.
 - Per-environment appearance with distinct defaults, fixed violet/cyan/lime choices and a Terminal theme that inherits terminal colors. See [theme controls](NATIVE-GO.md#themes).
@@ -55,6 +57,7 @@ On an Apple Silicon Mac with Go 1.26.0+, Node 22.4+, Python 3 and Apple command-
 ```sh
 bash scripts/check-go.sh
 bash scripts/check.sh
+bash scripts/check-security.sh
 bash scripts/build-go.sh
 ```
 

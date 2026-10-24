@@ -190,8 +190,12 @@ func TestIntuitiveDensityCompactFooterUsesContext(t *testing.T) {
 	}
 	m.status.Requests = 0
 	m.restoreDraft("nonempty human draft")
-	if footer = ansi.Strip(m.footerView(56)); !strings.Contains(footer, "Tab→Ctrl+P commands") {
+	if footer = ansi.Strip(m.footerView(56)); !strings.Contains(footer, "Ctrl+P commands") {
 		t.Fatalf("nonempty editor advertised wrong context: %q", footer)
+	}
+	finishCommand(t, m, m.dispatch("keyboard", "legacy"))
+	if footer = ansi.Strip(m.footerView(70)); !strings.Contains(footer, "Shift+Tab→Ctrl+P commands") {
+		t.Fatalf("legacy editor lost its explicit command route: %q", footer)
 	}
 }
 

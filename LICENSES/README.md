@@ -29,11 +29,11 @@ The complete dependency graph is pinned by `go.mod` and `go.sum`. This source de
 | `github.com/rivo/uniseg` | `v0.4.7` | [github.com_rivo_uniseg-LICENSE.txt](github.com_rivo_uniseg-LICENSE.txt) |
 | `github.com/sahilm/fuzzy` | `v0.1.3` | [github.com_sahilm_fuzzy-LICENSE.txt](github.com_sahilm_fuzzy-LICENSE.txt) |
 | `github.com/xo/terminfo` | `v1.0.0` | [github.com_xo_terminfo-LICENSE.txt](github.com_xo_terminfo-LICENSE.txt) |
-| `github.com/yuin/goldmark` | `v1.7.8` | [github.com_yuin_goldmark-LICENSE.txt](github.com_yuin_goldmark-LICENSE.txt) |
+| `github.com/yuin/goldmark` | `v1.7.17` | [github.com_yuin_goldmark-LICENSE.txt](github.com_yuin_goldmark-LICENSE.txt) |
 | `github.com/yuin/goldmark-emoji` | `v1.0.5` | [github.com_yuin_goldmark-emoji-LICENSE.txt](github.com_yuin_goldmark-emoji-LICENSE.txt) |
 | `golang.org/x/net` | `v0.39.0` | [golang.org_x_net-LICENSE.txt](golang.org_x_net-LICENSE.txt) |
 | `golang.org/x/sync` | `v0.22.0` | [golang.org_x_sync-LICENSE.txt](golang.org_x_sync-LICENSE.txt) |
 | `golang.org/x/sys` | `v0.47.0` | [golang.org_x_sys-LICENSE.txt](golang.org_x_sys-LICENSE.txt) |
-| `golang.org/x/text` | `v0.24.0` | [golang.org_x_text-LICENSE.txt](golang.org_x_text-LICENSE.txt) |
+| `golang.org/x/text` | `v0.39.0` | [golang.org_x_text-LICENSE.txt](golang.org_x_text-LICENSE.txt) |
 
 Tests can fetch additional upstream test-only dependencies through the standard Go module graph. No dependency source or generated Go module cache is packaged.

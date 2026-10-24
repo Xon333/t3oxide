@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Xon333/t3oxide/internal/wire"
 )
@@ -147,27 +148,30 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 		fields["decision"] = answer.ChoiceIDs[0]
 	case "user_input_request":
 		questions, err := objects(selected["questions"])
-		if err != nil || len(questions) > 8 {
+		if err != nil || len(questions) == 0 || len(questions) > 8 {
 			return errors.New("review this question set in full T3")
 		}
-		answers := make(map[string]any, len(questions))
-		seen := map[string]bool{}
-		for _, question := range questions {
-			qid := stringValue(question["id"])
-			if qid == "" || seen[qid] {
-				return errors.New("question identities are missing or duplicated")
-			}
-			seen[qid] = true
-			value, answered, err := a.askQuestion(requestCtx, stringValue(selected["prompt"]), question)
-			if err != nil {
-				return err
-			}
-			if !answered {
-				return nil
-			}
-			if value != nil {
-				answers[qid] = value
-			}
+		requestQuestions, err := decodeRequestQuestions(questions)
+		if err != nil {
+			return err
+		}
+		progress := &RequestProgress{Index: 0, Answers: map[string]any{}}
+		answer, err := a.asker.Ask(requestCtx, Question{
+			Kind: EnterText, Title: "T3 questions", Prompt: stringValue(selected["prompt"]),
+			RequestQuestions: requestQuestions, RequestProgress: progress,
+		})
+		if err != nil {
+			return err
+		}
+		if answer.Cancelled || answer.RequestAction == "cancel" {
+			return nil
+		}
+		if answer.RequestAction != "submit" || answer.RequestProgress == nil {
+			return errors.New("submit the complete T3 question form or cancel")
+		}
+		answers, err := validateRequestAnswers(requestQuestions, answer.RequestProgress.Answers)
+		if err != nil {
+			return err
 		}
 		fields["answers"] = answers
 	default:
@@ -181,6 +185,184 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 	}
 	_, err := a.perform(requestCtx, "answer", fields, "", false)
 	return err
+}
+
+func decodeRequestQuestions(raw []map[string]any) ([]RequestQuestion, error) {
+	questions := make([]RequestQuestion, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, item := range raw {
+		id := stringValue(item["id"])
+		if id == "" || len(id) > 128 || seen[id] {
+			return nil, errors.New("question identities are missing, oversized, or duplicated")
+		}
+		seen[id] = true
+		header, err := requestString(item, "header")
+		if err != nil {
+			return nil, err
+		}
+		question, err := requestString(item, "question")
+		if err != nil {
+			return nil, err
+		}
+		initial, err := requestString(item, "initialAnswer")
+		if err != nil {
+			return nil, err
+		}
+		if len(header) > 256 || len(question) > 4096 || len(initial) > 64*1024 || !utf8.ValidString(header) || !utf8.ValidString(question) || !utf8.ValidString(initial) {
+			return nil, errors.New("question text exceeds its byte limit or is not UTF-8")
+		}
+		q := RequestQuestion{ID: id, Header: header, Question: question, InitialAnswer: initial, Required: true}
+		if q.Header == "" {
+			q.Header = "T3 question"
+		}
+		if q.Question == "" {
+			q.Question = id
+		}
+		if value, exists := item["required"]; exists {
+			b, ok := value.(bool)
+			if !ok {
+				return nil, errors.New("unsupported required flag")
+			}
+			q.Required = b
+		}
+		if value, exists := item["multiSelect"]; exists {
+			b, ok := value.(bool)
+			if !ok {
+				return nil, errors.New("unsupported question control flag")
+			}
+			q.MultiSelect = b
+		}
+		if value, exists := item["allowCustomAnswer"]; exists {
+			b, ok := value.(bool)
+			if !ok {
+				return nil, errors.New("unsupported question control flag")
+			}
+			q.AllowCustomAnswer = b
+		}
+		options, err := objects(item["options"])
+		if err != nil || len(options) > 24 {
+			return nil, errors.New("question options require full T3")
+		}
+		for _, option := range options {
+			label, err := requestString(option, "label")
+			if err != nil {
+				return nil, err
+			}
+			value, err := requestString(option, "value")
+			if err != nil {
+				return nil, err
+			}
+			description, err := requestString(option, "description")
+			if err != nil {
+				return nil, err
+			}
+			if value == "" {
+				value = label
+			}
+			if label == "" || value == "" || len(label) > 256 || len(value) > 1024 || len(description) > 512 || !utf8.ValidString(label) || !utf8.ValidString(value) || !utf8.ValidString(description) {
+				return nil, errors.New("unsupported question option; use full T3")
+			}
+			q.Options = append(q.Options, RequestOption{Label: label, Value: value, Description: description})
+		}
+		questions = append(questions, q)
+	}
+	return questions, nil
+}
+
+func requestString(value map[string]any, key string) (string, error) {
+	item, exists := value[key]
+	if !exists {
+		return "", nil
+	}
+	text, ok := item.(string)
+	if !ok {
+		return "", fmt.Errorf("unsupported non-text T3 question field %s", key)
+	}
+	return text, nil
+}
+
+func validateRequestAnswers(questions []RequestQuestion, values map[string]any) (map[string]any, error) {
+	if len(values) > len(questions) {
+		return nil, errors.New("answer form contains unknown question identities")
+	}
+	known := make(map[string]bool, len(questions))
+	for _, q := range questions {
+		known[q.ID] = true
+	}
+	for id := range values {
+		if !known[id] {
+			return nil, errors.New("answer form contains unknown question identities")
+		}
+	}
+	answers := make(map[string]any, len(questions))
+	for _, q := range questions {
+		value, present := values[q.ID]
+		if !present || value == nil {
+			if q.Required {
+				return nil, fmt.Errorf("%s requires an answer", q.Header)
+			}
+			continue
+		}
+		allowed := make(map[string]bool, len(q.Options))
+		for _, option := range q.Options {
+			allowed[option.Value] = true
+		}
+		if q.MultiSelect && len(q.Options) > 0 {
+			selected, ok := answerStrings(value)
+			if !ok {
+				return nil, fmt.Errorf("%s requires a list of offered answers", q.Header)
+			}
+			if len(selected) == 0 {
+				if q.Required {
+					return nil, fmt.Errorf("%s requires an answer", q.Header)
+				}
+				continue
+			}
+			seen := map[string]bool{}
+			for _, answer := range selected {
+				if answer == "" || seen[answer] || !allowed[answer] && !q.AllowCustomAnswer {
+					return nil, fmt.Errorf("%s contains an answer not offered by T3", q.Header)
+				}
+				seen[answer] = true
+			}
+			answers[q.ID] = selected
+			continue
+		}
+		answer, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s requires one text answer", q.Header)
+		}
+		if answer == "" {
+			if q.Required {
+				return nil, fmt.Errorf("%s requires an answer", q.Header)
+			}
+			continue
+		}
+		if len(q.Options) > 0 && !allowed[answer] && !q.AllowCustomAnswer {
+			return nil, fmt.Errorf("%s contains an answer not offered by T3", q.Header)
+		}
+		answers[q.ID] = answer
+	}
+	return answers, nil
+}
+
+func answerStrings(value any) ([]string, bool) {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...), true
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, text)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
 
 func objects(value any) ([]map[string]any, error) {

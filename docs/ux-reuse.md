@@ -50,3 +50,7 @@ Exact request values and authoritative IDs, generation/action/dialog correlation
 ## Verification boundary
 
 Behavioral regressions enter the top-level router and actual Bubble Tea program, including ordinary editor keys, palette reentry, completion/literal paths, exact recovered paste/send, immediate typing after an exact acknowledgment, compact filtered multiselect completion and complete error overlays. Config/client tests cover persistence and unchanged operation semantics. [Verification](verification.md) records actual source, native executable and installed-client evidence separately. No app latency, resource savings or novice usability claim follows from these changes.
+
+## Interaction correctness pass, 2026-10-24
+
+The 0.6 pass extends the existing native Bubbles lists/editors and shared command catalog. It indexes canonical command names, binds concrete Copy/recovery variants, names the attached Stop target, fixes picker row budgeting, and presents model/options together with explicit Apply. Ctrl+P is the default Commands binding; `/keyboard legacy` retains the former editor alias. Request Back/Next, source-bound launch recovery and row-key reading anchors preserve the existing operation and input ownership contracts. No replacement UI framework, provider runtime or queue is added. Existing reference research above is reused; this pass makes no fresh benchmark or usability-study claim.

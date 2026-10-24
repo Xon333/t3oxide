@@ -61,8 +61,10 @@ func TestHistoryRequestsActualAdapterRetainsOffersAndAnswersAcrossReconnect(t *t
 			}
 			p.Respond(client.Answer{ChoiceIDs: []string{"accept"}})
 		} else {
-			p.Respond(client.Answer{Text: " \tcanonical answer\r\n� "})
-			featurePrompt(t, a).Respond(client.Answer{Text: ""})
+			if p.Question.Title != "T3 questions" || len(p.Question.RequestQuestions) != 2 || p.Question.RequestProgress == nil || p.Question.RequestProgress.Index != 0 {
+				t.Fatal("retained question form changed")
+			}
+			p.Respond(client.Answer{RequestAction: "submit", RequestProgress: &client.RequestProgress{Index: 1, Answers: map[string]any{"choice": " \tcanonical answer\r\n� ", "notes": ""}}})
 		}
 		if result := featureReply(t, review); result.err != nil {
 			t.Fatal(result.err)

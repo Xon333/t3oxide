@@ -78,6 +78,7 @@ type Model struct {
 	launchPage                                 bool
 	browserDialog                              *dialog
 	browserStates                              map[string]browserState
+	localBack                                  []localSurface
 	launchTitle                                textinput.Model
 	launchDraftMu                              sync.Mutex
 	launchDraft                                *launchCheckpoint
@@ -93,6 +94,7 @@ type Model struct {
 	draftEdits                                 uint64
 	preservedDraft                             string
 	localPrompts                               []localPrompt
+	rejectedInput                              *exactRejectedInput
 	editorBusy                                 bool
 	inputProblem, inputProblemKind             string
 	inputProblemID                             uint64
@@ -111,6 +113,13 @@ type Model struct {
 	browserDone                                <-chan struct{}
 	renderer                                   transcriptRenderer
 	renderSerial                               uint64
+	presentedSerial, renderPage                uint64
+	renderIdentity                             renderPageIdentity
+	renderReset, renderFollow                  bool
+	cancelRender                               context.CancelFunc
+	transcriptRows                             []renderedRow
+	readingAnchor                              readingAnchor
+	anchorOffset                               int
 	rendering                                  bool
 	pendingRender                              *renderRequest
 	closed                                     bool
@@ -212,6 +221,15 @@ func (m *Model) setSession(s *client.Session) {
 		m.dialog.prompt.Respond(client.Answer{Cancelled: true})
 	}
 	m.generation++
+	m.localBack = nil
+	m.renderPage++
+	if m.cancelRender != nil {
+		m.cancelRender()
+	}
+	m.renderIdentity = renderPageIdentity{}
+	m.renderReset = false
+	m.transcriptRows = nil
+	m.readingAnchor = readingAnchor{}
 	m.revision = 0
 	m.session = s
 	m.sessionCtx, m.detach = context.WithCancel(m.ctx)
@@ -323,11 +341,21 @@ func (m *Model) requestRender(reset, follow bool) tea.Cmd {
 	if m.snapshot == nil {
 		return nil
 	}
-	m.renderSerial++
-	req := &renderRequest{generation: m.generation, revision: m.revision, serial: m.renderSerial, snapshot: m.snapshot, width: m.contentWidth, theme: m.theme, reset: reset, follow: follow}
-	if m.pendingRender != nil {
-		req.reset = req.reset || m.pendingRender.reset
+	identity := pageIdentity(m.snapshot)
+	if reset || identity != m.renderIdentity {
+		m.renderPage++
+		m.renderIdentity = identity
+		m.renderReset = true
+		m.renderFollow = m.follow
+		if reset {
+			m.renderFollow = follow
+		}
+		if m.cancelRender != nil {
+			m.cancelRender()
+		}
 	}
+	m.renderSerial++
+	req := &renderRequest{generation: m.generation, revision: m.revision, serial: m.renderSerial, page: m.renderPage, snapshot: m.snapshot, width: m.contentWidth, theme: m.theme, reset: m.renderReset, follow: m.renderFollow}
 	m.pendingRender = req
 	return m.startRender()
 }
@@ -338,10 +366,12 @@ func (m *Model) startRender() tea.Cmd {
 	req := *m.pendingRender
 	m.pendingRender = nil
 	m.rendering = true
-	ctx := m.ctx
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancelRender = cancel
 	return func() tea.Msg {
+		defer cancel()
 		content, err := m.renderer.render(ctx, req)
-		return renderedMsg{req, content, err}
+		return renderedMsg{request: req, content: content, err: err, rows: m.renderer.rows}
 	}
 }
 
@@ -458,27 +488,45 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case renderedMsg:
 		m.rendering = false
-		if msg.request.generation == m.generation && msg.request.theme == m.theme && msg.request.width == m.contentWidth && (m.pendingRender == nil || m.pendingRender.serial <= msg.request.serial) {
+		m.cancelRender = nil
+		// Presentation may trail the wire by the active render, but never waits
+		// for producer idleness: every useful completed frame advances the page.
+		// Pending work remains latest-only. Page ownership is independent of
+		// serial, so a deliberate Earlier/Latest replacement cannot leak through.
+		if msg.request.generation == m.generation && msg.request.page == m.renderPage && msg.request.theme == m.theme && msg.request.width == m.contentWidth && (msg.request.serial > m.presentedSerial || msg.request.serial == 0 && m.presentedSerial == 0) {
 			if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 				m.problem = "Render: " + msg.err.Error()
 			}
 			if msg.err == nil {
 				wasBottom := m.viewport.AtBottom()
+				anchor := m.readingAnchor
+				if anchor.key == "" || m.anchorOffset != m.viewport.YOffset() {
+					anchor = anchorAt(m.transcriptRows, m.viewport.YOffset())
+				}
 				m.transcript = msg.content
 				m.viewport.SetContent(msg.content)
-				if msg.request.reset {
-					if msg.request.follow {
+				if m.renderReset {
+					if m.renderFollow {
 						m.viewport.GotoBottom()
 					} else {
 						m.viewport.GotoTop()
 					}
 				} else if m.follow && wasBottom {
 					m.viewport.GotoBottom()
+				} else if anchor.key != "" && len(msg.rows) > 0 {
+					var line int
+					anchor, line = remapAnchor(anchor, m.transcriptRows, msg.rows)
+					m.viewport.SetYOffset(line)
 				}
+				if m.renderReset || m.follow && wasBottom {
+					anchor = readingAnchor{}
+				}
+				m.readingAnchor, m.anchorOffset = anchor, m.viewport.YOffset()
+				m.transcriptRows = msg.rows
+				m.presentedSerial = msg.request.serial
+				m.renderReset = false
 				m.refreshSearch(false)
 			}
-		} else if m.pendingRender != nil && msg.request.reset && msg.request.generation == m.generation {
-			m.pendingRender.reset = true
 		}
 		return m, m.startRender()
 	case promptMsg:
@@ -573,6 +621,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			commands = append(commands, m.restoreFocus())
 		}
 		m.finishCommandNotice(msg.name, msg.result, msg.err)
+		if !msg.stop && !msg.browser && m.dialog == nil && len(m.localBack) > 0 {
+			commands = append(commands, m.popLocalSurface())
+		}
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.problem = safeText(msg.err.Error())
 		}
@@ -586,7 +637,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if msg.result.Detail != "" {
-				m.openDetail(msg.result.DetailTitle, msg.result.Detail)
+				m.openDetail(msg.result.DetailTitle, m.readableClientDetail(msg.name, msg.result.Detail))
 			}
 			if msg.result.Next != nil {
 				m.setSession(msg.result.Next)
@@ -765,8 +816,11 @@ func (m *Model) restoreFocus() tea.Cmd {
 		return nil
 	}
 	if m.dialog != nil {
-		if m.dialog.details || m.dialog.finishFocused {
+		if m.dialog.details || m.dialog.finishFocused || m.dialog.settingsForm != nil {
 			return nil
+		}
+		if m.dialog.requestForm != nil {
+			return m.focusRequestForm()
 		}
 		if m.dialog.launch != nil {
 			return m.focusLaunch()
@@ -774,7 +828,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 		if m.dialog.kind == client.EnterText && m.dialog.preservedInitial == "" {
 			return m.componentCmd("modal", m.dialog.serial, m.modalInput.Focus())
 		}
-		if m.dialog.actionFocus > 0 {
+		if m.dialog.actionFocus > 0 || m.dialog.resultsFocused {
 			return nil
 		}
 		if m.dialog.kind != client.EnterText && m.dialog.list.FilterState() == list.Filtering {

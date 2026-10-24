@@ -189,6 +189,13 @@ func (c *ModelCatalog) withModel(base config.ModelSelection, slug string) (confi
 	return next, c.validate(next)
 }
 
+// WithModel exposes the same catalog-bound transition used by the quick
+// commands so a combined settings sheet can stage a model without inventing
+// options or carrying settings the new model does not advertise.
+func (c *ModelCatalog) WithModel(base config.ModelSelection, slug string) (config.ModelSelection, error) {
+	return c.withModel(base, slug)
+}
+
 // Catalog is read-only and off-loop. Only sanitized model/option descriptors
 // cross the adapter boundary; provider credentials and settings stay on T3.
 func (a *Session) Catalog(ctx context.Context) (*ModelCatalog, error) {
@@ -281,6 +288,56 @@ func (a *Session) applyModel(ctx context.Context, c *ModelCatalog, selected conf
 	result.Text = "Thread selection acknowledged; displayed settings update from T3, not optimistically."
 	a.signal()
 	return result, nil
+}
+
+// Settings opens one combined, locally staged model/options review. T3 is
+// mutated at most once, after Apply and fresh catalog validation.
+func (a *Session) settings(ctx context.Context) (Result, error) {
+	catalog, err := a.Catalog(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	snapshot := a.snapshot()
+	location := a.location(snapshot)
+	if location.ThreadID != catalog.ThreadID {
+		return Result{}, errors.New("conversation changed before model settings opened")
+	}
+	base := a.modelBase(catalog, false)
+	review := &ModelSettingsReview{Catalog: *catalog, Selection: base.Clone(), Location: location, Scope: modelScope(false), Actions: []string{"apply", "cancel"}}
+	answer, err := a.asker.Ask(ctx, Question{Title: "Model settings · " + review.Scope, Prompt: "Stage the model and every advertised option. Nothing changes until Apply.", ModelSettings: review})
+	if err != nil {
+		return Result{}, err
+	}
+	if answer.Cancelled || answer.Action == "cancel" {
+		return Result{}, nil
+	}
+	if answer.Action != "apply" || answer.ModelSettings == nil {
+		return Result{}, errors.New("apply a complete model settings selection or cancel")
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	fresh, err := a.Catalog(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if catalog.ThreadID != fresh.ThreadID {
+		return Result{}, errors.New("conversation changed while reviewing model settings")
+	}
+	if !fresh.Current.Equal(catalog.Current) {
+		return Result{}, errors.New("saved selection changed while reviewing; refresh settings before applying")
+	}
+	if err := fresh.validate(*answer.ModelSettings); err != nil {
+		return Result{}, fmt.Errorf("model settings changed; no update sent: %w", err)
+	}
+	return a.applyModel(ctx, fresh, *answer.ModelSettings, false)
+}
+
+// Settings is a typed entry point for consumers that don't dispatch the
+// command catalog directly.
+func (a *Session) Settings(ctx context.Context) error {
+	_, err := a.Command(ctx, "settings", "")
+	return err
 }
 func (a *Session) pickModel(ctx context.Context, args string) (Result, error) {
 	next, args := nextArgument(args)
@@ -428,26 +485,60 @@ func (a *Session) pickOption(ctx context.Context, kind, args string) (Result, er
 	}
 	return a.applyModel(ctx, c, selected, next)
 }
+func (a *Session) storedSelection(ctx context.Context, next bool) (config.ModelSelection, error) {
+	a.mu.Lock()
+	env, thread := a.environment, a.thread
+	connected := a.conn != nil && a.ready
+	a.mu.Unlock()
+	if env == nil {
+		return config.ModelSelection{}, errors.New("select a conversation")
+	}
+	if next {
+		if override := a.manager.State.Override(env.EnvironmentID, thread); override != nil {
+			return override.Selection, nil
+		}
+	}
+	// A mutation receipt can arrive before its live snapshot. Read the current
+	// saved selection when connected; retain snapshot-based saving offline.
+	if connected {
+		catalog, err := a.Catalog(ctx)
+		if err != nil {
+			return config.ModelSelection{}, err
+		}
+		return catalog.Current.Clone(), nil
+	}
+	if snapshot := a.snapshot(); snapshot != nil && snapshot.Metadata.ModelSelection != nil {
+		selection := snapshot.Metadata.ModelSelection.Clone()
+		if err := selection.Validate(); err == nil {
+			return selection, nil
+		}
+	}
+	return config.ModelSelection{}, errors.New("no validated saved selection is available to save offline")
+}
+
+func presetName(presets []config.ModelPreset, name string) *config.ModelPreset {
+	for i := range presets {
+		if presets[i].Name == name {
+			return &presets[i]
+		}
+	}
+	return nil
+}
+
 func (a *Session) presets(ctx context.Context, args string) (Result, error) {
 	next, action := nextArgument(args)
-	c, err := a.Catalog(ctx)
-	if err != nil {
-		return Result{}, err
-	}
 	a.mu.Lock()
-	env := a.environment.EnvironmentID
+	var env string
+	if a.environment != nil {
+		env = a.environment.EnvironmentID
+	}
 	a.mu.Unlock()
+	if env == "" {
+		return Result{}, errors.New("select an environment")
+	}
 	presets := a.manager.State.Presets(env)
 	if action == "" {
-		choices := []Choice{{ID: "save", Label: "Save current selection as a favorite preset", Description: modelScope(next)}, {ID: "remove", Label: "Remove a saved preset", Description: "Local preference only"}}
-		for _, p := range presets {
-			note := p.Selection.Summary()
-			if err := c.validate(p.Selection); err != nil {
-				note += " · unavailable: " + err.Error()
-			}
-			choices = append(choices, Choice{ID: "apply:" + p.Name, Label: "★ " + p.Name, Description: note})
-		}
-		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Presets · " + modelScope(next), Prompt: "Saved only for this T3 environment. Every application is revalidated against its current catalog.", Choices: choices})
+		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Model presets · " + modelScope(next), Prompt: "Save and remove local favorites, including offline. Applying always uses the current T3 catalog.", Choices: []Choice{{ID: "list", Label: "List saved presets"}, {ID: "save", Label: "Save current selection"}, {ID: "remove", Label: "Remove a preset"}, {ID: "apply", Label: "Apply a preset"}}})
 		if err != nil || answer.Cancelled {
 			return Result{}, err
 		}
@@ -456,47 +547,113 @@ func (a *Session) presets(ctx context.Context, args string) (Result, error) {
 		}
 		action = answer.ChoiceIDs[0]
 	}
+	if action == "list" {
+		if len(presets) == 0 {
+			return Result{Text: "No model presets are saved for this environment."}, nil
+		}
+		lines := make([]string, 0, len(presets))
+		for _, p := range presets {
+			lines = append(lines, p.Name+" · "+p.Selection.Summary())
+		}
+		return Result{Text: strings.Join(lines, "\n")}, nil
+	}
 	if action == "save" || strings.HasPrefix(action, "save ") {
-		name := strings.TrimSpace(strings.TrimPrefix(action, "save"))
+		name := ""
+		if strings.HasPrefix(action, "save ") {
+			name = strings.TrimSpace(strings.TrimPrefix(action, "save "))
+		}
+		selection, err := a.storedSelection(ctx, next)
+		if err != nil {
+			return Result{}, err
+		}
 		if name == "" {
-			answer, err := a.asker.Ask(ctx, Question{Kind: EnterText, Title: "Save model preset", Prompt: "Name this model + effort + speed combination. Names are unique per environment."})
-			if err != nil || answer.Cancelled {
-				return Result{}, err
+			answer, askErr := a.asker.Ask(ctx, Question{Kind: EnterText, Title: "Save model preset", Prompt: "Name this model and option combination. Names are unique per environment."})
+			if askErr != nil || answer.Cancelled {
+				return Result{}, askErr
 			}
 			name = answer.Text
 		}
-		if err := a.manager.State.SavePreset(env, name, a.modelBase(c, next)); err != nil {
+		if err := a.manager.State.SavePreset(env, name, selection); err != nil {
 			return Result{}, err
 		}
 		return Result{Text: "Model preset saved locally."}, nil
 	}
-	if action == "remove" {
-		var choices []Choice
-		for _, p := range presets {
-			choices = append(choices, Choice{ID: p.Name, Label: p.Name, Description: p.Selection.Summary()})
+	if action == "remove" || strings.HasPrefix(action, "remove ") {
+		name := ""
+		if strings.HasPrefix(action, "remove ") {
+			name = strings.TrimSpace(strings.TrimPrefix(action, "remove "))
 		}
-		if len(choices) == 0 {
-			return Result{}, errors.New("no model presets saved")
+		if name == "" {
+			if len(presets) == 0 {
+				return Result{Text: "No model presets are saved for this environment."}, nil
+			}
+			if len(presets) == 1 {
+				return Result{Text: "Use /presets remove " + presets[0].Name + " to remove this exact preset."}, nil
+			} else {
+				choices := make([]Choice, 0, len(presets))
+				for _, p := range presets {
+					choices = append(choices, Choice{ID: p.Name, Label: p.Name, Description: p.Selection.Summary()})
+				}
+				answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Remove local preset", Prompt: "Only the exact saved favorite is removed.", Choices: choices})
+				if err != nil || answer.Cancelled {
+					return Result{}, err
+				}
+				if len(answer.ChoiceIDs) != 1 {
+					return Result{}, errors.New("choose one preset")
+				}
+				name = answer.ChoiceIDs[0]
+			}
 		}
-		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Remove local preset", Prompt: "Only the saved favorite is removed; no T3 settings are changed.", Choices: choices})
-		if err != nil || answer.Cancelled {
+		if presetName(presets, name) == nil {
+			return Result{Text: "No preset named " + name + "; no changes made."}, nil
+		}
+		if err := a.manager.State.DeletePreset(env, name); err != nil {
 			return Result{}, err
 		}
-		if len(answer.ChoiceIDs) != 1 {
-			return Result{}, errors.New("choose one preset")
+		return Result{Text: "Preset removed."}, nil
+	}
+	if presetName(presets, action) != nil {
+		action = "apply:" + action
+	}
+	if action == "apply" || strings.HasPrefix(action, "apply ") || strings.HasPrefix(action, "apply:") {
+		name := ""
+		if strings.HasPrefix(action, "apply ") {
+			name = strings.TrimSpace(strings.TrimPrefix(action, "apply "))
+		} else if strings.HasPrefix(action, "apply:") {
+			name = strings.TrimPrefix(action, "apply:")
 		}
-		return Result{Text: "Preset removed."}, a.manager.State.DeletePreset(env, answer.ChoiceIDs[0])
-	}
-	name := strings.TrimPrefix(action, "apply:")
-	if strings.HasPrefix(action, "apply ") {
-		name = strings.TrimSpace(strings.TrimPrefix(action, "apply "))
-	}
-	for _, p := range presets {
-		if p.Name == name {
-			return a.applyModel(ctx, c, p.Selection, next)
+		if name == "" {
+			if len(presets) == 0 {
+				return Result{Text: "No model presets are saved for this environment."}, nil
+			}
+			if len(presets) == 1 {
+				name = presets[0].Name
+			} else {
+				choices := make([]Choice, 0, len(presets))
+				for _, p := range presets {
+					choices = append(choices, Choice{ID: p.Name, Label: p.Name, Description: p.Selection.Summary()})
+				}
+				answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Apply saved preset", Prompt: "T3 revalidates the exact selection against the current catalog.", Choices: choices})
+				if err != nil || answer.Cancelled {
+					return Result{}, err
+				}
+				if len(answer.ChoiceIDs) != 1 {
+					return Result{}, errors.New("choose one preset")
+				}
+				name = answer.ChoiceIDs[0]
+			}
 		}
+		preset := presetName(presets, name)
+		if preset == nil {
+			return Result{Text: "No preset named " + name + "; no changes made."}, nil
+		}
+		catalog, err := a.Catalog(ctx)
+		if err != nil {
+			return Result{}, err
+		}
+		return a.applyModel(ctx, catalog, preset.Selection, next)
 	}
-	return Result{}, errors.New("preset was not offered")
+	return Result{Text: "Unknown preset action; no changes made."}, nil
 }
 func (a *Session) override(ctx context.Context, args string) (Result, error) {
 	if args == "clear" {

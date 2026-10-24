@@ -20,9 +20,9 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	}
 	r, _ := startAppTUI(t, a)
 	emptyComposerReady := func() {
-		// The direct Ctrl+P legend appears only after the command draft is
-		// cleared; Tab→Ctrl+P still denotes an editable, nonempty composer.
-		r.waitText("Ctrl+S Stop/hold  Ctrl+P commands")
+		// Modern Ctrl+P is available while commands are pending too. Wait for
+		// the visible composer to clear before entering the next command.
+		r.waitEmptyComposer()
 	}
 	r.waitText("Initial Markdown for Alpha")
 	awaitStatus(t, a, func(s client.Status) bool { return s.ModelControls })
@@ -52,13 +52,11 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	r.waitText("fixture-basic")
 	emptyComposerReady()
 	r.send("/presets\r")
-	r.modalReady("Presets · Current thread")
-	r.send("\x1b[B\x1b[B\r")
+	r.modalReady("Model presets · Current thread")
+	r.send("Apply a preset\r")
 	r.waitText("fixture-other · high effort · fast tier")
 	emptyComposerReady()
-	r.send("/presets remove\r")
-	r.modalReady("Remove local preset")
-	r.send("\r")
+	r.send("/presets remove Focus\r")
 	r.waitText("Preset removed")
 	emptyComposerReady()
 	if len(state.Presets("env-a")) != 0 {
@@ -81,7 +79,7 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	r.modalReady("Conversations")
 	// The query owns Space and arrow editing. Reach the offered group action
 	// through the visible More control and its native filterable list.
-	r.send(strings.Repeat("\t", 6))
+	r.send("\x1b[Z")
 	r.waitText("[More]")
 	r.send("\r")
 	r.waitText("Refresh")
@@ -93,11 +91,11 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	r.waitText("Initial Markdown for Alpha")
 	r.send("/threads\r")
 	r.modalReady("Conversations")
-	r.send(strings.Repeat("\t", 6))
+	r.send("\x1b[Z")
 	r.waitText("[More]")
 	r.send("\r")
 	r.waitText("Refresh")
-	r.send("Agents / threads\r")
+	r.send("Thread type\r")
 	r.modalReady("Thread types")
 	r.send("\x1b[B\x1b[B\x1b[B\r")
 	r.modalReady("Conversations")

@@ -87,6 +87,89 @@ type BrowserPage struct {
 	Query      string
 	More       bool
 	Error      string
+	ObservedAt string
+	Lifecycle  string
+	Cursor     int
+	NextCursor *int
+}
+
+// ModelSettingsReview is a complete, locally staged view of the current T3
+// model catalog. The client validates and applies the returned selection once.
+type ModelSettingsReview struct {
+	Catalog   ModelCatalog
+	Selection config.ModelSelection
+	Location  Location
+	Scope     string
+	Actions   []string
+}
+
+// RequestOption and RequestQuestion are the exact controls advertised by one
+// revision-bound T3 user-input request. InitialAnswer is preserved verbatim.
+type RequestOption struct{ Label, Value, Description string }
+type RequestQuestion struct {
+	ID, Header, Question, InitialAnswer      string
+	Required, MultiSelect, AllowCustomAnswer bool
+	Options                                  []RequestOption
+}
+
+// RequestProgress is transient UI state for a single verified request. Clone
+// it before retaining or editing the answers map.
+type RequestProgress struct {
+	Index   int
+	Answers map[string]any
+}
+
+func (p RequestProgress) Clone() RequestProgress {
+	copy := RequestProgress{Index: p.Index, Answers: make(map[string]any, len(p.Answers))}
+	for id, value := range p.Answers {
+		copy.Answers[id] = cloneRequestAnswer(value)
+	}
+	return copy
+}
+
+func cloneRequestAnswer(value any) any {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		return append([]any(nil), typed...)
+	default:
+		return value
+	}
+}
+
+func cloneModelCatalog(c ModelCatalog) ModelCatalog {
+	c.Current = c.Current.Clone()
+	c.Models = append([]CatalogModel(nil), c.Models...)
+	for i := range c.Models {
+		c.Models[i].Options = append([]OptionDescriptor(nil), c.Models[i].Options...)
+		for j := range c.Models[i].Options {
+			c.Models[i].Options[j].Options = append([]OptionChoice(nil), c.Models[i].Options[j].Options...)
+		}
+	}
+	return c
+}
+
+func cloneQuestion(q Question) Question {
+	q.Choices = append([]Choice(nil), q.Choices...)
+	if q.ModelSettings != nil {
+		copy := *q.ModelSettings
+		copy.Catalog = cloneModelCatalog(copy.Catalog)
+		copy.Selection = copy.Selection.Clone()
+		copy.Actions = append([]string(nil), copy.Actions...)
+		q.ModelSettings = &copy
+	}
+	if q.RequestQuestions != nil {
+		q.RequestQuestions = append([]RequestQuestion(nil), q.RequestQuestions...)
+		for i := range q.RequestQuestions {
+			q.RequestQuestions[i].Options = append([]RequestOption(nil), q.RequestQuestions[i].Options...)
+		}
+	}
+	if q.RequestProgress != nil {
+		copy := q.RequestProgress.Clone()
+		q.RequestProgress = &copy
+	}
+	return q
 }
 
 type LaunchInput struct{ Title, Message string }
@@ -105,6 +188,9 @@ type Question struct {
 	Surface                             Surface
 	BrowserPage                         *BrowserPage
 	LaunchReview                        *LaunchReview
+	ModelSettings                       *ModelSettingsReview
+	RequestQuestions                    []RequestQuestion
+	RequestProgress                     *RequestProgress
 	SingleLine                          bool
 	Navigation                          bool
 	Kind                                Kind
@@ -112,11 +198,14 @@ type Question struct {
 	Choices                             []Choice
 }
 type Answer struct {
-	Launch    *LaunchInput
-	Action    string
-	Cancelled bool
-	ChoiceIDs []string
-	Text      string
+	Launch          *LaunchInput
+	ModelSettings   *config.ModelSelection
+	RequestAction   string
+	RequestProgress *RequestProgress
+	Action          string
+	Cancelled       bool
+	ChoiceIDs       []string
+	Text            string
 }
 
 // Prompt is one exact client interaction. Done closes on reply, host request
@@ -145,6 +234,14 @@ func (p *Prompt) Respond(answer Answer) bool {
 		copy := *answer.Launch
 		answer.Launch = &copy
 	}
+	if answer.ModelSettings != nil {
+		copy := answer.ModelSettings.Clone()
+		answer.ModelSettings = &copy
+	}
+	if answer.RequestProgress != nil {
+		copy := answer.RequestProgress.Clone()
+		answer.RequestProgress = &copy
+	}
 	p.response <- answer
 	return true
 }
@@ -170,7 +267,7 @@ func (b *promptBroker) Ask(ctx context.Context, q Question) (Answer, error) {
 	defer b.busy.Store(false)
 	done := make(chan struct{})
 	defer close(done)
-	p := &Prompt{ID: b.next.Add(1), Question: q, Done: done, response: make(chan Answer, 1)}
+	p := &Prompt{ID: b.next.Add(1), Question: cloneQuestion(q), Done: done, response: make(chan Answer, 1)}
 	select {
 	case b.requests <- p:
 	case <-ctx.Done():

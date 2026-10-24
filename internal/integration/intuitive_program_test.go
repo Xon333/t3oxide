@@ -36,8 +36,9 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r.send("Beta")
 	r.waitText("Filter: Beta")
 	before := f.requestCounts()
-	// One profile, then Environments, New, Settings, Resume and More.
-	r.send(strings.Repeat("\t", 6))
+	// Shift+Tab reaches the last visible control from the query without
+	// depending on the profile count or the separate Results focus stop.
+	r.send("\x1b[Z")
 	r.waitText("[More]")
 	r.send("\r")
 	r.waitText("Refresh")

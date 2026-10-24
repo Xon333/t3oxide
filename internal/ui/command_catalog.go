@@ -47,14 +47,25 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"pending", "Saved operations", "", "Original IDs and payloads", key.Binding{}},
 		{"retry", "Retry saved action", "[stop]", "Reuses the original operation ID", key.Binding{}},
 		{"resolve", "Resolve reviewed action", "[stop]", "Confirms local record clearance", key.Binding{}},
-		{"error", "Error details", "", "", k.Detail},
+		{"error", "Error details", "", "", k.Error},
 		{"theme", "Theme", "[terminal|violet|cyan|lime]", "", key.Binding{}},
-		{"mouse", "Mouse capture", "[on|off]", "Off enables native selection", key.Binding{}},
+		{"mouse", "Mouse scrolling", "[on|off]", "Scrolling only; off enables native selection", key.Binding{}},
 		{"sidebar", "Sidebar", "[on|off]", "", k.Sidebar},
 		{"copy", "Copy", "[page|draft|answer|error|detail]", "Last agent message by default", k.Copy},
 		{"reconnect", "Reconnect", "", "Never replays writes", key.Binding{}},
-		{"web", "Full T3", "", "Configured address", key.Binding{}},
+		{"web", "Show T3 address", "", "Configured address for this environment", key.Binding{}},
+		{"keyboard", "Keyboard shortcuts", "modern|legacy", "Modern Ctrl+P Commands; legacy editor Ctrl+P", key.Binding{}},
 		{"quit", "Exit", "", "Detaches locally", k.Quit},
+	}
+	// Reuse semantic task descriptions from the client contract, including
+	// rows whose concise UI label deliberately differs from the command ID.
+	for i := range rows {
+		for _, remote := range client.CommandCatalog() {
+			if rows[i].name == remote.Name && rows[i].description == "" {
+				rows[i].description = remote.Description
+				break
+			}
+		}
 	}
 	// The session is the authority for supported remote command names. Retain
 	// any additive session command rather than maintaining another hidden list.
@@ -88,10 +99,6 @@ func (m *Model) commandUnavailable(name string) string {
 		if !m.status.ModelControls {
 			return "Unavailable: connect a writable thread with a model-capable adapter"
 		}
-	case "presets":
-		if !m.status.ModelCatalog {
-			return "Unavailable: this adapter has no model catalog"
-		}
 	case "filter":
 		if !m.status.ThreadNavigation {
 			return "Unavailable: this adapter has no lineage navigation"
@@ -117,7 +124,23 @@ func (m *Model) paletteItems() []list.Item {
 			}
 			continue
 		}
-		description := spec.arguments
+		if spec.name == "copy" || spec.name == "retry" || spec.name == "resolve" || spec.name == "keyboard" {
+			variants := []struct{ args, label string }{}
+			switch spec.name {
+			case "keyboard":
+				variants = []struct{ args, label string }{{"modern", "Ctrl+P Commands (default)"}, {"legacy", "Editor Ctrl+P"}}
+			case "copy":
+				variants = []struct{ args, label string }{{"", "Last agent message (loaded page)"}, {"page", "Loaded page (bounded)"}, {"draft", "Exact draft"}, {"answer", "Current answer"}, {"error", "Error details"}, {"detail", "Open details"}}
+			default:
+				variants = []struct{ args, label string }{{"", "ordinary action"}, {"stop", "Stop operation"}}
+			}
+			for _, variant := range variants {
+				items = append(items, choiceItem{title: spec.title + " · " + variant.label, description: spec.description, command: spec.name, args: variant.args})
+			}
+			continue
+		}
+		description := strings.TrimSpace(spec.description + " · " + spec.arguments)
+		description = strings.Trim(description, " ·")
 		if spec.binding.Enabled() {
 			if description != "" {
 				description += " · "
@@ -126,9 +149,12 @@ func (m *Model) paletteItems() []list.Item {
 		}
 		row := choiceItem{title: spec.title, description: description, command: spec.name}
 		if reason := m.commandUnavailable(spec.name); reason != "" {
-			row.disabled, row.description = true, reason
+			row.disabled, row.description = true, description+" · "+reason
 		}
 		items = append(items, row)
+	}
+	if m.exactRejectedInputAvailable() {
+		items = append(items, choiceItem{title: m.exactRejectedInputLabel(), description: "Replace draft locally; keeps previous draft in recall", command: "use-exact"})
 	}
 	return items
 }
@@ -142,6 +168,8 @@ func (m *Model) validateCommand(name, args string) error {
 	switch name {
 	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details":
 		valid = args == ""
+	case "keyboard":
+		valid = args == "modern" || args == "legacy"
 	case "theme":
 		valid = args == "" || ValidTheme(args) || args == "default"
 	case "mouse", "sidebar":

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -39,7 +40,13 @@ func (i choiceItem) Title() string {
 	return safeText(i.title)
 }
 func (i choiceItem) Description() string { return safeText(i.description) }
-func (i choiceItem) FilterValue() string { return safeText(i.title + " " + i.description) }
+func (i choiceItem) FilterValue() string {
+	aliases := ""
+	if i.command == "help" {
+		aliases = " keys"
+	}
+	return safeText(i.command + " " + i.args + aliases + " " + i.title + " " + i.description)
+}
 
 type dialog struct {
 	serial                    uint64
@@ -56,6 +63,11 @@ type dialog struct {
 	actionFocus               int // 0 is the native list/editor; 1..N visible page controls
 	surface                   client.Surface
 	launch                    *launchForm
+	resultsFocused            bool
+	settingsForm              *modelSettingsForm
+	requestForm               *requestForm
+	paletteSource             *dialog
+	formSource                *dialog
 	browserSource             *dialog // exact suspended source for local More
 }
 
@@ -88,11 +100,28 @@ func (m *Model) openPrompt(p *client.Prompt) {
 		m.browserPage = true
 		if q.BrowserPage != nil {
 			d.description = q.BrowserPage.Error
+			snapshot := "Snapshot"
+			if q.BrowserPage.More {
+				snapshot += " · more available outside this page"
+			}
+			if q.BrowserPage.ObservedAt != "" {
+				snapshot += " · observed " + q.BrowserPage.ObservedAt
+			}
+			if q.BrowserPage.Lifecycle != "" {
+				snapshot += " · " + q.BrowserPage.Lifecycle
+			}
+			if q.BrowserPage.Cursor > 0 {
+				snapshot += fmt.Sprintf(" · offset %d", q.BrowserPage.Cursor)
+			}
+			if d.description != "" {
+				snapshot += " · " + d.description
+			}
+			d.description = snapshot
 			if q.BrowserPage.More {
 				if d.description != "" {
 					d.description += " · "
 				}
-				d.description += "More conversations · Search"
+				d.description += "More conversations outside this page · Next page or Search"
 			}
 		}
 	}
@@ -140,6 +169,12 @@ func (m *Model) openPrompt(p *client.Prompt) {
 		}
 	}
 	m.dialog = d
+	if q.ModelSettings != nil {
+		m.initModelSettings(q.ModelSettings)
+	}
+	if len(q.RequestQuestions) > 0 {
+		m.initRequestForm(q)
+	}
 	if d.launch != nil {
 		m.initLaunchEditors()
 	}
@@ -151,6 +186,21 @@ func (m *Model) openPrompt(p *client.Prompt) {
 }
 
 func (m *Model) cancelDialog() tea.Cmd {
+	if m.dialog != nil && m.dialog.formSource != nil {
+		return m.restoreSettingsForm()
+	}
+	if m.dialog != nil && m.dialog.local == "palette" && m.dialog.paletteSource != nil {
+		return m.restorePaletteSource()
+	}
+	if m.dialog != nil && (m.dialog.settingsForm != nil || m.dialog.requestForm != nil) {
+		return m.cancelForm()
+	}
+	if len(m.localBack) > 0 && m.browserDialog == nil {
+		if m.dialog != nil && m.dialog.prompt != nil {
+			m.dialog.prompt.Respond(client.Answer{Cancelled: true})
+		}
+		return m.popLocalSurface()
+	}
 	if m.dialog != nil && m.dialog.prompt == nil && m.browserDialog != nil {
 		if m.dialog.local == "browser-more" && !m.browserMoreSourceLive() {
 			return m.retireBrowserMore()
@@ -186,6 +236,12 @@ func (m *Model) chooseDialog() tea.Cmd {
 		return nil
 	}
 	d := m.dialog
+	if d.settingsForm != nil {
+		return m.applyModelSettings()
+	}
+	if d.requestForm != nil {
+		return m.advanceRequest(false)
+	}
 	if d.launch != nil {
 		return m.launchAction("create")
 	}
@@ -217,6 +273,9 @@ func (m *Model) chooseDialog() tea.Cmd {
 	if selected.disabled {
 		m.notice = selected.description
 		return nil
+	}
+	if d.formSource != nil {
+		return m.chooseModelSetting(selected)
 	}
 	if d.local == "browser-more" {
 		if !m.browserMoreSourceLive() {
@@ -259,6 +318,13 @@ func (m *Model) chooseDialog() tea.Cmd {
 		m.resize()
 		return m.restoreFocus()
 	}
+	if d.local == "palette" && d.paletteSource != nil {
+		m.restorePaletteSource()
+		return m.dispatch(selected.command, selected.args)
+	}
+	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && selected.command != "" {
+		m.pushLocalSurface(d)
+	}
 	m.dialog = nil
 	m.resize()
 	focus := m.restoreFocus()
@@ -299,15 +365,14 @@ func (m *Model) openPalette() tea.Cmd {
 	if m.dialog != nil && m.dialog.local == "palette" {
 		return m.restoreFocus()
 	}
-	if m.dialog != nil && m.dialog.prompt != nil {
-		m.openDetail("Request controls", m.helpText())
-		return nil
-	}
+	source := m.dialog
 	items := m.paletteItems()
 	d := &dialog{kind: client.ChooseOne, title: "Commands", local: "palette", selected: make(map[string]bool)}
 	m.dialogSerial++
 	d.serial = m.dialogSerial
+	d.paletteSource = source
 	d.list = m.newList("Commands", items)
+	d.list.Filter = commandFilter
 	d.list.SetFilterText("")
 	d.list.SetFilterState(list.Filtering)
 	m.dialog = d
@@ -346,6 +411,12 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.dialog == nil {
 		return nil
 	}
+	if m.dialog.settingsForm != nil && !m.dialog.details {
+		return m.modelSettingsKey(msg)
+	}
+	if m.dialog.requestForm != nil && !m.dialog.details {
+		return m.requestFormKey(msg)
+	}
 	if m.dialog.launch != nil && !m.dialog.details {
 		return m.launchKey(msg)
 	}
@@ -372,12 +443,15 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany && msg.String() == "ctrl+f" {
+		return m.browserAction("search")
+	}
 	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany {
 		if handled, cmd := m.browserKey(msg); handled {
 			return cmd
 		}
 	}
-	if m.dialog.prompt != nil && m.dialog.prompt.Question.Navigation && m.dialog.list.FilterState() != list.Filtering {
+	if m.dialog.prompt != nil && m.dialog.prompt.Question.Navigation && (m.dialog.resultsFocused || m.dialog.list.FilterState() != list.Filtering) {
 		action := ""
 		switch msg.String() {
 		case "space", " ":
@@ -571,6 +645,21 @@ func (m *Model) refreshDialogDetails() {
 		return
 	}
 	text := safeText(d.title) + "\n\n" + safeText(d.description)
+	if d.settingsForm != nil {
+		text += "\n\n" + m.modelSettingsView(max(40, m.modalWidth), d.settingsForm.optionCount()+5)
+	}
+	if d.requestForm != nil {
+		f := d.requestForm
+		for i, q := range f.questions {
+			text += fmt.Sprintf("\n\nQuestion %d/%d: %s\n%s", i+1, len(f.questions), q.Header, q.Question)
+			for _, option := range q.Options {
+				text += "\n" + option.Label + " · " + option.Description
+			}
+			if answer, ok := f.answers[q.ID]; ok {
+				text += "\nAnswer: " + fmt.Sprint(answer)
+			}
+		}
+	}
 	if d.preservedInitial != "" {
 		text += "\n\nPreserved initial answer:\n" + safeText(d.preservedInitial)
 	}
@@ -661,6 +750,9 @@ func (m *Model) navigationAction(action string) tea.Cmd {
 		return nil
 	}
 	answer := client.Answer{Action: action}
+	if action == "search" {
+		answer.Text = m.dialog.list.FilterValue()
+	}
 	m.saveBrowserState(m.dialog)
 	if item, ok := m.dialog.list.SelectedItem().(choiceItem); ok {
 		answer.ChoiceIDs = []string{item.id}

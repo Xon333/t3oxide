@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -97,12 +98,15 @@ func (m *Model) browserControls(width int) string {
 	if actions.Len() > 0 {
 		parts = append(parts, browserControlViewport(actions.String(), width, 2, focusedActionRow))
 	}
-	detail := ""
+	detail := "Search · Tab: Results · Ctrl+F: Search all"
+	if m.dialog.resultsFocused || m.dialog.list.FilterState() != list.Filtering {
+		detail = "Results · type: Search"
+	}
 	if selected, ok := m.dialog.list.SelectedItem().(choiceItem); ok && m.dialog.actionFocus == 0 {
 		for _, group := range m.dialog.prompt.Question.BrowserPage.Groups {
 			for _, id := range group.ChoiceIDs {
 				if id == selected.id {
-					detail = "Project  " + group.Label
+					detail += " · " + group.Label
 				}
 			}
 		}
@@ -144,7 +148,7 @@ func (m *Model) fullSurfaceView() string {
 		header += "  " + p.subtle().Render(fitLine(page.Location, max(1, width-20)))
 	}
 	help := m.dialogHelp(width, true)
-	parts := []string{header, p.operational().Render(fitLine(m.authoritativeStatus(), width))}
+	parts := []string{header, p.operational().Render(fitLine(m.attachedTargetStatus(), width))}
 	remaining := m.height - lipgloss.Height(strings.Join(parts, "\n")) - lipgloss.Height(help)
 	feedback := ""
 	if m.feedbackVisible() {

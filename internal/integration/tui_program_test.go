@@ -183,6 +183,25 @@ func (r *tuiProgram) modalReady(want string) {
 
 }
 
+func (r *tuiProgram) waitEmptyComposer() {
+	r.t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		view := r.views.text()
+		if strings.Contains(view, "Ctrl+P commands") {
+			for _, line := range strings.Split(view, "\n") {
+				row := strings.TrimSpace(line)
+				row = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(row, "│"), "│"))
+				if row == "›" {
+					return
+				}
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	r.t.Fatalf("direct Bubble Tea did not return to an empty composer:\n%s", r.views.text())
+}
+
 func TestBubbleTeaProgramDrivesActualAppComposerThemeResizeAndQuit(t *testing.T) {
 	f := newFixture(t)
 	m, state := newAppManager(t, f)
@@ -410,12 +429,29 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "awaiting input (1)") })
 	// The host projection can arrive before the program consumes actionDone.
 	// Wait for its empty composer before typing another slash command.
-	r.waitText("Ctrl+R requests  Ctrl+P commands  Enter send")
+	r.waitEmptyComposer()
 	r.send("/requests\r")
 	r.modalReady("Choice")
-	r.send("Continue\r")
+	r.send("Continue\t")
+	r.waitText("[Next]")
+	r.send("\r")
 	r.modalReady("Notes")
-	r.send("operator note\r")
+	r.send("operator note\t")
+	r.waitText("[Back]")
+	r.send("\r")
+	r.waitText("Question 1/2 · Choice")
+	r.waitText("Continue")
+	r.send("\t")
+	r.waitText("[Next]")
+	r.send("\r")
+	r.waitText("Question 2/2 · Notes")
+	r.waitText("operator note")
+	if effects, dispatches := f.counts(); effects != 1 || dispatches != 1 {
+		t.Fatalf("question Next/Back submitted prematurely: %d/%d", effects, dispatches)
+	}
+	r.send("\t\t")
+	r.waitText("[Submit answers]")
+	r.send("\r")
 	question := f.waitRequest(t, "question-a")
 	answers, ok := question["answers"].(object)
 	if !ok || answers["choice"] != "Continue" || answers["notes"] != "operator note" {
@@ -428,7 +464,7 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	if state.Pending("env-a", false) != nil {
 		t.Fatal("question acknowledgement did not settle")
 	}
-	r.waitText("Ctrl+S Stop/hold  Ctrl+P commands  Enter send")
+	r.waitEmptyComposer()
 	r.send("/quit\r")
 	select {
 	case <-r.done:

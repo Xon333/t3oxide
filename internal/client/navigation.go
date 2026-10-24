@@ -8,8 +8,10 @@ import (
 )
 
 type NavigationState struct {
-	Filter   string
-	Expanded map[string]bool
+	Filter    string
+	Expanded  map[string]bool
+	Lifecycle string
+	Cursor    int
 }
 
 func (m *Manager) navigation(env string) NavigationState {
@@ -19,7 +21,10 @@ func (m *Manager) navigation(env string) NavigationState {
 	if n.Filter == "" {
 		n.Filter = "all"
 	}
-	copy := NavigationState{Filter: n.Filter, Expanded: map[string]bool{}}
+	if n.Lifecycle == "" {
+		n.Lifecycle = "active"
+	}
+	copy := NavigationState{Filter: n.Filter, Expanded: map[string]bool{}, Lifecycle: n.Lifecycle, Cursor: n.Cursor}
 	for id, open := range n.Expanded {
 		copy.Expanded[id] = open
 	}
@@ -31,7 +36,7 @@ func (m *Manager) saveNavigation(env string, n NavigationState) {
 	if m.nav == nil {
 		m.nav = make(map[string]NavigationState)
 	}
-	copy := NavigationState{Filter: n.Filter, Expanded: map[string]bool{}}
+	copy := NavigationState{Filter: n.Filter, Expanded: map[string]bool{}, Lifecycle: n.Lifecycle, Cursor: n.Cursor}
 	for id, open := range n.Expanded {
 		if open {
 			copy.Expanded[id] = true
@@ -70,7 +75,10 @@ func ThreadChoices(threads []Thread) []Choice {
 			detail += " · " + t.Model
 		}
 		if t.ChildCount > 0 {
-			detail += fmt.Sprintf(" · %d working subagent(s)", t.ChildCount)
+			detail += fmt.Sprintf(" · %d subagent(s)", t.ChildCount)
+			if t.KnownChildCount > 0 {
+				detail += fmt.Sprintf(" · %d working · %d loaded", t.WorkingChildCount, t.LoadedChildCount)
+			}
 		}
 		if t.Lineage != nil && t.Lineage.ParentThreadID != nil {
 			parent := t.ParentTitle

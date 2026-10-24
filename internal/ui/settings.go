@@ -21,6 +21,7 @@ type Settings struct {
 	Theme             string
 	Mouse             bool
 	Sidebar           bool
+	LegacyEditorCtrlP bool
 	environmentThemes map[string]string
 	forcedTheme       string
 }
@@ -46,6 +47,7 @@ func LoadSettings(path string) (*Settings, error) {
 		Theme             string
 		Mouse             bool
 		Sidebar           bool
+		LegacyEditorCtrlP bool
 		EnvironmentThemes map[string]string
 	}
 	saved.Theme, saved.Mouse = s.Theme, s.Mouse
@@ -53,6 +55,7 @@ func LoadSettings(path string) (*Settings, error) {
 		return nil, fmt.Errorf("terminal settings: %w", err)
 	}
 	s.Theme, s.Mouse, s.Sidebar = saved.Theme, saved.Mouse, saved.Sidebar
+	s.LegacyEditorCtrlP = saved.LegacyEditorCtrlP
 	s.environmentThemes = saved.EnvironmentThemes
 	if !ValidTheme(s.Theme) {
 		return nil, fmt.Errorf("unknown saved theme %q; choose terminal, violet, cyan or lime", s.Theme)
@@ -72,6 +75,9 @@ func (s *Settings) save() error {
 		return nil
 	} // In-memory settings are useful for embedded/test programs.
 	saved := map[string]any{"theme": s.Theme, "mouse": s.Mouse, "sidebar": s.Sidebar}
+	if s.LegacyEditorCtrlP {
+		saved["legacyEditorCtrlP"] = true
+	}
 	if len(s.environmentThemes) > 0 {
 		saved["environmentThemes"] = s.environmentThemes
 	}
@@ -154,4 +160,21 @@ func (s *Settings) appearance() (string, bool, bool) {
 		theme = s.forcedTheme
 	}
 	return theme, s.Mouse, s.Sidebar
+}
+
+func (s *Settings) legacyEditorCtrlP() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.LegacyEditorCtrlP
+}
+func (s *Settings) SetLegacyEditorCtrlP(on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.LegacyEditorCtrlP
+	s.LegacyEditorCtrlP = on
+	if err := s.save(); err != nil {
+		s.LegacyEditorCtrlP = old
+		return err
+	}
+	return nil
 }

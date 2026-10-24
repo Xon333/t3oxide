@@ -119,18 +119,21 @@ func (m *Manager) Close() error {
 }
 
 type Thread struct {
-	ID          string        `json:"id"`
-	Title       string        `json:"title"`
-	Project     string        `json:"project"`
-	ProjectID   string        `json:"projectId,omitempty"`
-	Status      string        `json:"status"`
-	Model       string        `json:"model"`
-	Lineage     *wire.Lineage `json:"lineage,omitempty"`
-	ParentTitle string        `json:"parentTitle,omitempty"`
-	ChildCount  int           `json:"childCount,omitempty"`
-	Depth       int           `json:"depth,omitempty"`
-	Expanded    bool          `json:"expanded,omitempty"`
-	ContextOnly bool          `json:"contextOnly,omitempty"`
+	ID                string        `json:"id"`
+	Title             string        `json:"title"`
+	Project           string        `json:"project"`
+	ProjectID         string        `json:"projectId,omitempty"`
+	Status            string        `json:"status"`
+	Model             string        `json:"model"`
+	Lineage           *wire.Lineage `json:"lineage,omitempty"`
+	ParentTitle       string        `json:"parentTitle,omitempty"`
+	ChildCount        int           `json:"childCount,omitempty"`
+	Depth             int           `json:"depth,omitempty"`
+	Expanded          bool          `json:"expanded,omitempty"`
+	ContextOnly       bool          `json:"contextOnly,omitempty"`
+	WorkingChildCount int           `json:"workingChildCount,omitempty"`
+	KnownChildCount   int           `json:"knownChildCount,omitempty"`
+	LoadedChildCount  int           `json:"loadedChildCount,omitempty"`
 }
 
 // Session is one attachment to a selected T3 environment and conversation.

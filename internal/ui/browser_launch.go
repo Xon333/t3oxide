@@ -62,6 +62,8 @@ type browserState struct {
 	query     textinput.Model
 	index     int
 	hostQuery string
+	identity  string
+	results   bool
 }
 
 func (m *Model) appearanceProfile() string {
@@ -102,7 +104,11 @@ func (m *Model) saveBrowserState(d *dialog) {
 	if m.browserStates == nil {
 		m.browserStates = make(map[string]browserState)
 	}
-	m.browserStates[d.prompt.Question.BrowserPage.ProfileID] = browserState{d.list.FilterInput, d.list.Index(), d.prompt.Question.BrowserPage.Query}
+	identity := ""
+	if selected, ok := d.list.SelectedItem().(choiceItem); ok {
+		identity = selected.id
+	}
+	m.browserStates[d.prompt.Question.BrowserPage.ProfileID] = browserState{query: d.list.FilterInput, index: d.list.Index(), hostQuery: d.prompt.Question.BrowserPage.Query, identity: identity, results: d.resultsFocused}
 }
 
 func (m *Model) restoreBrowserState(d *dialog) {
@@ -124,7 +130,14 @@ func (m *Model) restoreBrowserState(d *dialog) {
 		d.list.SetFilterState(list.Filtering)
 		d.list.FilterInput = state.query
 		d.filterQuery = state.query.Value()
-		d.list.Select(state.index)
+		d.resultsFocused = state.results
+		// Reordering must never turn a remembered row number into another target.
+		for i, item := range d.list.VisibleItems() {
+			if item.(choiceItem).id == state.identity {
+				d.list.Select(i)
+				break
+			}
+		}
 	} else if page.Query != "" {
 		d.list.SetFilterText(page.Query)
 		d.list.SetFilterState(list.Filtering)
@@ -195,7 +208,30 @@ func (m *Model) openBrowserMore() tea.Cmd {
 		return nil
 	}
 	var items []list.Item
+	seen := map[string]bool{}
+	selected, _ := source.list.SelectedItem().(choiceItem)
 	for _, action := range m.browserActions() {
+		canonical := action
+		if action == "types" {
+			canonical = "filter"
+		}
+		if seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		label := strings.TrimSpace(selected.title)
+		if action == "toggle" && !strings.HasPrefix(label, "▸ ") && !strings.HasPrefix(label, "▾ ") {
+			continue
+		}
+		if action == "expand" && !strings.HasPrefix(label, "▸ ") {
+			continue
+		}
+		if action == "collapse" && !strings.HasPrefix(label, "▾ ") {
+			continue
+		}
+		if action == "parent" && !strings.Contains(selected.description, " · parent: ") {
+			continue
+		}
 		if !primaryBrowserAction(action) {
 			items = append(items, choiceItem{id: action, title: actionLabel(action), command: "browser-more-action"})
 		}
@@ -254,8 +290,16 @@ func actionLabel(action string) string {
 		return "Resume"
 	case "refresh":
 		return "Refresh"
-	case "types":
-		return "Agents / threads"
+	case "types", "filter":
+		return "Thread type"
+	case "search":
+		return "Search all conversations"
+	case "lifecycle":
+		return "Lifecycle"
+	case "next-page":
+		return "Next page"
+	case "previous-page":
+		return "Previous page"
 	}
 	return strings.ToUpper(action[:1]) + action[1:]
 }
@@ -266,6 +310,16 @@ func (m *Model) browserKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "esc", "ctrl+l", "f2":
 		return false, nil
 	case "tab", "shift+tab":
+		if msg.String() == "tab" && d.actionFocus == 0 && d.list.FilterState() == list.Filtering && !d.resultsFocused {
+			d.resultsFocused = true
+			d.list.FilterInput.Blur()
+			m.resize()
+			return true, nil
+		}
+		if msg.String() == "shift+tab" && d.actionFocus == 0 && d.resultsFocused {
+			d.resultsFocused = false
+			return true, m.restoreFocus()
+		}
 		delta := 1
 		if msg.String() == "shift+tab" {
 			delta = -1
@@ -294,6 +348,10 @@ func (m *Model) browserKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.resize()
 			return true, nil
 		}
+	}
+	if d.actionFocus == 0 && d.resultsFocused && msg.Text != "" && msg.Text != " " {
+		d.resultsFocused = false
+		m.restoreFocus()
 	}
 	return d.actionFocus > 0, nil
 }

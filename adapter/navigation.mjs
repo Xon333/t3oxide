@@ -21,20 +21,32 @@ export function threadList(shell, query = '', options = {}) {
   const projects = new Map(shell.projects.map(p => [p.id, p.title]));
   const q = String(query).trim().toLocaleLowerCase().slice(0, 200);
   const activeOnly = options.activeOnly === true;
-  const rootLimit = activeOnly && !q ? 24 : LIMIT.threads;
-  const rowLimit = activeOnly && !q && expanded.length > 0 ? 48 : rootLimit;
+  const scoped = activeOnly || options.lifecycle !== undefined;
+  const lifecycle = options.lifecycle ?? (q ? 'all' : 'active');
+  requireThat(['active','all','completed','failed'].includes(lifecycle), 'Unknown conversation lifecycle.');
+  const cursor = options.cursor ?? 0;
+  const requestedLimit = options.limit ?? (q ? LIMIT.threads : expanded.length ? 48 : 24);
+  requireThat(Number.isSafeInteger(cursor) && cursor >= 0 && cursor <= 1000000, 'Invalid conversation cursor.');
+  requireThat(Number.isSafeInteger(requestedLimit) && requestedLimit > 0 && requestedLimit <= LIMIT.threads, 'Invalid conversation limit.');
+  const rootLimit = scoped ? Number.MAX_SAFE_INTEGER : LIMIT.threads;
+  const rowLimit = scoped ? Number.MAX_SAFE_INTEGER : LIMIT.threads;
   const working = t => ['preparing', 'queued', 'starting', 'running', 'waiting'].includes(t.activityRunStatus ?? t.status);
-  const available = shell.threads.filter(t => !t.deletedAt && !t.archivedAt &&
-    (!activeOnly || q || t.settledOverride !== 'settled'));
+  const available = shell.threads.filter(t => !t.deletedAt && !t.archivedAt && (!scoped ||
+    lifecycle === 'all' || lifecycle === 'active' && t.settledOverride !== 'settled' ||
+    ['completed','failed'].includes(lifecycle) && (t.activityRunStatus ?? t.status) === lifecycle));
   // Count working children without loading them into the default navigation
   // tree. Only an explicit expansion/type selection/search admits those rows.
   const childCounts = new Map();
-  if (activeOnly) for (const t of available) {
+  const knownCounts = new Map();
+  if (scoped) for (const t of available) {
     const parent = lineage(t.lineage)?.parentThreadId;
-    if (threadType(t) === 'subagent' && parent && working(t)) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
+    if (threadType(t) === 'subagent' && parent) {
+      knownCounts.set(parent, (knownCounts.get(parent) ?? 0) + 1);
+      if (working(t)) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
+    }
   }
-  const eligible = available.filter(t => !activeOnly || threadType(t) !== 'subagent' ||
-    (q || working(t) && (filter === 'subagents' || open.has(lineage(t.lineage)?.parentThreadId))))
+  const eligible = available.filter(t => !scoped || threadType(t) !== 'subagent' ||
+    ((q || lifecycle !== 'active' || working(t)) && (q || filter === 'subagents' || open.has(lineage(t.lineage)?.parentThreadId))))
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
   const all = new Map(), children = new Map();
   const positions = new Map(eligible.map((t,i) => [t.id,i]));
@@ -102,7 +114,9 @@ export function threadList(shell, query = '', options = {}) {
   }
   let bytes = 0;
   const rows = [];
-  for (const {t, depth} of nodes) {
+  const page = scoped ? nodes.slice(cursor, cursor + requestedLimit) : nodes;
+  more ||= scoped && cursor + page.length < nodes.length;
+  for (const {t, depth} of page) {
     const l = lineage(t.lineage), parent = all.get(l?.parentThreadId);
     const row = { id: t.id, title: clip(t.title,512).text,
       ...(t.projectId == null ? {} : { projectId: identifier(t.projectId, 'project id') }),
@@ -110,12 +124,15 @@ export function threadList(shell, query = '', options = {}) {
       status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text,
       model: clip(t.modelSelection?.model ?? '',256).text,
       lineage: l, threadType: threadType(t), parentTitle: clip(parent?.title ?? '',512).text,
-      childCount: activeOnly ? childCounts.get(t.id) ?? 0 : (children.get(t.id) ?? []).length, depth,
+      childCount: scoped ? (q || lifecycle !== 'active' ? knownCounts : childCounts).get(t.id) ?? 0 : (children.get(t.id) ?? []).length,
+      ...(scoped ? {workingChildCount: childCounts.get(t.id) ?? 0, knownChildCount: knownCounts.get(t.id) ?? 0,
+        loadedChildCount: page.filter(n => lineage(n.t.lineage)?.parentThreadId === t.id).length} : {}), depth,
       expanded: open.has(t.id), contextOnly: q !== '' && !found.has(t.id) };
     const cost = Buffer.byteLength(JSON.stringify(row));
     if (bytes+cost > 288*1024) { more = true; break; }
     rows.push(row); bytes += cost;
   }
   return { observedAt: new Date().toISOString(), more, threads: rows,
+    ...(scoped ? {lifecycle, cursor, limit: requestedLimit, nextCursor: cursor + rows.length < nodes.length ? cursor + rows.length : null} : {}),
     typeFilter: filter, grouped, matched: matches.length };
 }

@@ -38,6 +38,8 @@ type savedState struct {
 	PendingStops   map[string]map[string]any `json:"pendingStops"`
 	ModelOverrides map[string]ModelOverride  `json:"modelOverrides,omitempty"`
 	ModelPresets   map[string][]ModelPreset  `json:"modelPresets,omitempty"`
+	BrowserPrefs   *BrowserPreferences       `json:"browserPreferences,omitempty"`
+	LaunchDrafts   map[string]LaunchDraft    `json:"launchDrafts,omitempty"`
 }
 
 func DefaultStatePath() string { return filepath.Join(DefaultDirectory(), "go-drafts.json") }
@@ -58,7 +60,7 @@ func OpenState(path string) (*State, error) {
 		lock.Close()
 		return nil, errors.New("another Go client owns this drafts/recovery file")
 	}
-	s := &State{path: path, lock: lock, saved: savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}}}
+	s := &State{path: path, lock: lock, saved: savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}, LaunchDrafts: map[string]LaunchDraft{}}}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err = s.loadPromptSidecar(nil); err != nil {
@@ -97,6 +99,9 @@ func OpenState(path string) (*State, error) {
 	}
 	if s.saved.PendingStops == nil {
 		s.saved.PendingStops = map[string]map[string]any{}
+	}
+	if s.saved.LaunchDrafts == nil {
+		s.saved.LaunchDrafts = map[string]LaunchDraft{}
 	}
 	if err = s.loadPromptSidecar(b); err != nil {
 		s.Close()
@@ -166,6 +171,9 @@ func (s *State) ImportLegacy(path string) error {
 	if next.PendingStops == nil {
 		next.PendingStops = map[string]map[string]any{}
 	}
+	if next.LaunchDrafts == nil {
+		next.LaunchDrafts = map[string]LaunchDraft{}
+	}
 	next.PromptHistory = mergePromptHistory(s.saved.PromptHistory, next.PromptHistory)
 	return s.commit(next)
 }
@@ -175,6 +183,9 @@ func validateState(v savedState) error {
 		return err
 	}
 	if err := validateModelPreferences(v); err != nil {
+		return err
+	}
+	if err := validateClientPreferences(v); err != nil {
 		return err
 	}
 	if v.Drafts == nil || v.Pending == nil {
@@ -341,6 +352,17 @@ func (s *State) Acknowledge(env string, stop bool, id, thread, message string) e
 			delete(next.ModelOverrides, key)
 		}
 	}
+	if old["op"] == "launch" {
+		key := draftKey(env, thread)
+		message, messageOK := old["message"].(string)
+		title, titleOK := old["title"].(string)
+		if saved, ok := next.LaunchDrafts[key]; ok && messageOK && titleOK && saved.Message == message && saved.Title == title {
+			selection, hasSelection := old["modelSelection"]
+			if (hasSelection && launchSelectionMatches(saved.Selection, selection)) || (!hasSelection && saved.Selection == nil) {
+				delete(next.LaunchDrafts, key)
+			}
+		}
+	}
 	draftThread := thread
 	if old["op"] == "launch" {
 		// Launch is correlated against the source thread, but its draft is
@@ -439,7 +461,7 @@ func cloneRecord(v map[string]any) map[string]any {
 	return copied
 }
 func cloneState(v savedState) savedState {
-	n := savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}}
+	n := savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}, LaunchDrafts: map[string]LaunchDraft{}}
 	n.PromptHistory = append([]PromptEntry(nil), v.PromptHistory...)
 	for k, x := range v.Drafts {
 		n.Drafts[k] = x
@@ -459,6 +481,13 @@ func cloneState(v savedState) savedState {
 			p.Selection = p.Selection.Clone()
 			n.ModelPresets[key] = append(n.ModelPresets[key], p)
 		}
+	}
+	if v.BrowserPrefs != nil {
+		prefs := cloneBrowserPreferences(*v.BrowserPrefs)
+		n.BrowserPrefs = &prefs
+	}
+	for key, draft := range v.LaunchDrafts {
+		n.LaunchDrafts[key] = cloneLaunchDraft(draft)
 	}
 	return n
 }

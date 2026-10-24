@@ -270,8 +270,8 @@ func TestDraftMarkersSurviveRenderCoalescingAndOutdatedRevisions(t *testing.T) {
 		t.Fatal("outdated revision replaced the current page")
 	}
 	_, next := m.Update(oldCmd())
-	if m.transcript != "" || next == nil {
-		t.Fatal("obsolete render became visible or latest render was dropped")
+	if !strings.Contains(ansi.Strip(m.transcript), "old") || next == nil {
+		t.Fatal("completed same-page frame did not advance or latest render was dropped")
 	}
 	finishCommand(t, m, next)
 	if !strings.Contains(ansi.Strip(m.transcript), "current authoritative replacement") || strings.Contains(ansi.Strip(m.transcript), "old") {
@@ -558,7 +558,7 @@ func TestCurrentPageSearchAndReadingDoesNotFollowStreaming(t *testing.T) {
 		t.Fatal("reading older visible content did not pause follow")
 	}
 	oldOffset := m.viewport.YOffset()
-	m.Update(renderedMsg{request: renderRequest{generation: m.generation, width: m.contentWidth, theme: m.theme}, content: m.transcript + "\nnew streaming line"})
+	m.Update(renderedMsg{request: renderRequest{generation: m.generation, page: m.renderPage, width: m.contentWidth, theme: m.theme}, content: m.transcript + "\nnew streaming line"})
 	if m.viewport.YOffset() != oldOffset {
 		t.Fatal("streaming jumped away from reading position")
 	}

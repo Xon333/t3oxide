@@ -12,11 +12,33 @@ import (
 )
 
 type launchDraft struct {
-	Input     LaunchInput
-	Selection *config.ModelSelection
+	Input           LaunchInput
+	Selection       *config.ModelSelection
+	SourceProject   string
+	SourceWorkspace string
 }
 
 func (m *Manager) savedLaunch(env, thread string) (launchDraft, bool) {
+	if m.State != nil {
+		if saved, ok := m.State.LaunchDraft(env, thread); ok {
+			draft := launchDraft{Input: LaunchInput{Title: saved.Title, Message: saved.Message}, SourceProject: saved.ProjectID, SourceWorkspace: saved.Workspace}
+			if saved.Selection != nil {
+				copy := saved.Selection.Clone()
+				draft.Selection = &copy
+			}
+			m.mu.Lock()
+			if m.launchDrafts == nil {
+				m.launchDrafts = map[draftIdentity]launchDraft{}
+			}
+			m.launchDrafts[draftIdentity{env, thread}] = draft
+			m.mu.Unlock()
+			return draft, true
+		}
+		m.mu.Lock()
+		delete(m.launchDrafts, draftIdentity{env, thread})
+		m.mu.Unlock()
+		return launchDraft{}, false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	draft, ok := m.launchDrafts[draftIdentity{env, thread}]
@@ -26,28 +48,39 @@ func (m *Manager) savedLaunch(env, thread string) (launchDraft, bool) {
 	}
 	return draft, ok
 }
-func (m *Manager) saveLaunch(env, thread string, input LaunchInput, selection *config.ModelSelection) {
+func (m *Manager) saveLaunch(env, thread string, input LaunchInput, selection *config.ModelSelection, location Location) error {
+	if m.State == nil {
+		return errors.New("launch draft state is unavailable")
+	}
+	durable := config.LaunchDraft{Title: input.Title, Message: input.Message, ProjectID: location.ProjectID, Workspace: location.Workspace}
+	if selection != nil {
+		copy := selection.Clone()
+		durable.Selection = &copy
+	}
+	if err := m.State.SetLaunchDraft(env, thread, durable); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.launchDrafts == nil {
 		m.launchDrafts = map[draftIdentity]launchDraft{}
 	}
-	draft := launchDraft{Input: input}
+	draft := launchDraft{Input: input, SourceProject: location.ProjectID, SourceWorkspace: location.Workspace}
 	if selection != nil {
 		copy := selection.Clone()
 		draft.Selection = &copy
 	}
 	m.launchDrafts[draftIdentity{env, thread}] = draft
+	return nil
 }
 
-func (a *Session) storeLaunchDraft(environment, sourceThread string, input LaunchInput, selection *config.ModelSelection) error {
+func (a *Session) storeLaunchDraft(environment, sourceThread string, input LaunchInput, selection *config.ModelSelection, location Location) error {
 	if len(input.Title) > 512 || len(input.Message) > 64*1024 || !utf8.ValidString(input.Title) || !utf8.ValidString(input.Message) {
 		return errors.New("launch title or first message exceeds its byte limit or is not UTF-8")
 	}
-	if err := a.manager.State.SetDraft(environment, launchDraftThread(sourceThread), input.Message); err != nil {
+	if err := a.manager.saveLaunch(environment, sourceThread, input, selection, location); err != nil {
 		return fmt.Errorf("preserve launch draft: %w", err)
 	}
-	a.manager.saveLaunch(environment, sourceThread, input, selection)
 	return nil
 }
 
@@ -81,6 +114,9 @@ func (a *Session) locationLocked(s *wire.Snapshot) Location {
 func (c *ModelCatalog) validateLaunch(selection config.ModelSelection) error {
 	copy := *c
 	copy.RequiresNewThreadForModelChange = false
+	// Explicit launch settings have no legacy-option exemption. Untouched
+	// inheritance omits modelSelection from the launch request entirely.
+	copy.Current.Options = nil
 	return copy.validate(selection)
 }
 
@@ -233,7 +269,9 @@ func (a *Session) newConversation(ctx context.Context, title string) (Result, er
 		unavailable = ""
 	}
 	edited := false
+	location := a.location(s)
 	if saved, ok := a.manager.savedLaunch(environment, s.Metadata.ThreadID); ok {
+		input.Message = saved.Input.Message
 		if !suppliedTitle {
 			input.Title = saved.Input.Title
 		}
@@ -241,8 +279,25 @@ func (a *Session) newConversation(ctx context.Context, title string) (Result, er
 			edited = selection == nil || !selection.Equal(*saved.Selection)
 			selection = saved.Selection
 		}
+		if (saved.SourceProject != "" && saved.SourceProject != location.ProjectID) || (saved.SourceWorkspace != "" && saved.SourceWorkspace != location.Workspace) {
+			answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Saved launch workspace changed", Prompt: fmt.Sprintf("This prepared launch belongs to project %q in workspace %q. The current source is project %q in workspace %q. Keep the saved form or explicitly rebind it before reviewing Create.", saved.SourceProject, saved.SourceWorkspace, location.ProjectID, location.Workspace), Choices: []Choice{{ID: "rebind", Label: "Rebind this form to the current workspace"}, {ID: "keep", Label: "Keep saved form and cancel"}}})
+			if err != nil {
+				return Result{}, err
+			}
+			if answer.Cancelled {
+				return Result{}, nil
+			}
+			if answer.Action == "keep" || len(answer.ChoiceIDs) == 1 && answer.ChoiceIDs[0] == "keep" {
+				return Result{Text: "Saved launch kept unchanged; no conversation created."}, nil
+			}
+			if answer.Action != "rebind" && (len(answer.ChoiceIDs) != 1 || answer.ChoiceIDs[0] != "rebind") {
+				return Result{}, errors.New("choose rebind or keep the saved launch form")
+			}
+			if err := a.manager.saveLaunch(environment, s.Metadata.ThreadID, input, selection, location); err != nil {
+				return Result{}, fmt.Errorf("preserve explicit workspace rebind: %w", err)
+			}
+		}
 	}
-	location := a.location(s)
 	for {
 		actions := launchActions(catalog, selection, enabled)
 		summary := s.Metadata.Model
@@ -256,7 +311,7 @@ func (a *Session) newConversation(ctx context.Context, title string) (Result, er
 			boundSelection = &copy
 		}
 		review.StoreDraft = func(input LaunchInput) error {
-			return a.storeLaunchDraft(environment, s.Metadata.ThreadID, input, boundSelection)
+			return a.storeLaunchDraft(environment, s.Metadata.ThreadID, input, boundSelection, location)
 		}
 		if selection != nil {
 			copy := selection.Clone()
@@ -294,7 +349,9 @@ func (a *Session) newConversation(ctx context.Context, title string) (Result, er
 			}
 			edited = edited || !selection.Equal(next)
 			selection = &next
-			a.manager.saveLaunch(environment, s.Metadata.ThreadID, input, selection)
+			if err := a.manager.saveLaunch(environment, s.Metadata.ThreadID, input, selection, location); err != nil {
+				return Result{}, fmt.Errorf("preserve launch selection: %w", err)
+			}
 			continue
 		}
 		if input.Title == "" {
@@ -316,7 +373,9 @@ func (a *Session) newConversation(ctx context.Context, title string) (Result, er
 			if err != nil {
 				return Result{}, err
 			}
-			if !selection.Equal(fresh.Current) {
+			// Omit an untouched source selection so T3 inherits its retained
+			// provider options. Explicit launch selections use strict validation.
+			if edited || !selection.Equal(fresh.Current) {
 				if err = fresh.validateLaunch(*selection); err != nil {
 					return Result{}, err
 				}

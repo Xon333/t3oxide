@@ -30,27 +30,35 @@ func TestWorkspaceHelpPreservesRequestAndBlocksHiddenEditing(t *testing.T) {
 	for _, kind := range []client.Kind{client.EnterText, client.ChooseOne} {
 		m := testModel(t)
 		m.composer.SetValue("human draft")
-		p := retiredPrompt(900, client.Question{Kind: kind, Title: "Exact request", Initial: "answer", Choices: []client.Choice{{ID: "exact", Label: "Answer"}}})
+		p, result, _ := intuitivePrompt(t, client.Question{Kind: kind, Title: "Exact request", Initial: "answer", Choices: []client.Choice{{ID: "exact", Label: "Answer"}}})
 		m.openPrompt(p)
 		m.restoreFocus()
 		if kind == client.ChooseOne {
 			m.dialogKey(keyPress('a'))
 		}
-		answer, query := m.modalInput.Value(), m.dialog.list.FilterValue()
+		source := m.dialog
+		answer, query := m.modalInput.Value(), source.list.FilterValue()
 		m.Update(keyPress(tea.KeyF3))
-		if m.detail == "" || m.dialog == nil || m.dialog.prompt != p {
-			t.Fatal("context help replaced request")
+		if m.dialog == nil || m.dialog.local != "palette" || m.dialog.paletteSource != source {
+			t.Fatal("commands lost the exact live request")
 		}
+		palette := m.dialog
+		m.Update(keyPress(tea.KeyF1))
 		m.Update(tea.PasteMsg{Content: "hidden paste"})
 		m.Update(keyPress('x'))
 		m.Update(keyPress(tea.KeyEnter))
-		if m.modalInput.Value() != answer || m.dialog.list.FilterValue() != query || m.composer.Value() != "human draft" {
+		if m.modalInput.Value() != answer || source.list.FilterValue() != query || m.composer.Value() != "human draft" {
 			t.Fatal("help allowed editing or answered hidden request")
 		}
 		m.Update(keyPress(tea.KeyEscape))
-		if m.detail != "" || m.dialog == nil || m.dialog.prompt != p {
+		if m.detail != "" || m.dialog != palette {
+			t.Fatal("Escape did not return to the command query")
+		}
+		m.Update(keyPress(tea.KeyEscape))
+		if m.dialog != source || m.dialog.prompt != p || m.modalInput.Value() != answer || source.list.FilterValue() != query {
 			t.Fatal("Escape did not return to exact request")
 		}
+		assertIntuitiveNoReply(t, result)
 		if kind == client.EnterText && !m.modalInput.Focused() || kind == client.ChooseOne && !m.dialog.list.FilterInput.Focused() {
 			t.Fatal("request focus not restored")
 		}

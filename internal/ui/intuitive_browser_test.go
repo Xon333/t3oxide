@@ -203,6 +203,14 @@ func TestIntuitiveBrowserMoreOfferedActionsAndExactSource(t *testing.T) {
 			m := testModel(t)
 			q := browserQuestion("a")
 			q.BrowserPage.Actions = append(q.BrowserPage.Actions, action)
+			switch action {
+			case "parent":
+				q.Choices[1].Description = "Subagent · parent: Entry A"
+			case "toggle", "expand":
+				q.Choices[1].Label = "▸ Entry B"
+			case "collapse":
+				q.Choices[1].Label = "▾ Entry B"
+			}
 			p, result, _ := intuitivePrompt(t, q)
 			m.openPrompt(p)
 			source := m.dialog

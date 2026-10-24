@@ -191,6 +191,13 @@ func (m *Model) rejectInput(message tea.Msg, label string) bool {
 	if reason == "" {
 		return false
 	}
+	if kind == "composer" {
+		m.rejectedInput = nil
+	}
+	if kind == "composer" && utf8.ValidString(text) && len(text) <= maxInputBytes && strings.Count(text, "\n") < maxInputLines {
+		m.rejectedInput = &exactRejectedInput{generation: m.generation, edits: m.draftEdits, draft: m.currentDraft(), text: text}
+		reason += " · Commands: " + m.exactRejectedInputLabel()
+	}
 	m.setInputProblem(kind, id, reason+m.retainAttempt(text))
 	return true
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/Xon333/t3oxide/internal/wire"
 )
@@ -21,12 +22,13 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		return nil, false, errors.New("thread list must be an array")
 	}
 	var rows []struct {
-		ID, Title, Project, Status, Model *string
-		ProjectID                         *string
-		Lineage                           json.RawMessage
-		ParentTitle                       string
-		ChildCount, Depth                 int
-		Expanded, ContextOnly             bool
+		ID, Title, Project, Status, Model                    *string
+		ProjectID                                            *string
+		Lineage                                              json.RawMessage
+		ParentTitle                                          string
+		ChildCount, Depth                                    int
+		WorkingChildCount, KnownChildCount, LoadedChildCount int
+		Expanded, ContextOnly                                bool
 	}
 	if err = json.Unmarshal(encoded, &rows); err != nil || len(rows) > 200 {
 		return nil, false, errors.New("invalid bounded thread list")
@@ -66,10 +68,75 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 				}
 			}
 		}
-		if len(row.ParentTitle) > 512 || row.ChildCount < 0 || row.ChildCount > 1000000 || row.Depth < 0 || row.Depth > 12 {
+		if len(row.ParentTitle) > 512 || row.ChildCount < 0 || row.ChildCount > 1000000 || row.WorkingChildCount < 0 || row.WorkingChildCount > 1000000 || row.KnownChildCount < 0 || row.KnownChildCount > 1000000 || row.LoadedChildCount < 0 || row.LoadedChildCount > 200 || row.Depth < 0 || row.Depth > 12 {
 			return nil, false, errors.New("invalid thread navigation metadata")
 		}
 		threads = append(threads, Thread{ID: *row.ID, Title: *row.Title, Project: *row.Project, ProjectID: projectID, Status: *row.Status, Model: *row.Model, Lineage: lineage, ParentTitle: row.ParentTitle, ChildCount: row.ChildCount, Depth: row.Depth, Expanded: row.Expanded, ContextOnly: row.ContextOnly})
+		threads[len(threads)-1].WorkingChildCount = row.WorkingChildCount
+		threads[len(threads)-1].KnownChildCount = row.KnownChildCount
+		threads[len(threads)-1].LoadedChildCount = row.LoadedChildCount
 	}
 	return threads, more, nil
+}
+
+// ThreadPage preserves completeness and observation metadata without changing
+// the legacy array-oriented DecodeThreads API.
+type ThreadPage struct {
+	Threads    []Thread `json:"threads"`
+	More       bool     `json:"more"`
+	ObservedAt string   `json:"observedAt,omitempty"`
+	Lifecycle  string   `json:"lifecycle,omitempty"`
+	Cursor     int      `json:"cursor"`
+	Limit      int      `json:"limit,omitempty"`
+	NextCursor *int     `json:"nextCursor"`
+}
+
+func DecodeThreadPage(result map[string]any) (ThreadPage, error) {
+	rows, more, err := DecodeThreads(result)
+	if err != nil {
+		return ThreadPage{}, err
+	}
+	page := ThreadPage{Threads: rows, More: more}
+	if raw, exists := result["observedAt"]; exists {
+		value, ok := raw.(string)
+		if !ok || len(value) > 64 {
+			return ThreadPage{}, errors.New("invalid thread observation time")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+			return ThreadPage{}, errors.New("invalid thread observation time")
+		}
+		page.ObservedAt = value
+	}
+	if value, ok := result["lifecycle"].(string); ok {
+		if value != "active" && value != "all" && value != "completed" && value != "failed" {
+			return ThreadPage{}, errors.New("invalid conversation lifecycle")
+		}
+		page.Lifecycle = value
+	}
+	if value, ok := result["cursor"]; ok {
+		var n int
+		encoded, _ := json.Marshal(value)
+		if json.Unmarshal(encoded, &n) != nil || n < 0 || n > 1000000 {
+			return ThreadPage{}, errors.New("invalid conversation cursor")
+		}
+		page.Cursor = int(n)
+	}
+	if value, ok := result["nextCursor"]; ok && value != nil {
+		var n int
+		encoded, _ := json.Marshal(value)
+		if json.Unmarshal(encoded, &n) != nil || n <= page.Cursor || n > 1000000 {
+			return ThreadPage{}, errors.New("invalid next conversation cursor")
+		}
+		next := int(n)
+		page.NextCursor = &next
+	}
+	if value, ok := result["limit"]; ok {
+		var n int
+		encoded, _ := json.Marshal(value)
+		if json.Unmarshal(encoded, &n) != nil || n < 1 || n > 200 {
+			return ThreadPage{}, errors.New("invalid conversation page limit")
+		}
+		page.Limit = n
+	}
+	return page, nil
 }

@@ -54,5 +54,24 @@
     "scope": "Full production dependency graph: CLI, Bubble Tea UI, config/wire/client, actual Node adapter, program and assembled-executable PTY integration",
     "full_pinned_build": "Native Apple Silicon build; results in docs/verification.md",
     "go_mod_and_sum": "All module versions and go.sum retained; clipboard promoted from indirect to direct for validated paste handling"
+  },
+  "security_update": {
+    "checked_on": "2026-10-24",
+    "scanner": "golang.org/x/vuln/cmd/govulncheck@v1.9.0",
+    "updates": [
+      {
+        "module": "golang.org/x/text",
+        "previous": "v0.24.0",
+        "selected": "v0.39.0",
+        "advisory": "GO-2026-5970"
+      },
+      {
+        "module": "github.com/yuin/goldmark",
+        "previous": "v1.7.8",
+        "selected": "v1.7.17",
+        "advisory": "GO-2026-5320"
+      }
+    ],
+    "license": "Existing checked-in BSD/MIT license texts unchanged"
   }
 }

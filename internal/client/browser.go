@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +26,21 @@ func (m *Manager) browserScope(fallback string) []string {
 	defer m.mu.Unlock()
 	if len(m.profileScope) > 0 {
 		return append([]string(nil), m.profileScope...)
+	}
+	if m.State != nil {
+		prefs := m.State.BrowserPreferences()
+		valid := []string{}
+		for _, id := range prefs.ProfileIDs {
+			for _, env := range m.Environments {
+				if env.ID == id {
+					valid = append(valid, id)
+					break
+				}
+			}
+		}
+		if len(valid) > 0 {
+			return valid
+		}
 	}
 	if fallback != "" {
 		return []string{fallback}
@@ -51,6 +65,18 @@ func (m *Manager) selectScope(ids []string) error {
 	m.mu.Lock()
 	m.profileScope = append([]string(nil), ids...)
 	m.mu.Unlock()
+	if m.State != nil {
+		p := m.State.BrowserPreferences()
+		p.ProfileIDs = append([]string(nil), ids...)
+		found := false
+		for _, id := range ids {
+			found = found || p.LastProfileID == id
+		}
+		if !found {
+			p.LastProfileID = ids[0]
+		}
+		return m.State.SetBrowserPreferences(p)
+	}
 	return nil
 }
 func (a *Session) chooseScope(ctx context.Context, current []string) ([]string, error) {
@@ -84,6 +110,10 @@ type browserTab struct {
 	query, initial   string
 	err              error
 	loaded           bool
+	observedAt       string
+	nextCursor       *int
+	loadedAt         time.Time
+	pageLimit        int
 }
 
 func browserChoiceID(profile, thread string) string {
@@ -91,7 +121,10 @@ func browserChoiceID(profile, thread string) string {
 	return string(b)
 }
 func listFields(query string, n NavigationState, enabled bool) map[string]any {
-	fields := map[string]any{"query": query}
+	fields := map[string]any{"query": query, "cursor": n.Cursor}
+	if n.Lifecycle != "" {
+		fields["lifecycle"] = n.Lifecycle
+	}
 	if enabled {
 		expanded := []string{}
 		for id, open := range n.Expanded {
@@ -106,7 +139,7 @@ func listFields(query string, n NavigationState, enabled bool) map[string]any {
 }
 
 // browserMetadata never subscribes to detail or changes the active attachment.
-func (a *Session) browserMetadata(ctx context.Context, env config.Environment, query string) ([]Thread, bool, bool, error) {
+func (a *Session) browserMetadata(ctx context.Context, env config.Environment, query string) (ThreadPage, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	a.mu.Lock()
@@ -118,7 +151,7 @@ func (a *Session) browserMetadata(ctx context.Context, env config.Environment, q
 		var err error
 		conn, err = wire.Start(ctx, env)
 		if err != nil {
-			return nil, false, false, err
+			return ThreadPage{}, false, err
 		}
 		defer func() {
 			conn.Close()
@@ -128,23 +161,23 @@ func (a *Session) browserMetadata(ctx context.Context, env config.Environment, q
 		}()
 		hello, err := conn.Request(ctx, "hello", nil, "")
 		if err != nil {
-			return nil, false, false, err
+			return ThreadPage{}, false, err
 		}
 		if stringValue(hello["environmentId"]) != env.EnvironmentID || numberValue(hello["protocol"]) != 1 || numberValue(hello["orchestrationProtocol"]) != 2 {
-			return nil, false, false, &wire.Fault{Code: "identity_mismatch", Message: "browser helper identity or protocol mismatch"}
+			return ThreadPage{}, false, &wire.Fault{Code: "identity_mismatch", Message: "browser helper identity or protocol mismatch"}
 		}
 		features, _ := hello["features"].(map[string]any)
 		navigation = boolValue(features["threadNavigation"])
 	}
 	result, err := conn.Request(ctx, "list", listFields(query, a.manager.navigation(env.EnvironmentID), navigation), "")
 	if err != nil {
-		return nil, false, navigation, err
+		return ThreadPage{}, navigation, err
 	}
 	if err = ctx.Err(); err != nil {
-		return nil, false, navigation, err
+		return ThreadPage{}, navigation, err
 	}
-	rows, more, err := DecodeThreads(result)
-	return rows, more, navigation, err
+	page, err := DecodeThreadPage(result)
+	return page, navigation, err
 }
 
 // Browse keeps the current detailed session alive. Only an explicit offered
@@ -161,6 +194,12 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 	a.mu.Unlock()
 	scope := a.manager.browserScope(initialEnv)
 	var err error
+	if len(scope) == 0 && len(a.manager.Environments) == 1 {
+		scope = []string{a.manager.Environments[0].ID}
+		if err = a.manager.selectScope(scope); err != nil {
+			return Result{}, err
+		}
+	}
 	if len(scope) == 0 {
 		scope, err = a.chooseScope(ctx, scope)
 		if err != nil || len(scope) == 0 {
@@ -168,6 +207,14 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 		}
 	}
 	current := scope[0]
+	if initialEnv == "" && a.manager.State != nil {
+		last := a.manager.State.BrowserPreferences().LastProfileID
+		for _, id := range scope {
+			if id == last {
+				current = id
+			}
+		}
+	}
 	for _, id := range scope {
 		if id == initialEnv {
 			current = id
@@ -190,8 +237,14 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 			tab = &browserTab{query: query}
 			tabs[current] = tab
 		}
+		if tab.loaded && time.Since(tab.loadedAt) > 30*time.Second {
+			tab.loaded = false
+		}
 		if !tab.loaded {
-			tab.threads, tab.more, tab.navigation, tab.err = a.browserMetadata(ctx, env, tab.query)
+			page, navigation, loadErr := a.browserMetadata(ctx, env, tab.query)
+			tab.threads, tab.more, tab.navigation, tab.err = page.Threads, page.More, navigation, loadErr
+			tab.observedAt, tab.nextCursor, tab.loadedAt = page.ObservedAt, page.NextCursor, time.Now()
+			tab.pageLimit = page.Limit
 			tab.loaded = true
 			if ctx.Err() != nil {
 				return Result{}, ctx.Err()
@@ -206,7 +259,7 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 			actions = append(actions, "resume")
 		}
 		if tab.navigation {
-			actions = append(actions, "types", "filter", "toggle", "expand", "collapse", "parent")
+			actions = append(actions, "types", "filter", "lifecycle", "toggle", "expand", "collapse", "parent")
 		}
 		for _, id := range scope {
 			for _, e := range a.manager.Environments {
@@ -214,6 +267,13 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 					actions = append(actions, "profile:"+e.ID)
 				}
 			}
+		}
+		n := a.manager.navigation(env.EnvironmentID)
+		if tab.nextCursor != nil {
+			actions = append(actions, "next-page")
+		}
+		if n.Cursor > 0 {
+			actions = append(actions, "previous-page")
 		}
 		choices := ThreadChoices(tab.threads)
 		groups := []BrowserGroup{}
@@ -237,7 +297,7 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 		if tab.err != nil {
 			message = tab.err.Error()
 		}
-		answer, e := a.asker.Ask(ctx, Question{Surface: SurfaceBrowser, Kind: ChooseOne, Title: "Conversations", Choices: choices, Initial: tab.initial, Navigation: tab.navigation, BrowserPage: &BrowserPage{ProfileIDs: append([]string(nil), scope...), ProfileID: current, Profiles: profiles, Groups: groups, Location: env.Label, Actions: actions, Query: tab.query, More: tab.more, Error: message}})
+		answer, e := a.asker.Ask(ctx, Question{Surface: SurfaceBrowser, Kind: ChooseOne, Title: "Conversations", Choices: choices, Initial: tab.initial, Navigation: tab.navigation, BrowserPage: &BrowserPage{ProfileIDs: append([]string(nil), scope...), ProfileID: current, Profiles: profiles, Groups: groups, Location: env.Label, Actions: actions, Query: tab.query, More: tab.more, Error: message, ObservedAt: tab.observedAt, Lifecycle: n.Lifecycle, Cursor: n.Cursor, NextCursor: tab.nextCursor}})
 		if e != nil {
 			return Result{}, e
 		}
@@ -302,18 +362,57 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 			}
 		case "refresh":
 			tab.loaded = false
+		case "next-page", "previous-page":
+			n := a.manager.navigation(env.EnvironmentID)
+			if answer.Action == "next-page" && tab.nextCursor != nil {
+				n.Cursor = *tab.nextCursor
+			} else if answer.Action == "previous-page" {
+				if tab.pageLimit > 0 {
+					n.Cursor = max(0, n.Cursor-tab.pageLimit)
+				} else {
+					n.Cursor = 0
+				}
+			}
+			a.manager.saveNavigation(env.EnvironmentID, n)
+			tab.loaded = false
+		case "lifecycle":
+			n := a.manager.navigation(env.EnvironmentID)
+			reply, e := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Conversation lifecycle", Initial: n.Lifecycle, Choices: []Choice{{ID: "active", Label: "Active", Description: "Unsettled conversations and working children"}, {ID: "all", Label: "All", Description: "Include settled and finished children"}, {ID: "completed", Label: "Completed"}, {ID: "failed", Label: "Failed"}}})
+			if e != nil {
+				return Result{}, e
+			}
+			if !reply.Cancelled && len(reply.ChoiceIDs) == 1 {
+				switch reply.ChoiceIDs[0] {
+				case "active", "all", "completed", "failed":
+					n.Lifecycle = reply.ChoiceIDs[0]
+					n.Cursor = 0
+					a.manager.saveNavigation(env.EnvironmentID, n)
+					tab.loaded = false
+				}
+			}
 		case "search":
-			reply, e := a.asker.Ask(ctx, Question{Kind: EnterText, SingleLine: true, Title: "Find a conversation", Initial: tab.query})
+			reply := Answer{Text: answer.Text}
+			var e error
+			if answer.Text == "" {
+				reply, e = a.asker.Ask(ctx, Question{Kind: EnterText, SingleLine: true, Title: "Find a conversation", Initial: answer.Text})
+			}
 			if e != nil {
 				return Result{}, e
 			}
 			if !reply.Cancelled {
 				tab.query = reply.Text
+				n := a.manager.navigation(env.EnvironmentID)
+				n.Cursor = 0
+				if strings.TrimSpace(reply.Text) != "" {
+					n.Lifecycle = "all"
+				}
+				a.manager.saveNavigation(env.EnvironmentID, n)
 				tab.loaded = false
 			}
 		case "types", "filter":
 			n := a.manager.navigation(env.EnvironmentID)
 			n.Filter, e = a.pickThreadFilter(ctx, n.Filter)
+			n.Cursor = 0
 			if e != nil {
 				return Result{}, e
 			}
@@ -332,6 +431,7 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 				} else {
 					return Result{}, errors.New("too many expanded groups")
 				}
+				n.Cursor = 0
 				a.manager.saveNavigation(env.EnvironmentID, n)
 				tab.loaded = false
 			}
@@ -357,6 +457,12 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 		default:
 			if strings.HasPrefix(answer.Action, "profile:") {
 				current = strings.TrimPrefix(answer.Action, "profile:")
+				if a.manager.State != nil {
+					prefs := config.BrowserPreferences{ProfileIDs: append([]string(nil), scope...), LastProfileID: current}
+					if e := a.manager.State.SetBrowserPreferences(prefs); e != nil {
+						return Result{}, e
+					}
+				}
 			}
 		}
 	}
@@ -414,16 +520,5 @@ func (a *Session) withBrowserSource(ctx context.Context, profile, thread, action
 	if action == "new" {
 		return source.newConversation(ctx, "")
 	}
-	answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Conversation settings", Choices: []Choice{{ID: "model", Label: "Model"}, {ID: "effort", Label: "Effort"}, {ID: "speed", Label: "Service tier"}}})
-	if err != nil || answer.Cancelled {
-		return Result{}, err
-	}
-	if len(answer.ChoiceIDs) != 1 {
-		return Result{}, errors.New("choose one setting")
-	}
-	switch answer.ChoiceIDs[0] {
-	case "model", "effort", "speed":
-		return source.invoke(ctx, answer.ChoiceIDs[0], "")
-	}
-	return Result{}, fmt.Errorf("setting was not offered")
+	return source.settings(ctx)
 }

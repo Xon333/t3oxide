@@ -83,6 +83,12 @@ func (m *Model) resizeDialog() {
 	if m.dialog != nil && m.detail == "" {
 		if m.dialog.details {
 			m.questionViewport.SetHeight(max(1, m.modalHeight-helpHeight))
+		} else if m.dialog.settingsForm != nil {
+			return
+		} else if m.dialog.requestForm != nil {
+			m.modalInput.SetWidth(m.modalWidth)
+			m.modalInput.SetHeight(max(1, min(6, m.modalHeight-7)))
+			return
 		} else if m.dialog.launch != nil {
 			m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
 			m.modalInput.SetHeight(max(1, min(8, surfaceHeight-8)))
@@ -104,8 +110,16 @@ func (m *Model) resizeDialog() {
 			if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany {
 				fixed += m.browserControlsHeight(m.modalWidth)
 			}
-			m.modalHeight = min(m.modalHeight, fixed+max(1, len(m.dialog.list.VisibleItems())))
-			m.dialog.list.SetShowPagination(m.height >= 24)
+			// Native pagination has its own styled rows. Reserving pagination in
+			// a panel sized to exactly N choices used to leave only one item.
+			count := max(1, len(m.dialog.list.VisibleItems()))
+			available := max(1, m.modalHeight-fixed)
+			paginated := count > available && m.height >= 24
+			m.dialog.list.SetShowPagination(paginated)
+			if paginated {
+				count += 2
+			}
+			m.modalHeight = min(m.modalHeight, fixed+count)
 			m.dialog.list.SetSize(m.modalWidth, max(1, m.modalHeight-fixed))
 			// The query is rendered independently of the native list's title
 			// and spinner. Give its native textinput the entire remaining width.
@@ -313,6 +327,12 @@ func (m *Model) modalView() string {
 	d := m.dialog
 	if d == nil {
 		return ""
+	}
+	if d.settingsForm != nil && !d.details {
+		return framed(d.title, m.modelSettingsView(w, h-helpHeight)+localHelp, w, p, true)
+	}
+	if d.requestForm != nil && !d.details {
+		return framed(d.title, m.requestFormView(w, h-helpHeight)+localHelp, w, p, true)
 	}
 	if d.details {
 		return framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)

@@ -13,18 +13,23 @@ import (
 
 func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 	for _, tc := range []struct {
-		name, draft, label string
-		reading, opens     bool
+		name, draft, label     string
+		reading, opens, legacy bool
 	}{
-		{"empty-composer", "", "Ctrl+P", false, true},
-		{"nonempty-composer", "first\nsecond", "Tab→Ctrl+P", false, false},
-		{"reading-with-draft", "first\nsecond", "Ctrl+P", true, true},
+		{"empty-composer", "", "Ctrl+P", false, true, false},
+		{"nonempty-composer", "first\nsecond", "Ctrl+P", false, true, false},
+		{"reading-with-draft", "first\nsecond", "Ctrl+P", true, true, false},
+		{"legacy-nonempty-composer", "first\nsecond", "Shift+Tab→Ctrl+P", false, false, true},
+		{"legacy-reading-with-draft", "first\nsecond", "Ctrl+P", true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testModel(t)
+			if tc.legacy {
+				finishCommand(t, m, m.dispatch("keyboard", "legacy"))
+			}
 			m.Update(tea.PasteMsg{Content: tc.draft})
 			if tc.reading {
-				m.Update(keyPress(tea.KeyTab))
+				m.Update(keyPress(tea.KeyTab, tea.ModShift))
 			}
 			k := m.keyMap()
 			if k.Palette.Help().Key != tc.label || key.Matches(keyPress('p', tea.ModCtrl), k.Palette) != tc.opens {
@@ -39,13 +44,28 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 				if m.composer.Line() != 0 {
 					t.Fatal("Ctrl+P did not retain native previous-line editing")
 				}
-				m.Update(keyPress(tea.KeyTab))
+				m.Update(keyPress(tea.KeyTab, tea.ModShift))
 				m.Update(keyPress('p', tea.ModCtrl))
 				if m.dialog == nil || m.dialog.local != "palette" || m.currentDraft() != tc.draft {
-					t.Fatal("advertised Tab→Ctrl+P route changed the draft or failed to open commands")
+					t.Fatal("advertised Shift+Tab→Ctrl+P route changed the draft or failed to open commands")
 				}
 			}
 		})
+	}
+}
+
+func TestIntuitivePaletteAcceptsSlashName(t *testing.T) {
+	m := testModel(t)
+	m.composer.SetValue("exact retained draft")
+	m.Update(keyPress('p', tea.ModCtrl))
+	m.Update(tea.PasteMsg{Content: "/pending"})
+	row, ok := m.dialog.list.SelectedItem().(choiceItem)
+	if !ok || row.command != "pending" || m.dialog.list.FilterValue() != "/pending" || m.currentDraft() != "exact retained draft" {
+		t.Fatalf("slash-name palette query changed target/query/draft: %#v", row)
+	}
+	m.Update(keyPress(tea.KeyEscape))
+	if m.dialog != nil || m.currentDraft() != "exact retained draft" {
+		t.Fatal("palette query changed the composer on return")
 	}
 }
 
@@ -102,6 +122,7 @@ func TestIntuitiveAliasesStayLiteralInEveryEditor(t *testing.T) {
 		t.Run(editor, func(t *testing.T) {
 			m := testModel(t)
 			m.composer.SetValue("retained composer")
+			finishCommand(t, m, m.dispatch("keyboard", "legacy"))
 			// A modal may cover reading focus; that must not enable ? or /.
 			m.transcriptFocus = editor != "composer"
 			switch editor {

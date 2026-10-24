@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/Xon333/t3oxide/internal/client"
@@ -24,20 +23,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.stop()
 	case key.Matches(msg, k.Quit):
 		return m.quit()
+	case key.Matches(msg, k.Detail) && m.detail == "":
+		return m.dispatch("details", "")
 	case key.Matches(msg, k.Help):
 		return m.dispatch("help", "")
 	case key.Matches(msg, k.Error):
 		m.openFeedbackDetail()
 		return nil
 	case key.Matches(msg, k.Palette):
-		if (m.browserPage || m.launchPage) && m.dialog == nil {
-			m.openDetail("Navigation controls", m.helpText())
-			return nil
-		}
-		if m.searching {
-			m.openDetail("Search controls", m.helpText())
-			return nil
-		}
 		return m.openPalette()
 	}
 	if msg.String() == "ctrl+c" {
@@ -145,13 +138,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Latest):
 		return m.execute("latest", "")
 	case key.Matches(msg, k.Detail):
-		if m.preservedDraft != "" {
-			m.openDetail("Exact draft", m.preservedDraft)
-			m.detailCopy = m.preservedDraft
-		} else {
-			m.openFeedbackDetail()
-		}
-		return nil
+		return m.dispatch("details", "")
 	case key.Matches(msg, k.Copy):
 		if m.preservedDraft != "" {
 			return m.copyText("draft")
@@ -164,7 +151,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	switch msg.String() {
-	case "tab":
+	case "tab", "shift+tab":
 		m.transcriptFocus = !m.transcriptFocus
 		return m.restoreFocus()
 	case "esc":
@@ -303,7 +290,7 @@ func (m *Model) slash(text string) tea.Cmd {
 		m.problem = reason
 		return nil
 	}
-	local := name == "help" || name == "keys" || name == "theme" || name == "mouse" || name == "sidebar" || name == "search" || name == "copy" || name == "quit" || name == "edit" || name == "clear" || name == "recall" || name == "error"
+	local := name == "help" || name == "keys" || name == "theme" || name == "mouse" || name == "sidebar" || name == "search" || name == "copy" || name == "quit" || name == "edit" || name == "clear" || name == "recall" || name == "error" || name == "details" || name == "keyboard"
 	if local {
 		old := m.composer.Value()
 		m.preservedDraft = ""
@@ -329,14 +316,37 @@ func (m *Model) slash(text string) tea.Cmd {
 
 func (m *Model) dispatch(name, args string) tea.Cmd {
 	switch name {
+	case "keyboard":
+		if args != "modern" && args != "legacy" {
+			m.problem = "Use /keyboard modern or /keyboard legacy"
+			return nil
+		}
+		return m.setting("keyboard", args)
+	case "use-exact":
+		return m.useExactRejectedInput()
 	case "settings":
-		items := []list.Item{choiceItem{title: "Model", command: "model"}, choiceItem{title: "Effort", command: "effort"}, choiceItem{title: "Tier", command: "speed"}, choiceItem{title: "Appearance", command: "theme"}}
-		m.dialogSerial++
-		m.dialog = &dialog{serial: m.dialogSerial, kind: client.ChooseOne, title: "Settings", local: "settings"}
-		m.dialog.list = m.newList("Settings", items)
-		m.resize()
-		return m.restoreFocus()
+		return m.execute("settings", "")
 	case "details":
+		if m.dialog != nil {
+			if m.dialog.details {
+				m.dialog.details = false
+				m.questionViewport.SetContent(safeText(m.dialog.description))
+				m.resize()
+				return m.restoreFocus()
+			}
+			if m.dialog.preservedInitial == "" && (m.problem != "" || m.streamProblem != "") && m.openFeedbackDetail() {
+				return nil
+			}
+			if m.dialog.requestForm != nil {
+				m.saveRequestAnswer()
+			}
+			m.refreshDialogDetails()
+			m.dialog.details = true
+			m.questionViewport.SetContent(m.dialog.detailText)
+			m.questionViewport.GotoTop()
+			m.resize()
+			return m.restoreFocus()
+		}
 		if m.preservedDraft != "" {
 			m.openDetail("Exact draft", m.preservedDraft)
 			m.detailCopy = m.preservedDraft
@@ -419,6 +429,8 @@ func (m *Model) setting(kind, value string) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		switch kind {
+		case "keyboard":
+			err = settings.SetLegacyEditorCtrlP(value == "legacy")
 		case "theme":
 			if profile != "" {
 				err = settings.SetEnvironmentTheme(profile, value)
@@ -446,12 +458,28 @@ func (m *Model) copyText(which string) tea.Cmd {
 	case "detail":
 		text = m.detailCopyText()
 	case "answer":
+		if m.dialog != nil && m.dialog.requestForm != nil {
+			m.saveRequestAnswer()
+			f := m.dialog.requestForm
+			answer := f.answers[f.questions[f.index].ID]
+			switch value := answer.(type) {
+			case string:
+				text = value
+			case []string:
+				text = strings.Join(value, "\n")
+			}
+			break
+		}
 		if m.dialog != nil && m.dialog.launch != nil {
 			text = m.launchInput().Message
 			break
 		}
+		if m.dialog != nil && m.dialog.kind == client.EnterText && m.dialog.preservedInitial == "" {
+			text = m.modalInput.Value()
+			break
+		}
 		if m.dialog == nil || m.dialog.preservedInitial == "" {
-			m.notice = "No preserved initial answer to copy"
+			m.notice = "No current answer to copy"
 			return nil
 		}
 		text = m.dialog.preservedInitial
@@ -471,9 +499,13 @@ func (m *Model) copyText(which string) tea.Cmd {
 	case "page":
 		var parts []string
 		for _, row := range m.snapshot.Items {
-			parts = append(parts, safeText(row.Kind)+"\n"+safeText(row.Text))
+			part := safeText(row.Kind) + "\n" + safeText(row.Text)
+			if row.Truncated {
+				part += "\n[Shortened by T3oxide]"
+			}
+			parts = append(parts, part)
 		}
-		text = strings.Join(parts, "\n\n")
+		text = "[Loaded page only; bounded history]\n\n" + strings.Join(parts, "\n\n")
 	default:
 		m.problem = "Use /copy [page|draft|answer|error|detail]"
 		return nil
