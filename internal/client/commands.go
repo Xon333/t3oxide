@@ -14,6 +14,7 @@ func (a *Session) Commands() []CommandSpec { return CommandCatalog() }
 // reuse these supported names instead of maintaining a disconnected catalog.
 func CommandCatalog() []CommandSpec {
 	return []CommandSpec{
+		{Name: "activity", Description: "Inspect loaded tools and results; explicit earlier activity"},
 		{Name: "model", Description: "Choose the current thread model; optional next stages one message"},
 		{Name: "settings", Description: "Stage the current model and advertised options, then apply once"},
 		{Name: "effort", Description: "Choose supported reasoning effort; optional next"},
@@ -63,6 +64,8 @@ func (a *Session) Command(ctx context.Context, name, args string) (result Result
 func (a *Session) invoke(ctx context.Context, name, args string) (Result, error) {
 	var result Result
 	switch name {
+	case "activity":
+		return a.activity(ctx, args)
 	case "settings":
 		return a.settings(ctx)
 	case "model":

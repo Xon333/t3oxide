@@ -6,7 +6,7 @@ See the [demo screenshots](README.md#screenshots) for the browser and conversati
 
 ## Build and open
 
-Build prerequisite: **Go 1.26.0+**. Native verification uses Go 1.27.2 on Apple Silicon; see [verification](docs/verification.md). Run the full pinned-toolchain checks below before adoption. The first build downloads pinned Go modules. The existing host adapter requires Node 22.4+; remote profiles use your normal OpenSSH configuration.
+Build prerequisite: **Go 1.26.0+**. The 0.7 source is verified with Go 1.26.10 on Linux and cross-built for Apple Silicon; earlier native evidence keeps its original release label in [verification](docs/verification.md). The first build downloads pinned Go modules. The existing host adapter requires Node 22.4+; remote profiles use your normal OpenSSH configuration. See [native remainder](NATIVE-REMAINDER.md) for the focused installed-machine acceptance.
 
 ```zsh
 cd /path/to/source
@@ -21,7 +21,7 @@ The client reads the existing `~/.config/t3oxide/environments.json`. For a new i
 node scripts/install-host.mjs
 ```
 
-With no flags it preserves existing identity, token-file path and write setting, probes the existing loopback server, installs the seven adapter modules as a versioned release, and repoints only the adapter symlink. Existing `operations-v1` receipts are retained. An interrupted installer leaves `.install-lock` beside `host.json`; preserve it until that installer has finished or its interrupted publication has been reviewed. It does not install, update, start or restart T3. Use the installer output to verify the exact adapter path in existing profiles; retain the existing identity and credential. Helpers load new modules on their normal reconnect. An older adapter retains its original functions; launch-selection editing is offered only when the adapter advertises support from the existing T3 endpoint.
+With no flags it preserves existing identity, token-file path and write setting, probes the existing loopback server, installs the eight adapter modules as a versioned release, atomically publishes validated `host.json`, and repoints the adapter symlink. Configuration formatting may change; existing `operations-v1` receipts are retained. An interrupted installer leaves `.install-lock` beside `host.json`; preserve it until that installer has finished or its interrupted publication has been reviewed. It does not install, update, start or restart T3. Use the installer output to verify the exact adapter path in existing profiles; retain the existing identity and credential. Helpers load new modules on restart or explicit `/reconnect`; an internal socket reconnect keeps the loaded revision. An older adapter retains its original functions; new controls appear only when supported by its advertised capabilities.
 
 After native acceptance, install the single executable in a directory on your zsh PATH, for example:
 
@@ -40,7 +40,7 @@ Without `--thread`, the client starts in the browser. Environments selects one o
 
 Each environment starts with at most 24 unsettled conversations. Subagents are excluded from the default navigation tree; expand an offered parent or choose Subagents in More to load working children. Explicit search can find settled conversations and matching children, with the existing 200-row safety limit. These defaults ship with the adapter and apply to every selected environment. More → Lifecycle deliberately includes settled/completed/failed conversations; type remains independent. Next page and Previous page provide bounded continuation. Browser rows are metadata snapshots with an observation time; returning after 30 seconds refreshes that tab. The selected environment scope and last profile are saved locally. A single configured profile skips the scope chooser. Metadata browsing does not open a WebSocket or subscribe to a transcript. T3's current shell endpoint still returns environment-wide metadata to the host adapter; filtering happens there before rows reach the client.
 
-Open the browser from a conversation with Ctrl+O or `/switch`. The conversation stays attached, its active work continues, and its composer and reading position are retained. Esc or Resume returns to it. Only explicitly opening an offered thread changes the attached conversation. New, Settings, Refresh and agent/thread-type actions are available in the browser. Select an exact conversation before New or conversation settings so its environment and workspace are known; a project label alone is not a launch target.
+From a conversation, Ctrl+O focuses the sidebar when visible or opens the compact full browser. `/switch` or Commands → Conversations always opens the full browser. The conversation stays attached, its active work continues, and its composer and reading position are retained. Esc or Resume returns to it. Only explicitly opening an offered thread changes the attached conversation. New, Settings, Refresh and agent/thread-type actions are available in navigation. Select an exact conversation before New or conversation settings so its environment and workspace are known; a project label alone is not a launch target.
 
 New or `/new [TITLE]` opens one review with a multiline first message and single-line title. Tab moves from the message to the title, then Editor, supported Model/Effort/Tier controls, Create and Cancel; Shift+Tab moves back. Enter inserts a newline in the first message. In the title, Enter focuses the offered Create control without submitting; another explicit activation creates the conversation. **Create is the explicit submission action.** An empty title defaults to `New conversation`. The title is limited to 512 bytes and the first message to 64 KiB; payload text is preserved without trimming.
 
@@ -55,7 +55,7 @@ Multi-question requests retain prior answers with Back/Next and inline validatio
 | Action | Control |
 |---|---|
 | Commands / contextual help | **Ctrl+P** from reading or composing; `/help` or reading-only **?** opens help |
-| Browser / environments | **Ctrl+O** or `/switch` / `/env`; Esc or Resume returns to the attached conversation |
+| Navigation / environments | **Ctrl+O** focuses the sidebar or opens the compact browser; `/switch` opens the full browser; `/env` selects environments |
 | Browser actions / environment tabs | **Tab/Shift+Tab**, then Enter; Left/Right moves between actions only while their strip owns focus |
 | Filter conversation titles/projects, including collapsed children | Type in the browser to filter loaded rows; `/threads WORDS` or browser Search queries the host |
 | Expand / collapse subagents; choose thread types | **More**, then the offered Expand, Collapse or thread-type action |
@@ -70,13 +70,13 @@ Multi-question requests retain prior answers with Back/Next and inline validatio
 | Stop reviewed turn and hold queue | **Ctrl+S**, including inside requests and details; `/stop` |
 | Review T3 request / full question | **Ctrl+R** or `/requests` / **Ctrl+L** in the picker |
 | Complete multiple selection | **Tab**, then **Enter** on the fixed Continue control; Ctrl+Enter also works, including with zero filter matches |
-| Read / write | **Tab** switches transcript/composer focus; PgUp/PgDown scroll the focused component |
+| Read / write / tool inspection | **Tab / Shift+Tab** cycles visible sidebar, composer, transcript, optional context and activity strip; Enter inspects a focused activity; PgUp/PgDown scroll the focused component |
 | Earlier page / Latest | `/earlier` / `/latest`; Option/Alt+Left/Right only with transcript focus |
 | Search current page | `/search TEXT`, or **/** / Ctrl+F with reading focus; n/N moves between matches there |
 | Copy | `/copy [page\|draft\|answer\|error\|detail]`; Ctrl+Y copies the current detail or preserved answer/draft, otherwise the last agent message |
 | Details / errors | **Ctrl+L** or `/details` reviews the current detail; `/error` opens errors when an exact draft/answer has detail priority. Ctrl+Y copies an open detail |
 | New conversation / recovery | `/new [TITLE]`; `/pending`, `/retry [stop]`, `/resolve [stop]`, `/reconnect` |
-| Theme / mouse / sidebar | `/theme [default\|terminal\|violet\|cyan\|lime]`, `/mouse [on\|off]`, `/sidebar [on\|off]` |
+| Theme / mouse / navigation / context pane | `/theme [default\|terminal\|violet\|cyan\|lime]`, `/mouse [on\|off]`, `/navigator [on\|off]`, `/sidebar [on\|off]` |
 | Full T3 / local exit | `/web` displays the configured address; **Ctrl+Q** or `/quit` exits. Ctrl+D exits only from an empty composer or transcript |
 
 The composer retains Bubbles' editing keys: Ctrl+A/E line start/end, Ctrl+B/F character movement, Up/Down and Ctrl+N line movement, Ctrl+T transpose, Ctrl+G Select All, Ctrl+D forward delete, and decoded Alt+Left/Right word movement. Option letters, Shift selection and literal `?`/`/` stay with focused editors. In a filter, Up/Down, PageUp/PageDown and Ctrl+P/N move through results; Left/Right edits the query. The highlighted row, useful selection detail and Enter refer to the same result; a complete unique title is not repeated in a footer. Checked membership is separate from the current row.
@@ -91,9 +91,9 @@ Input is bounded to 64 KiB and 9,999 editable lines. Text Bubbles would change i
 
 Prompt recall contains up to 24 acknowledged prompts, explicit clears and rejected attempts, scoped to the same environment and thread, with a 512 KiB total text budget. Opening or canceling recall leaves the live draft intact; accepting an entry preserves any displaced live draft in recall. A request's uneditable initial answer keeps its original review/copy and explicit Ctrl+U replacement path.
 
-Mouse capture provides transcript scrolling; `/mouse off` enables native terminal selection. Click-to-focus is not implemented. Clipboard behavior depends on the terminal; copy also uses the existing desktop clipboard helper. Local dismissal and exit never mean remote Stop.
+Mouse capture provides click-to-focus, displayed conversation/action/choice activation, tool inspection and pane-scoped scrolling. Form fields retain keyboard navigation. Hit targets belong to the last rendered layout; after a state or size change, clicks wait for a fresh layout. `/mouse off` enables native terminal selection. Clipboard behavior depends on the terminal; copy also uses the existing desktop clipboard helper. Local dismissal and exit never mean remote Stop.
 
-`t3oxide envs`, `threads`, `status` and `doctor` are read-only. Status always emits JSON; use `--json` for machine-readable envs, threads or doctor results. Bare `--json` requires a read-only command and cannot start the TUI. Explicit `-h`/`--help` works without configuration, including with malformed arguments. `--help` describes the available options and portable TUI routes.
+`t3oxide envs`, `threads`, `status`, `doctor`, `capabilities`, `activity` and `inspect` are read-only. Status always emits JSON; use `--json` for machine-readable results from the other read commands. Capabilities/activity/inspect use a versioned success/error envelope. Bare `--json` requires a read-only command and cannot start the TUI. Explicit `-h`/`--help` works without configuration, including with malformed arguments. `--help` describes the available options and portable TUI routes.
 
 ## Themes
 
@@ -134,7 +134,7 @@ Earlier replaces the visible page and pauses live detail. Reconnect keeps a cach
 
 Known pending requests remain visible and reviewable while reading Earlier. Answers are checked against the current request identity and revision before dispatch. The cached count stays until Latest supplies a verified replacement; an answer acknowledgment alone does not establish that every request is resolved. Run and receipt details remain at their last observed state while live detail is paused.
 
-The adapter supplies bounded messages, notices, request controls and attachment counts. Model/effort/tier controls now use the selected provider's advertised choices. Full tool payloads, attachment uploads, provider switching/configuration and full-history search stay in T3. Current-page search and host-side thread filtering are separate controls.
+The adapter supplies bounded messages, notices, request controls and attachment counts. Model/effort/tier controls now use the selected provider's advertised choices. Tool results are available through bounded, explicit inspection. Payloads beyond that limit, attachment uploads, provider switching/configuration and full-history search stay in T3. Current-page search and host-side thread filtering are separate controls.
 
 ## Model scope
 
@@ -159,3 +159,16 @@ In a restricted Go 1.23.2+ environment, `bash scripts/check-portable-core.sh` (a
 `threads --json` retains its existing array format. Use `threads --json-envelope` for schema version 1 with `threads`, `more`, `observedAt`, lifecycle `scope`, `cursor` and `nextCursor`. `--scope active|all|completed|failed`, `--limit 1..200` and `--cursor N` control bounded requests. Pass the returned continuation cursor with the same query/scope. Older adapters may omit observation and continuation metadata; update the host adapter for the full contract. These commands remain read-only.
 
 The 0.6 client adds complete launch preparation and browse preferences to Go state. Preserve the state and recall sidecar together; older executables may drop fields they do not understand. Retaining an old release is not a migration of these new preferences.
+
+
+## Sidebar and activity (0.7)
+
+At 104 columns and above, the metadata sidebar appears beside the attached conversation. It is a snapshot of one chosen environment; rows never attach on highlight. Enter or a deliberate row click opens the exact selected conversation. The main header continues to identify the attached conversation, including while browsing another environment. Ctrl+O focuses/leaves the sidebar; at narrower widths it opens the existing browser. `/navigator off` hides the sidebar.
+
+Type in the sidebar to filter its loaded page. Search all carries that same query to the host; lifecycle and thread type remain separate choices. Expand working children deliberately; use the scope/type controls for settled or failed work. Refresh, next/previous page, source-bound New and source-bound Settings are in sidebar Actions. Each action names the selected environment/conversation before a mutation. A snapshot label and observation time distinguish other rows from the attached live row.
+
+The main Actions/Settings/Requests/Activity controls operate on the attached conversation. `/activity` opens the bounded tool list; Enter reads one exact item. Earlier/Latest activity pages are separate reads and do not replace the readable transcript or alter its live/history state. `/context` shows conversation facts; `/sidebar on` keeps those facts and activity beside the transcript when enough width remains. The existing themes and environment accents apply to every pane.
+
+`capabilities --json` works without configuration and describes the actual client command catalog. Add `--env PROFILE` to inspect that adapter's handshake. `activity --env PROFILE --thread ID --json` reads a bounded page with no transcript subscription. `inspect --env PROFILE --thread SOURCE_ID --item ITEM_ID [--revision KEY] --json` reads only that source item. A supplied revision is a cache hint, not a historical or conditional read; `changed` says the result differs. An omitted, missing or shortened result remains explicitly marked. Use the returned `historyCursor` with `activity --activity-cursor KEY` for earlier tool activity.
+
+These three commands emit `{schemaVersion:1,ok,command,profile?,environmentId?,data?,error?}`. A failed JSON read emits `ok:false` with `error.code`, `error.message`, `error.uncertain:false` and exits nonzero. They never create draft files or operation journals. Existing `threads --json` stays an array; `--json-envelope` also includes environment identity and type. `--type all|main|subagents|forks` applies independently of `--scope`.

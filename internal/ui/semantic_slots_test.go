@@ -128,7 +128,10 @@ func TestSemanticSlotsNativeSelectionAndAuthoritativeHeader(t *testing.T) {
 				assertSemanticSlotText(t, out, "t3oxide", p.accent)
 				assertSemanticSlotText(t, out, state, p.operation)
 				assertSemanticSlotText(t, out, "Awaiting input (2)", p.operation)
-				assertSemanticSlotText(t, out, "Connection: synchronized", p.muted)
+				assertSemanticSlotText(t, out, "Actions", p.fg)
+				if strings.Contains(ansi.Strip(out), "Connection: synchronized") {
+					t.Fatal("quiet connection acquired a redundant header row")
+				}
 				if strings.Contains(ansi.Strip(out), "local receipt") {
 					t.Fatal("local state replaced authoritative run status")
 				}

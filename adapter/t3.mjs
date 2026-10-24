@@ -2,10 +2,16 @@
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
-import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, identifier, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
+import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
 import { FEATURES, catalog, launchCommand, modelCommand, modelView } from './models.mjs';
 import { threadList } from './navigation.mjs';
+import { ACTIVITY_KINDS, ACTIVITY_LIMIT, activityDetail, activityItem, activityPage, trimActivity } from './activity.mjs';
+
+// Coalesce useful frames without delaying every edit by a third of a second.
+// Structural reads have a separate sustained-rate ceiling: a burst can reveal
+// new content promptly without turning a busy stream into snapshot polling.
+export const SCHEDULING = Object.freeze({ frameMs: 80, structureMs: 120, refreshIntervalMs: 400 });
 
 export async function readConfig(path) {
   const stat = await lstat(path);
@@ -27,12 +33,14 @@ export async function readConfig(path) {
 export class T3 {
   constructor(config, emit, dependencies = {}) {
     this.config = config; this.emit = emit; this.fetch = dependencies.fetch ?? fetch;
+    this.now = dependencies.now ?? (() => performance.now());
     this.connectSocket = dependencies.connectSocket ?? connectSocket;
     this.journal = dependencies.journal ?? null;
     this.rpc = null; this.descriptor = null; this.watchId = null;
     this.current = null; this.snapshotSequence = 0; this.lastStreamSequence = 0; this.generation = 0;
     this.subscription = null; this.wantConnection = false; this.closed = false;
     this.emitTimer = null; this.refreshTimer = null; this.retryTimer = null;
+    this.nextRefreshAt = 0;
     this.retryDelay = 1000; this.refreshing = false; this.refreshAgain = false;
     this.duringRefresh = new Map(); this.epoch = 0; this.following = true;
     this.controllers = new Set(); this.receipts = new Map();
@@ -141,6 +149,61 @@ export class T3 {
     const p = targetThread(await this.bounded(identifier(threadId)), threadId);
     return this.modelCatalog(p);
   }
+  async activity(threadId, cursor) {
+    identifier(threadId, 'activity thread');
+    if (!this.descriptor) await this.probe();
+    if (cursor != null) {
+      requireThat(typeof cursor === 'string' && cursor.length > 0 && Buffer.byteLength(cursor) <= 65536,
+        'Invalid activity history cursor.');
+      const params = new URLSearchParams({cursor, view: 'activity'});
+      const page = await this.http(`/api/orchestration/threads/${encodeURIComponent(threadId)}/history?${params}`);
+      requireThat(Array.isArray(page.items) && Number.isSafeInteger(page.snapshotSequence), 'Unsupported T3 activity history.', 'incompatible');
+      return {threadId, observedAt: new Date().toISOString(), activity: activityPage(page.items,
+        {scope:'history', sequence:page.snapshotSequence, cursor:page.nextCursor, hasMore:page.hasMoreHistory})};
+    }
+    const snapshot = await this.bounded(threadId);
+    const projection = targetThread(snapshot, threadId);
+    return {threadId, title:clip(projection.thread.title, 512).text, observedAt:new Date().toISOString(),
+      activity:activityPage(projection.visibleTurnItems, {sequence:snapshot.snapshotSequence,
+        cursor:snapshot.historyCursor, hasMore:snapshot.hasMoreHistory})};
+  }
+  async inspectActivity(a) {
+    identifier(a.threadId, 'activity source thread'); identifier(a.itemId, 'activity item');
+    requireThat(a.revision == null || typeof a.revision === 'string' && Buffer.byteLength(a.revision) <= 128,
+      'Invalid activity revision.');
+    // UI reads name an offered source-qualified item. A CLI read instead names
+    // its exact source directly and never creates a detailed subscription.
+    const epoch = this.epoch;
+    const reviewed = () => !this.closed && (!a.viewThreadId || epoch === this.epoch &&
+      this.current?.threadId === a.viewThreadId && this.current.activity?.items.some(item =>
+        item.sourceThreadId === a.threadId && item.itemId === a.itemId && item.updatedAt === (a.revision ?? '')));
+    if (a.viewThreadId) {
+      identifier(a.viewThreadId, 'reviewed thread');
+      requireThat(reviewed(), 'This activity page changed. Select the item again.', 'stale');
+    }
+    await this.connect();
+    requireThat(reviewed(), 'This activity page changed. Select the item again.', 'stale');
+    const read = this.rpc.call('orchestration.getTurnItem', {threadId:a.threadId, itemId:a.itemId,
+      ...(a.revision ? {revision:a.revision} : {})});
+    const signal = a.viewThreadId ? this.navigation.signal : null;
+    const cancel = () => read.cancel();
+    signal?.addEventListener('abort', cancel, {once:true});
+    try {
+      const result = await read.promise;
+      requireThat(reviewed(), 'Activity inspection was cancelled because the page changed.', 'cancelled');
+      requireThat(result && Object.hasOwn(result, 'item'), 'This T3 host does not support activity inspection.', 'unsupported');
+      requireThat(result.item != null, 'This activity item is no longer available.', 'unavailable');
+      const detail = activityDetail(result.item, a);
+      requireThat(Buffer.byteLength(JSON.stringify(detail)) <= ACTIVITY_LIMIT.detailFrame, 'Activity details exceed the supported budget.', 'too_large');
+      return detail;
+    } catch (error) {
+      if (signal?.aborted || !reviewed()) throw new Fault('cancelled', 'Activity inspection was cancelled because the page changed.');
+      // Reads never acquire an uncertain mutation identity or a journal record.
+      if (error instanceof Fault) throw new Fault(error.code, error.code === 'upstream_rejected'
+        ? 'T3 could not read this activity item; check installed-host support or open it in full T3.' : error.message);
+      throw new Fault('upstream', 'Could not inspect this activity item.');
+    } finally { signal?.removeEventListener('abort', cancel); }
+  }
   async modelCatalog(p) {
     const config = await this.rpc.call('server.getConfig', {}).promise;
     return catalog(config, p);
@@ -203,27 +266,46 @@ export class T3 {
     }
   }
   emitView(full = false) {
+    if (this.closed) return;
     this.forceSnapshot ||= full;
     if (this.emitTimer) return;
-    this.emitTimer = setTimeout(() => { this.emitTimer = null; this.flushView(); }, 350);
+    this.emitTimer = setTimeout(() => { this.emitTimer = null; this.flushView(); }, SCHEDULING.frameMs);
   }
   flushView() {
     clearTimeout(this.emitTimer); this.emitTimer = null;
     if (!this.current || this.closed) return;
     trimView(this.current);
+    trimActivity(this.current.activity, this.current.sequence);
     const next = structuredClone(this.current), previous = this.sentView;
+    const baseRevision = this.revision, revision = baseRevision + 1;
+    const frameSize = (event, data) => Buffer.byteLength(JSON.stringify({v:1,environmentId:this.config.environmentId,event,data})) + 1;
+    // Optional tool metadata must not displace exact messages or request
+    // controls that already fit the companion-v1 frame. Explicit activity
+    // reads still expose this window when the compact view cannot carry it.
+    if (next.activity) {
+      let total = frameSize('view', {...next, revision});
+      const withoutActivityValue = total - Buffer.byteLength(JSON.stringify(next.activity));
+      while (total > LIMIT.frame && next.activity.items.length) {
+        next.activity.items.shift(); next.activity.limited = true; next.activity.hasMore = true;
+        if (next.activity.items.length) next.activity.historyCursor = historyAnchor(next.activity.items[0], next.sequence);
+        total = withoutActivityValue + Buffer.byteLength(JSON.stringify(next.activity));
+      }
+      if (total > LIMIT.frame) delete next.activity;
+    }
     const { items, revision: ignored, ...metadata } = next;
     const oldRows = new Map((previous?.items ?? []).map(row => [row.key, row]));
     const upserts = items.filter(row => JSON.stringify(row) !== JSON.stringify(oldRows.get(row.key)));
     const keys = new Set(items.map(row => row.key));
     const removed = [...oldRows.keys()].filter(key => !keys.has(key));
-    const full = this.forceSnapshot || !previous || previous.threadId !== next.threadId;
+    let full = this.forceSnapshot || !previous || previous.threadId !== next.threadId;
     this.forceSnapshot = false;
     if (!full && JSON.stringify(next) === JSON.stringify(previous)) return;
-    const baseRevision = this.revision, revision = ++this.revision;
+    const delta = {threadId:next.threadId,baseRevision,revision,upserts,removed,order:items.map(row=>row.key),metadata};
+    // Delta order/removal keys can cost more than a full bounded replacement.
+    if (!full && frameSize('delta', delta) > LIMIT.frame) full = true;
+    this.revision = revision;
     if (full) this.emit('view', { ...next, revision });
-    else this.emit('delta', { threadId: next.threadId, baseRevision, revision,
-      upserts, removed, order: items.map(row => row.key), metadata });
+    else this.emit('delta', delta);
     this.sentView = next;
   }
   onEvent(item) {
@@ -244,6 +326,16 @@ export class T3 {
     if (event.threadId !== this.watchId) return;
     if (this.current) this.current.sequence = item.sequence;
     const payload = event.payload;
+    if (event.type === 'turn-item.updated' && ACTIVITY_KINDS.has(payload?.type)) {
+      const old = this.current?.activity?.items.find(r => r.sourceThreadId === this.watchId && r.itemId === payload.id);
+      if (old) {
+        const next = activityItem({sourceThreadId:old.sourceThreadId, sourceItemId:old.itemId, position:old.position, item:payload});
+        Object.assign(old, next);
+        if (this.refreshing) this.duringRefresh.set('activity:' + old.key, {sequence:item.sequence, activity:{...old}});
+        this.emitView(); return;
+      }
+      this.scheduleRefresh(); return;
+    }
     // Existing visible message updates need neither a whole projection nor a snapshot read.
     if (event.type === 'message.updated' || event.type === 'turn-item.updated') {
       const row = this.current?.items.find(r => r.sourceThreadId === this.watchId &&
@@ -269,12 +361,14 @@ export class T3 {
     if (this.closed || !this.following) return;
     if (this.refreshing) { this.refreshAgain = true; return; }
     if (this.refreshTimer) return;
-    this.refreshTimer = setTimeout(() => { this.refreshTimer = null; this.refresh().catch(e => { if (e.code !== 'cancelled') this.emit('status',{state:'unavailable',message:e.message}); }); }, 800);
+    const delay = Math.max(SCHEDULING.structureMs, Math.min(SCHEDULING.refreshIntervalMs, this.nextRefreshAt - this.now()));
+    this.refreshTimer = setTimeout(() => { this.refreshTimer = null; this.refresh().catch(e => { if (e.code !== 'cancelled') this.emit('status',{state:'unavailable',message:e.message}); }); }, delay);
   }
   async refresh() {
     if (this.refreshing || !this.watchId || !this.following) return;
     const epoch = this.epoch, id = this.watchId;
     this.refreshing = true; this.refreshAgain = false; this.duringRefresh = new Map();
+    this.nextRefreshAt = this.now() + SCHEDULING.refreshIntervalMs;
     const pendingUpdates = this.duringRefresh;
     try {
       const s = await this.bounded(id, this.navigation.signal);
@@ -283,6 +377,11 @@ export class T3 {
       next.state = this.synchronized ? 'live' : 'synchronizing'; next.live = next.state === 'live'; next.historical = false;
       for (const pending of pendingUpdates.values()) {
         if (pending.sequence <= s.snapshotSequence) continue;
+        if (pending.activity) {
+          const at = next.activity?.items.findIndex(r => r.key === pending.activity.key) ?? -1;
+          if (at >= 0) { next.activity.items[at] = pending.activity; next.sequence = Math.max(next.sequence, pending.sequence); }
+          continue;
+        }
         const i = next.items.findIndex(r => r.key === pending.row.key);
         if (i >= 0) { next.items[i] = pending.row; next.sequence = Math.max(next.sequence, pending.sequence); }
       }
@@ -314,6 +413,7 @@ export class T3 {
       if (epoch !== this.epoch || this.closed) return null;
       const sequence = page.snapshotSequence ?? this.current.sequence;
       this.current = { ...this.current, ...pageRows(page.items, sequence, page.nextCursor, page.hasMoreHistory, HISTORY_BUDGET),
+        activity:activityPage(page.items, {scope:'history', sequence, cursor:page.nextCursor, hasMore:page.hasMoreHistory}),
         sequence, observedAt: new Date().toISOString() };
       this.setState('historical'); this.emitView(); return { threadId: id };
     } catch (error) {
@@ -407,6 +507,7 @@ export class T3 {
   close() {
     this.closed = true; this.wantConnection = false; this.cancelNavigation();
     for (const timer of [this.emitTimer,this.refreshTimer,this.retryTimer]) clearTimeout(timer);
+    this.emitTimer = null; this.refreshTimer = null; this.retryTimer = null;
     this.subscription?.cancel(); this.rpc?.close(); this.rpc = null;
     for (const controller of this.controllers) controller.abort();
     this.current = null; this.sentView = null; this.duringRefresh.clear(); this.receipts.clear();

@@ -1,10 +1,12 @@
 // Additive companion-v1 model controls. T3 contract provenance: docs/model-navigation.md.
 // No provider process, credentials, or model catalog is owned by this client.
 import { Fault, activity, clip, command, identifier, launch, requireThat, stable, text, view } from './core.mjs';
+import { activityPage } from './activity.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
 export const FEATURES = Object.freeze({ modelCatalog: true, modelSelection: true,
-  messageModelOverride: true, launchModelSelection: true, runtimeDetails: true, threadNavigation: true });
+  messageModelOverride: true, launchModelSelection: true, runtimeDetails: true, threadNavigation: true,
+  activity: true, activityInspection: true });
 
 export function selection(value) {
   requireThat(value && typeof value === 'object' && !Array.isArray(value), 'Missing model selection.');
@@ -78,7 +80,9 @@ export function runtimeDetails(p) {
 }
 export function modelView(snapshot, threadId) {
   const result = view(snapshot, threadId), p = snapshot.projection;
-  return { ...result, modelSelection: optionalSelection(p.thread.modelSelection),
+  return { ...result, activity: activityPage(p.visibleTurnItems, {sequence: snapshot.snapshotSequence,
+    cursor: snapshot.historyCursor, hasMore: snapshot.hasMoreHistory}),
+    modelSelection: optionalSelection(p.thread.modelSelection),
     lineage: lineage(p.thread.lineage), runtimeDetails: runtimeDetails(p) };
 }
 

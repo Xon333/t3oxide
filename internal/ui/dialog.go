@@ -322,7 +322,7 @@ func (m *Model) chooseDialog() tea.Cmd {
 		m.restorePaletteSource()
 		return m.dispatch(selected.command, selected.args)
 	}
-	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && selected.command != "" {
+	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && !strings.HasPrefix(d.local, "navigator-") && d.local != "context" && selected.command != "" {
 		m.pushLocalSurface(d)
 	}
 	m.dialog = nil
@@ -371,6 +371,9 @@ func (m *Model) openPalette() tea.Cmd {
 	m.dialogSerial++
 	d.serial = m.dialogSerial
 	d.paletteSource = source
+	if m.navigator.focused && m.navigator.profile != m.status.ProfileID && m.status.ThreadID != "" {
+		d.title = "Commands · " + m.attachedTargetStatus()
+	}
 	d.list = m.newList("Commands", items)
 	d.list.Filter = commandFilter
 	d.list.SetFilterText("")

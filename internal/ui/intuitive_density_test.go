@@ -172,8 +172,9 @@ func TestIntuitiveDensityEditorsHaveOneLabel(t *testing.T) {
 		t.Fatal("exact canonical draft lost context")
 	}
 	m.transcriptFocus = true
-	if !strings.Contains(ansi.Strip(m.View().Content), "Reading transcript") {
-		t.Fatal("reading context disappeared")
+	m.restoreFocus()
+	if m.composer.Focused() || !strings.Contains(ansi.Strip(m.View().Content), "find in page") {
+		t.Fatalf("reading focus or scoped search disappeared: %t %q", m.composer.Focused(), ansi.Strip(m.View().Content))
 	}
 }
 

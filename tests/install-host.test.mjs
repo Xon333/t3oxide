@@ -48,14 +48,15 @@ test('host installer includes additive modules, preserves journals/config, and i
   const release = await realpath(join(f.base, 'current'));
   // macOS canonicalizes /tmp to /private/tmp.
   assert.ok(release.startsWith(join(await realpath(home), '.local/share/t3oxide/releases/')));
-  assert.deepEqual((await readdir(release)).sort(), ['NOTICE', 'core.mjs', 'journal.mjs', 'main.mjs', 'models.mjs', 'navigation.mjs', 't3.mjs', 'wire.mjs']);
-  for (const file of ['core.mjs', 'wire.mjs', 'journal.mjs', 'models.mjs', 'navigation.mjs', 't3.mjs', 'main.mjs']) {
+  assert.deepEqual((await readdir(release)).sort(), ['NOTICE', 'activity.mjs', 'core.mjs', 'journal.mjs', 'main.mjs', 'models.mjs', 'navigation.mjs', 't3.mjs', 'wire.mjs']);
+  for (const file of ['core.mjs', 'wire.mjs', 'journal.mjs', 'models.mjs', 'navigation.mjs', 'activity.mjs', 't3.mjs', 'main.mjs']) {
     assert.deepEqual(await readFile(join(release, file)), await readFile(join(root, 'adapter', file)));
   }
   const probe = JSON.parse((await exec(process.execPath, [first.adapter, '--probe'], { env, timeout: 5000 })).stdout);
   assert.equal(probe.result.environmentId, descriptor.environmentId);
   assert.equal(probe.result.features.threadNavigation, true);
   assert.equal(probe.result.features.modelCatalog, true);
+  assert.equal(probe.result.features.activityInspection, true);
   assert.deepEqual(JSON.parse(await readFile(f.configFile, 'utf8')), config);
   assert.equal(await readFile(join(journal, 'existing-receipt.json'), 'utf8'), 'PRESERVE');
   // A paused older installer may own this historical staging path.

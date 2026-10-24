@@ -29,6 +29,7 @@ type Status struct {
 	ProfileID, EnvironmentID, ThreadID, Delivery                                   string
 	Connected, Writable                                                            bool
 	ModelCatalog, ModelControls, ThreadNavigation, RuntimeDetails, ParentAvailable bool
+	Activity                                                                       bool
 	Requests                                                                       int
 	ProfileIDs                                                                     []string
 	Location                                                                       Location

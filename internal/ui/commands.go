@@ -87,6 +87,15 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if m.navigator.focused && m.navigationVisible() {
+		return m.navigatorKey(msg)
+	}
+	if m.activityFocused {
+		return m.activityKey(msg)
+	}
+	if m.contextFocused && m.contextVisible() {
+		return m.contextKey(msg)
+	}
 	if m.searching {
 		switch msg.String() {
 		case "esc":
@@ -116,6 +125,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Recall):
 		return m.openRecall()
 	case key.Matches(msg, k.Threads):
+		if m.navigationVisible() {
+			return m.focusNavigator()
+		}
 		return m.execute("switch", "")
 	case key.Matches(msg, k.Environments):
 		return m.execute("env", "")
@@ -152,8 +164,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	switch msg.String() {
 	case "tab", "shift+tab":
-		m.transcriptFocus = !m.transcriptFocus
-		return m.restoreFocus()
+		return m.cycleWorkspace(msg.String() == "tab")
 	case "esc":
 		m.problem, m.notice = "", ""
 		if m.transcriptFocus {
@@ -316,6 +327,22 @@ func (m *Model) slash(text string) tea.Cmd {
 
 func (m *Model) dispatch(name, args string) tea.Cmd {
 	switch name {
+	case "navigator-action":
+		return m.navigatorAction(args)
+	case "navigator-profile":
+		m.navigator.focused = true
+		return tea.Batch(m.restoreFocus(), m.loadNavigator(args, "", true))
+	case "navigator":
+		if args == "" {
+			args = boolWord(m.navigationHidden)
+		}
+		if args != "on" && args != "off" {
+			m.problem = "Use /navigator on or off"
+			return nil
+		}
+		return m.setting("navigator", args)
+	case "context":
+		return m.openContext()
 	case "keyboard":
 		if args != "modern" && args != "legacy" {
 			m.problem = "Use /keyboard modern or /keyboard legacy"
@@ -439,6 +466,8 @@ func (m *Model) setting(kind, value string) tea.Cmd {
 			}
 		case "mouse":
 			err = settings.SetMouse(value == "on")
+		case "navigator":
+			err = settings.SetNavigationHidden(value == "off")
 		case "sidebar":
 			err = settings.SetSidebar(value == "on")
 		}

@@ -77,6 +77,7 @@ func (m *Model) keyMap() appKeyMap {
 		}
 	}
 	if reading {
+		k.Focus.SetHelp("Tab", "focus")
 		k.Help.SetKeys("f1", "?")
 		k.Help.SetHelp("?", "help")
 		k.Search.SetKeys("ctrl+f", "/")
@@ -119,6 +120,12 @@ func (m *Model) helpMap() contextHelp {
 		}
 	case m.searching:
 		active = []key.Binding{bind("Enter", "find", "enter"), k.Dismiss}
+	case m.navigator.focused && m.navigationVisible():
+		active = []key.Binding{bind("Enter", "open", "enter"), bind("Tab", "focus", "tab"), bind("Ctrl+F", "search all", "ctrl+f")}
+	case m.activityFocused:
+		active = []key.Binding{bind("Enter", "inspect", "enter"), bind("a", "activity", "a"), bind("Tab", "focus", "tab")}
+	case m.contextFocused && m.contextVisible():
+		active = []key.Binding{bind("Enter", "inspect", "enter"), bind("Tab", "focus", "tab")}
 	case m.transcriptFocus:
 		active = []key.Binding{k.Focus, k.Search, k.Earlier, k.Latest, k.Copy}
 	default:
@@ -149,7 +156,9 @@ func (m *Model) helpMap() contextHelp {
 			short = append(short, k.Requests)
 		}
 		short = append(short, k.Palette)
-		if m.transcriptFocus {
+		if m.activityFocused || m.navigator.focused && m.navigationVisible() || m.contextFocused && m.contextVisible() {
+			short = append(short, active...)
+		} else if m.transcriptFocus {
 			short = append(short, k.Search, k.Help, k.Focus, k.Earlier, k.Latest, k.Copy)
 		} else if m.preservedDraft != "" {
 			short = append(short, k.Edit, k.Detail, k.Send)

@@ -73,5 +73,21 @@
       }
     ],
     "license": "Existing checked-in BSD/MIT license texts unchanged"
+  },
+  "redesign_0_7": {
+    "checked_on": "2026-10-24",
+    "t3oxide_baseline": "ed43546c175e6d33467aaa89dae2503bb969b99f",
+    "t3term_reuse": {
+      "commit": "d1d33e89ae16dd09a4ff1e2a9f1570b3416a0c1e",
+      "url": "https://github.com/krishhgg/t3term/tree/d1d33e89ae16dd09a4ff1e2a9f1570b3416a0c1e",
+      "license": "MIT",
+      "scope": "Adapted workspace layout/focus and tool description/output rules; details in reuse-t3term.md"
+    },
+    "existing_t3_contract_anchor": "0e7346ccd9427c06161e222319e718e6bd70887f",
+    "newer_t3_inspected_not_adopted": "aaf4a901c490da4f0943afe1d941f3a8d58dc1c8",
+    "go_toolchain": "go1.26.10 linux/amd64",
+    "node": "v24.19.0",
+    "dependency_change": "No Go module versions or Node dependencies changed; t3term MIT attribution added.",
+    "builds": "Linux/amd64 and Darwin/arm64 cross-build; Darwin has Go linker-generated ad-hoc signature, not macOS-verified. Native checks remain separate."
   }
 }

@@ -33,27 +33,29 @@ import (
 type object = map[string]any
 
 type fixture struct {
-	t              *testing.T
-	mu             sync.Mutex
-	server         *httptest.Server
-	profile        config.Environment
-	environmentID  string
-	sequence       int64
-	threads        map[string]object
-	sockets        map[*fixtureSocket]struct{}
-	receipts       map[string]object
-	commands       map[string]object
-	dispatches     []string
-	effects        int
-	dropAck        map[string]bool
-	dropMessages   bool
-	dropSelections bool
-	catalog        object
-	catalogReads   int
-	violations     []string
-	requests       map[string]int
-	nextSendAck    *fixtureAckHold
-	nextLaunchAck  *fixtureAckHold
+	t               *testing.T
+	mu              sync.Mutex
+	server          *httptest.Server
+	profile         config.Environment
+	environmentID   string
+	sequence        int64
+	threads         map[string]object
+	sockets         map[*fixtureSocket]struct{}
+	receipts        map[string]object
+	commands        map[string]object
+	dispatches      []string
+	effects         int
+	dropAck         map[string]bool
+	dropMessages    bool
+	dropSelections  bool
+	catalog         object
+	catalogReads    int
+	violations      []string
+	requests        map[string]int
+	nextSendAck     *fixtureAckHold
+	nextLaunchAck   *fixtureAckHold
+	activityItems   map[string]object
+	activityHistory map[string][]any
 }
 
 type fixtureAckHold struct {
@@ -188,9 +190,17 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 				"historyCursor": "opaque-" + thread, "hasMoreHistory": true})
 			return
 		case "history":
-			if r.URL.Query().Get("cursor") != "opaque-"+thread || r.URL.Query().Get("view") != "conversation" {
+			if r.URL.Query().Get("cursor") != "opaque-"+thread || r.URL.Query().Get("view") != "conversation" && r.URL.Query().Get("view") != "activity" {
 				f.violations = append(f.violations, "history cursor must remain opaque and unchanged")
 				http.Error(w, "Bad cursor", 400)
+				return
+			}
+			if r.URL.Query().Get("view") == "activity" {
+				items := f.activityHistory[thread]
+				if items == nil {
+					items = []any{}
+				}
+				jsonResponse(w, object{"items": clone(items), "snapshotSequence": f.sequence, "hasMoreHistory": false, "nextCursor": nil})
 				return
 			}
 			jsonResponse(w, object{"items": []any{row(thread, "old-"+thread, "Earlier page for "+thread)},
@@ -342,6 +352,26 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 		config := clone(f.catalog)
 		f.mu.Unlock()
 		_ = s.send(object{"_tag": "Exit", "requestId": rid, "exit": object{"_tag": "Success", "value": config}})
+		return
+	}
+	if frame["tag"] == "orchestration.getTurnItem" {
+		thread, _ := payload["threadId"].(string)
+		itemID, _ := payload["itemId"].(string)
+		f.mu.Lock()
+		var item object
+		if stored := f.activityItems[thread+"/"+itemID]; stored != nil {
+			item = clone(stored)
+		} else if p := f.threads[thread]; p != nil {
+			for _, value := range p["visibleTurnItems"].([]any) {
+				candidate, _ := value.(object)["item"].(object)
+				if candidate["id"] == itemID {
+					item = clone(candidate)
+					break
+				}
+			}
+		}
+		f.mu.Unlock()
+		_ = s.send(object{"_tag": "Exit", "requestId": rid, "exit": object{"_tag": "Success", "value": object{"item": item}}})
 		return
 	}
 	if frame["tag"] == "orchestration.subscribeThread" {

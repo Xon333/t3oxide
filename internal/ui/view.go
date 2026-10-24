@@ -16,28 +16,29 @@ import (
 // panel gets its own space instead of stretching every paragraph across it.
 func (m *Model) workspaceWidth() int {
 	margin, limit := 4, 112
-	if m.width < 60 {
+	if m.mainWidth() < 60 {
 		margin = 2
 	}
-	if m.sidebar && m.width >= 110 {
+	if m.contextVisible() {
 		limit += 30
 	}
-	return max(1, min(m.width-margin, limit))
+	return max(1, min(m.mainWidth()-margin, limit))
 }
 
 func (m *Model) resize() {
 	inner := m.workspaceWidth()
 	m.contentWidth = inner
-	if m.sidebar && m.width >= 110 {
+	if m.contextVisible() {
 		m.contentWidth -= 30
 	}
 	// Bubbles computes wrapped visual rows. Its high MaxHeight remains intact
 	// so the display cap cannot truncate a long human draft (see components.go).
-	m.composer.SetWidth(max(1, inner-4))
+	m.composer.SetWidth(max(1, m.contentWidth-4))
 	m.composer.SetHeight(min(m.composer.Height(), max(1, min(5, m.height/6))))
 	m.resizeTranscript()
 	m.searchInput.SetWidth(max(1, inner-4))
 	m.resizeDialog()
+	m.resizeNavigator()
 }
 
 func (m *Model) resizeDialog() {
@@ -147,7 +148,7 @@ func (m *Model) resizeTranscript() {
 	if m.feedbackShown {
 		feedbackHeight = 1
 	}
-	m.bodyHeight = max(1, m.height-m.composer.Height()-7-feedbackHeight)
+	m.bodyHeight = max(1, m.height-m.composer.Height()-3-m.transcriptTop()-feedbackHeight-m.activityStripRows())
 	m.viewport.SetWidth(m.contentWidth)
 	m.viewport.SetHeight(m.bodyHeight)
 	// SetHeight does not clamp an existing offset. Preserve valid anchors and
@@ -168,27 +169,30 @@ func (m *Model) View() tea.View {
 		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · Ctrl+Q exits"), m.width, m.height))
 	}
 	if m.browserPage || m.launchPage {
+		m.recordWorkspaceHits()
 		return m.terminalView(m.fullSurfaceView())
 	}
 	inner := m.workspaceWidth()
 	contextLine := m.status.Context
 	if m.status.Location.Environment != "" {
 		var parts []string
-		for _, value := range []string{m.status.Location.Environment, m.status.Location.ProjectID, m.status.Location.Title} {
+		for _, value := range []string{m.status.Location.Environment, m.status.Location.Title} {
 			if value != "" {
 				parts = append(parts, value)
 			}
 		}
 		contextLine = strings.Join(parts, " → ")
 	}
-	if contextLine == "" {
-		contextLine = "Your T3 workspace"
-	}
 	header := p.active().Render("t3oxide") + "  " + p.plain().Render(fitLine(contextLine, max(1, inner-9)))
-	model := p.plain().Bold(true).Render(fitLine(modelStatusLine(m.status.ModelName), inner))
+	if m.navigationVisible() {
+		header = p.plain().Bold(true).Render(fitLine(contextLine, inner))
+	}
 	state := m.authoritativeStatus()
 	if state == "" {
 		state = "connecting"
+	}
+	if conn := m.status.ConnectionState; conn != "" && conn != "connected" && conn != "synchronized" {
+		state = conn + " · " + state
 	}
 	position := "latest"
 	if m.snapshot != nil && m.snapshot.Metadata.Historical {
@@ -198,11 +202,16 @@ func (m *Model) View() tea.View {
 	} else if !m.follow {
 		position = fmt.Sprintf("reading %d%% · End latest", int(m.viewport.ScrollPercent()*100))
 	}
-	status := edgeLine(p.operational().Render(fitLine(state, max(1, inner-ansi.StringWidth(position)-3))), p.subtle().Render(position), inner)
-	connection := p.subtle().Render(fitLine(m.connectionStatus(), inner))
+	stateWidth := min(ansi.StringWidth(state), max(16, inner*2/3))
+	model := p.plain().Bold(true).Render(fitLine(modelStatusLine(m.status.ModelName), max(1, inner-stateWidth-2)))
+	status := edgeLine(model, p.operational().Render(fitLine(state, stateWidth)), inner)
+	toolbar := m.toolbarView(inner)
+	if inner-ansi.StringWidth(toolbar)-ansi.StringWidth(position) >= 3 {
+		toolbar = edgeLine(toolbar, p.subtle().Render(position), inner)
+	}
 	body := m.bodyView()
-	if m.sidebar && m.width >= 110 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.sidebarView(28, m.bodyHeight))
+	if m.contextVisible() {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.contextView(28, m.bodyHeight))
 	}
 	label := "Message"
 	if m.status.Delivery != "" && m.status.Delivery != "auto" {
@@ -214,9 +223,6 @@ func (m *Model) View() tea.View {
 	if m.preservedDraft != "" {
 		label = "Exact draft"
 	}
-	if m.transcriptFocus {
-		label = "Reading transcript · Tab to write"
-	}
 	if m.searching {
 		label = "Find in current page"
 	}
@@ -224,24 +230,34 @@ func (m *Model) View() tea.View {
 	if m.searching {
 		composer = m.searchInput.View()
 	}
-	frame := framed(label, padBlock(composer, max(1, inner-4), m.composer.Height()), inner-4, p, m.composer.Focused() || m.searching)
-	parts := []string{header, model, status, connection, padBlock(body, inner, m.bodyHeight)}
+	frame := framed(label, padBlock(composer, max(1, m.contentWidth-4), m.composer.Height()), m.contentWidth-4, p, m.composer.Focused() || m.searching)
+	parts := []string{header, status, toolbar}
+	if operation := m.operationLine(); operation != "" {
+		parts = append(parts, p.operational().Render(fitLine(operation, inner)))
+	}
+	parts = append(parts, padBlock(body, inner, m.bodyHeight))
+	if strip := m.activityStripView(inner); strip != "" {
+		parts = append(parts, strip)
+	}
 	if m.feedbackVisible() {
 		parts = append(parts, m.feedbackView(inner))
 	}
 	parts = append(parts, frame, m.footerView(inner))
 	content := strings.Join(parts, "\n")
 	content = padBlock(content, inner, m.height)
-	margin := max(0, (m.width-inner)/2)
+	margin := max(0, (m.mainWidth()-inner)/2)
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		lines[i] = strings.Repeat(" ", margin) + line
 	}
-	canvas := padBlock(strings.Join(lines, "\n"), m.width, m.height)
+	canvas := padBlock(strings.Join(lines, "\n"), m.mainWidth(), m.height)
+	if m.navigationVisible() {
+		canvas = lipgloss.JoinHorizontal(lipgloss.Top, m.navigatorView(m.navigatorWidth(), m.height), canvas)
+	}
 	if m.completionVisible() && m.height >= 12 && m.width >= 32 {
 		panel := m.completionView(inner)
-		x := margin
-		y := max(4, 4+m.bodyHeight-lipgloss.Height(panel))
+		x := m.mainOriginX()
+		y := max(m.transcriptTop(), m.transcriptTop()+m.bodyHeight-lipgloss.Height(panel))
 		canvas = lipgloss.NewCompositor(lipgloss.NewLayer(canvas), lipgloss.NewLayer(panel).X(x).Y(y).Z(1)).Render()
 	}
 	// Use the pinned native compositor instead of string slicing ANSI cells.
@@ -250,6 +266,7 @@ func (m *Model) View() tea.View {
 		x, y := max(0, (m.width-lipgloss.Width(panel))/2), max(0, (m.height-lipgloss.Height(panel))/2)
 		canvas = lipgloss.NewCompositor(lipgloss.NewLayer(canvas), lipgloss.NewLayer(panel).X(x).Y(y).Z(1)).Render()
 	}
+	m.recordWorkspaceHits()
 	return m.terminalView(clipBlock(canvas, m.width, m.height))
 }
 
@@ -273,7 +290,7 @@ func (m *Model) terminalView(content string) tea.View {
 func (m *Model) bodyView() string {
 	p := colors(m.theme)
 	if m.transcript == "" {
-		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render("Tab → Ctrl+P  Commands")
+		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render("Ctrl+P  Commands")
 		if m.snapshot != nil {
 			text = p.subtle().Render("Preparing conversation…")
 		}

@@ -66,6 +66,11 @@ func (m *Model) componentCmd(kind string, id uint64, cmd tea.Cmd) tea.Cmd {
 func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	switch kind {
+	case "navigator":
+		if id != m.navigator.serial || !m.navigator.focused || !m.navigationVisible() || m.dialog != nil || m.detail != "" {
+			return nil
+		}
+		m.navigator.list.FilterInput, cmd = m.navigator.list.FilterInput.Update(message)
 	case "composer":
 		if m.preservedDraft != "" || !m.composer.Focused() {
 			return nil

@@ -46,7 +46,7 @@ func NewManager(environments []config.Environment, state *config.State) *Manager
 
 func (m *Manager) NewSession(environment, thread string) (*Session, error) {
 	broker := newPromptBroker()
-	a := &Session{manager: m, asker: broker, prompts: broker, notices: make(chan string, 8), wake: make(chan struct{}, 1),
+	a := &Session{manager: m, asker: broker, prompts: broker, notices: make(chan string, 8), wake: make(chan struct{}, 1), draftWake: make(chan struct{}, 1),
 		reconnect: make(chan struct{}, 1), thread: thread, delivery: "auto", connectionState: "select environment",
 		seenRequests: make(map[string]bool)}
 	if environment != "" {
@@ -149,6 +149,9 @@ type Session struct {
 	ready, writable            bool
 	helloVerified              bool
 	features                   map[string]bool
+	activityCache              map[string]wire.ActivityDetail
+	activityCacheOrder         []string
+	activityCacheSize          int
 	started                    bool
 	connectionState            string
 	store                      wire.Store
@@ -179,6 +182,7 @@ type Session struct {
 	prompts                    *promptBroker
 	notices                    chan string
 	wake                       chan struct{}
+	draftWake                  chan struct{}
 	reconnect                  chan struct{}
 	receipt                    *Receipt
 	receiptBaselineRows        map[string]string
@@ -255,11 +259,14 @@ func (a *Session) Events(parent context.Context) iter.Seq2[Event, error] {
 		a.mu.Unlock()
 		a.manager.mu.Unlock()
 		_ = a.Draft()
+		draftsDone := make(chan struct{})
+		go func() { defer close(draftsDone); a.autosaveDrafts(ctx) }()
 		a.mu.Lock()
 		a.restoreDraft = a.thread != ""
 		a.mu.Unlock()
 		defer func() {
 			cancel()
+			<-draftsDone
 			a.mu.Lock()
 			conn := a.conn
 			a.conn = nil
@@ -457,8 +464,6 @@ func (a *Session) prepare(ctx context.Context, conn *wire.Connection) error {
 
 func (a *Session) consume(ctx context.Context, conn *wire.Connection, setup <-chan error, yield func(Event, error) bool) (bool, error) {
 	synchronized := false
-	ticker := time.NewTicker(350 * time.Millisecond)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -480,10 +485,6 @@ func (a *Session) consume(ctx context.Context, conn *wire.Connection, setup <-ch
 			a.mu.Unlock()
 			if !yield(a.renderEvent(), nil) {
 				return synchronized, context.Canceled
-			}
-		case <-ticker.C:
-			if err := a.flushDraft(); err != nil {
-				a.notice("Draft save failed; sending is blocked: " + err.Error())
 			}
 		case <-a.wake:
 			if !yield(a.renderEvent(), nil) {
@@ -684,6 +685,7 @@ func (a *Session) statusLocked(s *wire.Snapshot) Status {
 	status.ModelControls = status.Writable && a.features["modelSelection"]
 	status.ThreadNavigation = a.ready && a.features["threadNavigation"]
 	status.RuntimeDetails = s != nil && a.features["runtimeDetails"]
+	status.Activity = a.ready && a.features["activityInspection"]
 	if s != nil && s.Metadata.Lineage != nil && s.Metadata.Lineage.ParentThreadID != nil {
 		status.ParentAvailable = *s.Metadata.Lineage.ParentThreadID != s.Metadata.ThreadID
 	}
@@ -770,6 +772,10 @@ func (a *Session) SetDraft(text string) error {
 		if a.environment != nil && a.thread != "" {
 			a.manager.drafts[draftIdentity{a.environment.EnvironmentID, a.thread}] = text
 		}
+		select {
+		case a.draftWake <- struct{}{}:
+		default:
+		}
 	}
 	return a.draftError
 }
@@ -793,11 +799,15 @@ func (a *Session) flushDraft() error {
 	a.manager.mu.Unlock()
 	err := a.manager.State.SetDraft(env, thread, text)
 	a.mu.Lock()
+	recovered := a.draftError != nil && err == nil
 	a.draftError = err
 	if err == nil && version == a.draftVersion {
 		a.draftDirty = false
 	}
 	a.mu.Unlock()
+	if recovered {
+		a.signal()
+	}
 	return err
 }
 

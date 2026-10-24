@@ -37,3 +37,12 @@ The complete dependency graph is pinned by `go.mod` and `go.sum`. This source de
 | `golang.org/x/text` | `v0.39.0` | [golang.org_x_text-LICENSE.txt](golang.org_x_text-LICENSE.txt) |
 
 Tests can fetch additional upstream test-only dependencies through the standard Go module graph. No dependency source or generated Go module cache is packaged.
+
+## Adapted source
+
+The workspace layout/focus patterns and bounded tool description/output rules adapt
+[t3term](https://github.com/krishhgg/t3term/tree/d1d33e89ae16dd09a4ff1e2a9f1570b3416a0c1e)
+at `d1d33e89ae16dd09a4ff1e2a9f1570b3416a0c1e`. Its original
+[MIT license](t3term-LICENSE.txt) is retained here and in `NOTICE`, including the
+host-helper distribution. [The reuse map](../docs/reuse-t3term.md) identifies the
+specific source functions and adaptations. No Rust dependency graph is bundled.

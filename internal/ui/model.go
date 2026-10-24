@@ -63,6 +63,15 @@ type Model struct {
 	settings                                   *Settings
 	theme                                      string
 	mouse, sidebar                             bool
+	navigationHidden                           bool
+	navigator                                  navigatorState
+	contextFocused                             bool
+	activityFocused                            bool
+	activityFocusKey                           string
+	contextSelection                           int
+	hitZones                                   []hitZone
+	hitGeneration                              uint64
+	layoutDirty                                bool
 	width, height, contentWidth, bodyHeight    int
 	modalWidth, modalHeight                    int
 	surfaceHelpHeight                          int
@@ -138,6 +147,8 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 		theme = "violet"
 	}
 	m := &Model{ctx: ctx, cancel: cancel, settings: settings, theme: theme, mouse: mouse, sidebar: sidebar, width: 80, height: 24, follow: true, focused: true, searchIndex: -1}
+	m.navigationHidden = settings.navigationHidden()
+	m.initNavigator()
 	m.composer = newTextarea("")
 	m.composer.DynamicHeight = true
 	m.composer.MinHeight = 1
@@ -203,6 +214,17 @@ func (m *Model) Close() error {
 }
 
 func (m *Model) setSession(s *client.Session) {
+	if m.navigator.cancel != nil {
+		m.navigator.cancel()
+		m.navigator.cancel = nil
+	}
+	m.navigator.loading = false
+	m.navigator.focused = false
+	m.contextFocused = false
+	m.activityFocused = false
+	m.activityFocusKey = ""
+	m.contextSelection = 0
+	m.layoutDirty = true
 	if m.cancelBrowser != nil {
 		m.cancelBrowser()
 		m.cancelBrowser = nil
@@ -390,6 +412,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}()
 	var commands []tea.Cmd
 	switch msg := message.(type) {
+	case navigatorMsg:
+		return m, m.navigatorLoaded(msg)
+	case tea.MouseClickMsg:
+		return m, m.mouseClick(msg)
 	case editorFinishedMsg:
 		return m, m.finishEditor(msg)
 	case componentMsg:
@@ -398,13 +424,21 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.updateComponent(msg.kind, msg.id, msg.message)
 	case tea.WindowSizeMsg:
+		m.layoutDirty = true
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
+		if !m.navigationVisible() {
+			m.navigator.focused = false
+		}
+		if !m.contextVisible() && m.contextFocused {
+			m.contextFocused = false
+			m.transcriptFocus = true
+		}
 		oldWidth := m.contentWidth
 		m.resize()
 		if oldWidth != m.contentWidth {
-			return m, m.requestRender(false, false)
+			return m, tea.Batch(m.requestRender(false, false), m.loadNavigator("", "", false), m.restoreFocus())
 		}
-		return m, nil
+		return m, tea.Batch(m.loadNavigator("", "", false), m.restoreFocus())
 	case tea.FocusMsg:
 		m.focused = true
 		return m, m.restoreFocus()
@@ -432,6 +466,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.revision = event.Revision
 		m.status = event.Status
+		m.layoutDirty = true
+		m.reconcileNavigator()
+		commands = append(commands, m.loadNavigator("", "", false))
 		// Initial Events owns Browse internally and adopts its selected thread
 		// without an actionMsg. Retire only that startup surface on the first
 		// authoritative attachment; later Ctrl+O browsing owns its own lane.
@@ -470,6 +507,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if event.Snapshot != nil {
 			m.snapshot = event.Snapshot
+			m.resize()
 			if event.ResetScroll {
 				m.follow = event.Follow
 			}
@@ -673,6 +711,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.mouse = msg.value == "on"
 			m.notice = "Mouse capture " + msg.value
 			m.resize()
+		case "navigator":
+			m.navigationHidden = msg.value == "off"
+			m.navigator.focused = false
+			m.resize()
+			return m, tea.Batch(m.requestRender(false, false), m.loadNavigator("", "", false))
 		case "sidebar":
 			m.sidebar = msg.value == "on"
 			m.notice = "Sidebar " + msg.value
@@ -697,6 +740,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.handleKey(msg)
 	case tea.MouseWheelMsg:
+		if handled, cmd := m.workspaceWheel(msg); handled {
+			return m, cmd
+		}
 		if m.detail != "" {
 			var cmd tea.Cmd
 			m.detailViewport, cmd = m.detailViewport.Update(msg)
@@ -799,6 +845,7 @@ func (m *Model) restoreDraft(text string) {
 	m.composer.Placeholder = "Exact draft · /edit"
 	m.composer.Blur()
 	m.notice = "Exact draft preserved · /edit"
+	m.resize()
 }
 
 func (m *Model) restoreFocus() tea.Cmd {
@@ -806,6 +853,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 	m.modalInput.Blur()
 	m.launchTitle.Blur()
 	m.searchInput.Blur()
+	m.navigator.list.FilterInput.Blur()
 	if m.dialog != nil {
 		m.dialog.list.FilterInput.Blur()
 	}
@@ -842,7 +890,10 @@ func (m *Model) restoreFocus() tea.Cmd {
 	if m.searching {
 		return m.componentCmd("search", 0, m.searchInput.Focus())
 	}
-	if m.transcriptFocus || m.detail != "" || m.preservedDraft != "" {
+	if m.navigator.focused && m.navigationVisible() {
+		return m.componentCmd("navigator", m.navigator.serial, m.navigator.list.FilterInput.Focus())
+	}
+	if m.activityFocused || m.contextFocused || m.transcriptFocus || m.detail != "" || m.preservedDraft != "" {
 		return nil
 	}
 	return m.componentCmd("composer", 0, m.composer.Focus())

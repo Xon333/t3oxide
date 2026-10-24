@@ -23,7 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.6.0-bubbletea"
+var version = "0.7.0-bubbletea"
 
 const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 
@@ -41,17 +41,24 @@ Read-only commands:
   t3oxide threads --env m1 [FILTER] [--json] list matching threads
   t3oxide status --env m1 [--thread ID]      adapter/thread status (always JSON)
   t3oxide doctor [--env m1] [--json]        verify identity and authenticated reads
+  t3oxide capabilities [--env m1] [--json] describe client and optional host capabilities
+  t3oxide activity --env m1 --thread ID    inspect the bounded activity page
+  t3oxide inspect --env m1 --thread ID --item ID  read one tool/result
 
 Options:
   --config PATH     existing environments.json (default ~/.config/t3oxide/)
   --state PATH      Go draft/recovery file (default ~/.config/t3oxide/go-drafts.json)
   --theme NAME      terminal, violet, cyan, or lime
   --no-mouse        native terminal selection; /mouse can change it later
-  --json            JSON for envs, threads or doctor; status always emits JSON
+  --json            machine-readable results for read commands; status always emits JSON
   --json-envelope   versioned threads JSON with completeness and continuation
   --scope NAME      threads: active, all, completed, failed
   --cursor N        threads: continuation offset from the previous envelope
   --limit N         threads: 1–200 results
+  --type NAME       threads: all, main, subagents, forks
+  --item ID         inspect: exact source item identity
+  --revision KEY    inspect: observed revision (cache key, not a historical read)
+  --activity-cursor KEY  activity: opaque earlier-page cursor
   --version         print version
   --help            print this help
 
@@ -63,6 +70,7 @@ type arguments struct {
 	command, config, state, env, thread, theme              string
 	json, jsonEnvelope, noMouse, version, help, listOptions bool
 	scope                                                   string
+	typeFilter, item, revision, activityCursor              string
 	cursor, limit                                           int
 	words                                                   []string
 }
@@ -88,14 +96,19 @@ func parse(args []string) (arguments, error) {
 		case "--json-envelope":
 			a.json = true
 			a.jsonEnvelope = true
-		case "--scope", "--cursor", "--limit":
+		case "--scope", "--cursor", "--limit", "--type":
 			a.listOptions = true
 			if i+1 == len(args) {
 				return a, fmt.Errorf("%s needs a value", arg)
 			}
 			i++
 			value := args[i]
-			if arg == "--scope" {
+			if arg == "--type" {
+				a.typeFilter = value
+				if value != "all" && value != "main" && value != "subagents" && value != "forks" {
+					return a, errors.New("type must be all, main, subagents or forks")
+				}
+			} else if arg == "--scope" {
 				a.scope = value
 				if value != "active" && value != "all" && value != "completed" && value != "failed" {
 					return a, errors.New("scope must be active, all, completed or failed")
@@ -113,7 +126,7 @@ func parse(args []string) (arguments, error) {
 			}
 		case "--no-mouse":
 			a.noMouse = true
-		case "--config", "--state", "--env", "--thread", "--theme":
+		case "--config", "--state", "--env", "--thread", "--theme", "--item", "--revision", "--activity-cursor":
 			if i+1 == len(args) {
 				return a, fmt.Errorf("%s needs a value", arg)
 			}
@@ -130,6 +143,12 @@ func parse(args []string) (arguments, error) {
 				a.thread = value
 			case "--theme":
 				a.theme = value
+			case "--item":
+				a.item = value
+			case "--revision":
+				a.revision = value
+			case "--activity-cursor":
+				a.activityCursor = value
 			}
 		default:
 			if strings.HasPrefix(arg, "-") {
@@ -142,11 +161,36 @@ func parse(args []string) (arguments, error) {
 			}
 		}
 	}
-	if a.command != "" && a.command != "envs" && a.command != "threads" && a.command != "status" && a.command != "doctor" {
+	if a.command != "" && a.command != "envs" && a.command != "threads" && a.command != "status" && a.command != "doctor" && !inspectionCommand(a.command) {
 		return a, fmt.Errorf("unknown command %q; use --help", a.command)
 	}
 	if (a.jsonEnvelope || a.listOptions) && a.command != "threads" {
 		return a, errors.New("list format, scope and paging options require threads")
+	}
+	if (a.item != "" || a.revision != "") && a.command != "inspect" {
+		return a, errors.New("item and revision options require inspect")
+	}
+	if a.activityCursor != "" && a.command != "activity" {
+		return a, errors.New("activity-cursor requires activity")
+	}
+	if (a.command == "activity" || a.command == "inspect") && a.thread == "" {
+		return a, errors.New("activity and inspect require --thread with the exact source thread ID")
+	}
+	if a.command == "inspect" && a.item == "" {
+		return a, errors.New("inspect requires --item with the exact source item ID")
+	}
+	if a.command == "activity" || a.command == "inspect" {
+		for _, id := range []string{a.thread, a.item, a.revision} {
+			if len(id) > wire.MaxIdentifierBytes || strings.IndexFunc(id, unicode.IsControl) >= 0 {
+				return a, errors.New("invalid inspection source identity or revision")
+			}
+		}
+		if len(a.revision) > 128 {
+			return a, errors.New("inspection revision exceeds 128 bytes")
+		}
+		if len(a.activityCursor) > 64*1024 {
+			return a, errors.New("activity cursor exceeds 64 KiB")
+		}
 	}
 	if a.theme != "" && !ui.ValidTheme(a.theme) {
 		return a, errors.New("theme must be terminal, violet, cyan, or lime")
@@ -155,7 +199,7 @@ func parse(args []string) (arguments, error) {
 		return a, errors.New("unexpected positional arguments")
 	}
 	if a.json && a.command == "" && !a.version {
-		return a, errors.New("--json requires a read-only command: envs, threads, status or doctor; use --help")
+		return a, errors.New("--json requires a read-only command: envs, threads, status, doctor, capabilities, activity or inspect; use --help")
 	}
 	return a, nil
 }
@@ -169,8 +213,15 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string, out io.Writer) error {
+func run(ctx context.Context, args []string, out io.Writer) (err error) {
 	a, err := parse(args)
+	if inspectionCommand(a.command) && a.json {
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, writeInspectionError(out, a, err))
+			}
+		}()
+	}
 	if err != nil {
 		return err
 	}
@@ -181,6 +232,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if a.version {
 		_, err = fmt.Fprintln(out, "t3oxide", version, "· Bubble Tea v2.1.0")
 		return err
+	}
+	if a.command == "capabilities" && a.env == "" {
+		return showCapabilities(out, a, nil)
 	}
 	envs, err := config.Load(a.config)
 	if err != nil {
@@ -235,6 +289,13 @@ func selected(a arguments, envs []config.Environment) (config.Environment, error
 }
 
 func headless(ctx context.Context, a arguments, envs []config.Environment, out io.Writer) error {
+	if inspectionCommand(a.command) {
+		env, err := selected(a, envs)
+		if err != nil {
+			return err
+		}
+		return inspectCommand(ctx, a, env, out)
+	}
 	if a.command == "envs" {
 		type row struct {
 			ID            string `json:"id"`
@@ -302,14 +363,22 @@ func headless(ctx context.Context, a arguments, envs []config.Environment, out i
 	if err != nil {
 		return err
 	}
-	result, err := inspectList(ctx, env, strings.Join(a.words, " "), a.thread, map[string]any{"lifecycle": a.scope, "cursor": a.cursor, "limit": a.limit})
+	options := map[string]any{"lifecycle": a.scope, "cursor": a.cursor, "limit": a.limit}
+	if a.typeFilter != "" {
+		options["grouped"], options["typeFilter"] = true, a.typeFilter
+	}
+	result, err := inspectList(ctx, env, strings.Join(a.words, " "), a.thread, options)
 	if err != nil {
 		return err
 	}
 	if a.command == "status" || a.json {
 		if a.command == "threads" {
 			if a.jsonEnvelope {
-				return writeJSON(out, map[string]any{"schemaVersion": 1, "profile": env.ID, "threads": result["threads"], "more": result["more"], "observedAt": result["observedAt"], "scope": result["lifecycle"], "cursor": result["cursor"], "nextCursor": result["nextCursor"]})
+				kind := a.typeFilter
+				if kind == "" {
+					kind = "all"
+				}
+				return writeJSON(out, map[string]any{"schemaVersion": 1, "profile": env.ID, "environmentId": env.EnvironmentID, "threads": result["threads"], "more": result["more"], "observedAt": result["observedAt"], "scope": result["lifecycle"], "type": kind, "cursor": result["cursor"], "nextCursor": result["nextCursor"]})
 			}
 			return writeJSON(out, result["threads"])
 		}
@@ -356,6 +425,12 @@ func inspectList(parent context.Context, env config.Environment, query, thread s
 	}
 	if err = validateHello(hello, env.EnvironmentID); err != nil {
 		return nil, err
+	}
+	if _, requested := options["typeFilter"]; requested {
+		features, _ := hello["features"].(map[string]any)
+		if features["threadNavigation"] != true {
+			return nil, &wire.Fault{Code: "unsupported", Message: "This adapter does not advertise thread type filtering."}
+		}
 	}
 	fields := map[string]any{"query": query}
 	for key, value := range options {

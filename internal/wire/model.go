@@ -39,6 +39,7 @@ type Row struct {
 }
 
 type Metadata struct {
+	Activity       *ActivityPage          `json:"activity,omitempty"`
 	ModelSelection *config.ModelSelection `json:"modelSelection,omitempty"`
 	Lineage        *Lineage               `json:"lineage,omitempty"`
 	RuntimeDetails *RuntimeDetails        `json:"runtimeDetails,omitempty"`
@@ -538,6 +539,7 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 		return nil
 	}
 	n := *s
+	n.Metadata.Activity = s.Metadata.Activity.Clone()
 	// Extension pointers belong to the immutable snapshot, never shared with UI callers.
 	if s.Metadata.ModelSelection != nil {
 		v := s.Metadata.ModelSelection.Clone()

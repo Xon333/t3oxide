@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -471,6 +472,12 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 // Only explicit New/Settings requests acquire a source detail snapshot. Merely
 // moving the browser cursor never starts this helper or a watch.
 func (a *Session) withBrowserSource(ctx context.Context, profile, thread, action string) (Result, error) {
+	// The source may be a temporary attachment. Its eventual Target call saves
+	// that source's draft, so preserve the attached composer at this boundary
+	// instead of relying on the autosave timer or source connection latency.
+	if err := a.flushDraft(); err != nil {
+		return Result{}, fmt.Errorf("save the current draft before opening %s: %w", action, err)
+	}
 	a.mu.Lock()
 	same := a.environment != nil && a.environment.ID == profile && a.thread == thread
 	a.mu.Unlock()

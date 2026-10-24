@@ -31,8 +31,13 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r, _ := startAppTUI(t, session)
 	r.waitText("Initial Markdown for Alpha")
 	r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-	r.send("\x0f")
-	r.modalReady("Conversations")
+	// Exercise the full Browser explicitly at every width. Ctrl+O focuses the
+	// integrated rail on wide terminals; its program coverage is separate.
+	r.send("\x10")
+	r.modalReady("Commands")
+	r.send("Conversations\r")
+	r.waitText("t3oxide  Browser")
+	r.waitText("Filter: Type to filter")
 	r.send("Beta")
 	r.waitText("Filter: Beta")
 	before := f.requestCounts()

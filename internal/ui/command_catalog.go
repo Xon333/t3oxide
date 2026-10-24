@@ -49,8 +49,10 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"resolve", "Resolve reviewed action", "[stop]", "Confirms local record clearance", key.Binding{}},
 		{"error", "Error details", "", "", k.Error},
 		{"theme", "Theme", "[terminal|violet|cyan|lime]", "", key.Binding{}},
-		{"mouse", "Mouse scrolling", "[on|off]", "Scrolling only; off enables native selection", key.Binding{}},
-		{"sidebar", "Sidebar", "[on|off]", "", k.Sidebar},
+		{"mouse", "Mouse", "[on|off]", "Click and scroll; off enables native selection", key.Binding{}},
+		{"sidebar", "Context pane", "[on|off]", "", k.Sidebar},
+		{"context", "Conversation context", "", "", key.Binding{}},
+		{"navigator", "Conversation sidebar", "[on|off]", "", key.Binding{}},
 		{"copy", "Copy", "[page|draft|answer|error|detail]", "Last agent message by default", k.Copy},
 		{"reconnect", "Reconnect", "", "Never replays writes", key.Binding{}},
 		{"web", "Show T3 address", "", "Configured address for this environment", key.Binding{}},
@@ -166,13 +168,13 @@ func (m *Model) validateCommand(name, args string) error {
 	}
 	valid := true
 	switch name {
-	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details":
+	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details", "context":
 		valid = args == ""
 	case "keyboard":
 		valid = args == "modern" || args == "legacy"
 	case "theme":
 		valid = args == "" || ValidTheme(args) || args == "default"
-	case "mouse", "sidebar":
+	case "mouse", "sidebar", "navigator":
 		valid = args == "" || args == "on" || args == "off"
 	case "delivery":
 		valid = args == "auto" || args == "queue" || args == "steer"

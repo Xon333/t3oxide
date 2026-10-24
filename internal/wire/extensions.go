@@ -59,6 +59,13 @@ type RuntimeDetails struct {
 }
 
 func decodeExtensions(o object, m *Metadata) error {
+	if raw := o["activity"]; len(raw) > 0 && string(raw) != "null" {
+		page, err := DecodeActivityPage(raw)
+		if err != nil {
+			return err
+		}
+		m.Activity = &page
+	}
 	if raw := o["modelSelection"]; len(raw) > 0 && string(raw) != "null" {
 		m.ModelSelection = &config.ModelSelection{}
 		if json.Unmarshal(raw, m.ModelSelection) != nil {

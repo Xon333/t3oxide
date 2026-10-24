@@ -21,6 +21,7 @@ type Settings struct {
 	Theme             string
 	Mouse             bool
 	Sidebar           bool
+	NavigationHidden  bool
 	LegacyEditorCtrlP bool
 	environmentThemes map[string]string
 	forcedTheme       string
@@ -47,6 +48,7 @@ func LoadSettings(path string) (*Settings, error) {
 		Theme             string
 		Mouse             bool
 		Sidebar           bool
+		NavigationHidden  bool
 		LegacyEditorCtrlP bool
 		EnvironmentThemes map[string]string
 	}
@@ -56,6 +58,7 @@ func LoadSettings(path string) (*Settings, error) {
 	}
 	s.Theme, s.Mouse, s.Sidebar = saved.Theme, saved.Mouse, saved.Sidebar
 	s.LegacyEditorCtrlP = saved.LegacyEditorCtrlP
+	s.NavigationHidden = saved.NavigationHidden
 	s.environmentThemes = saved.EnvironmentThemes
 	if !ValidTheme(s.Theme) {
 		return nil, fmt.Errorf("unknown saved theme %q; choose terminal, violet, cyan or lime", s.Theme)
@@ -74,7 +77,7 @@ func (s *Settings) save() error {
 	if s.path == "" {
 		return nil
 	} // In-memory settings are useful for embedded/test programs.
-	saved := map[string]any{"theme": s.Theme, "mouse": s.Mouse, "sidebar": s.Sidebar}
+	saved := map[string]any{"theme": s.Theme, "mouse": s.Mouse, "sidebar": s.Sidebar, "navigationHidden": s.NavigationHidden}
 	if s.LegacyEditorCtrlP {
 		saved["legacyEditorCtrlP"] = true
 	}
@@ -174,6 +177,23 @@ func (s *Settings) SetLegacyEditorCtrlP(on bool) error {
 	s.LegacyEditorCtrlP = on
 	if err := s.save(); err != nil {
 		s.LegacyEditorCtrlP = old
+		return err
+	}
+	return nil
+}
+
+func (s *Settings) navigationHidden() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.NavigationHidden
+}
+func (s *Settings) SetNavigationHidden(hidden bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.NavigationHidden
+	s.NavigationHidden = hidden
+	if err := s.save(); err != nil {
+		s.NavigationHidden = old
 		return err
 	}
 	return nil

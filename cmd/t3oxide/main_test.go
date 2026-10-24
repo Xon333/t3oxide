@@ -121,11 +121,23 @@ func TestCLIReadOnlyAdapterFixture(t *testing.T) {
 		var result any
 		switch request["op"] {
 		case "hello":
-			result = map[string]any{"protocol": 1, "environmentId": "fixture-env", "orchestrationProtocol": 2}
+			result = map[string]any{"protocol": 1, "environmentId": "fixture-env", "orchestrationProtocol": 2, "features": map[string]any{"threadNavigation": true}}
+			if os.Getenv("T3OXIDE_CLI_ACTIVITY") == "1" {
+				result.(map[string]any)["features"] = map[string]any{"activity": true, "activityInspection": true, "threadNavigation": true}
+			}
 		case "list":
 			result = map[string]any{"more": true, "threads": []map[string]any{{"id": "thread-id", "title": "Title 界\x1b[31m\n", "project": "Fixture", "status": "idle", "model": "model"}}}
 		case "watch":
 			result = map[string]any{"ok": true}
+		case "activity":
+			result = map[string]any{"threadId": request["threadId"], "title": "Fixture", "observedAt": "2026-10-24T10:00:00Z", "activity": map[string]any{"scope": "page", "items": []any{}, "total": 0, "limited": false, "hasMore": true, "historyCursor": "opaque-history-cursor"}}
+		case "inspect-item":
+			thread := request["threadId"].(string)
+			if os.Getenv("T3OXIDE_CLI_WRONG_SOURCE") == "1" {
+				thread = "other-thread"
+			}
+			revision, _ := request["revision"].(string)
+			result = map[string]any{"key": thread + "/" + request["itemId"].(string), "sourceThreadId": thread, "itemId": request["itemId"], "kind": "command_execution", "title": "Command", "status": "completed", "input": "printf 'fixture'", "output": "fixture\n\x1b[31msecond line", "outputPresent": true, "outputOmitted": false, "updatedAt": "new-revision", "requestedRevision": revision, "changed": revision != "" && revision != "new-revision", "truncated": false}
 		default:
 			os.Exit(3) // Reject every mutation, including any future accidental write.
 		}

@@ -20,11 +20,13 @@ bash scripts/build-go.sh
 
 Follow [installation](NATIVE.md) to prepare the host adapter and environment profiles, then [Go setup and controls](NATIVE-GO.md) to install the executable on your PATH. Distributions include `NOTICE` and `LICENSES/` alongside the binary. Installation does not install, upgrade, start or restart T3.
 
-The client starts in the conversation browser. **Enter** opens a conversation; **Ctrl+O** returns to the browser, and **Esc** resumes the attached conversation. **Tab** switches between reading and writing; **Ctrl+P** opens commands from the composer without changing its text. Use `/help` for the full controls.
+The client starts in the conversation browser. **Enter** opens a conversation. Wide terminals keep a conversation sidebar beside the attached transcript; **Ctrl+O** focuses it, while compact terminals use the full browser. **Tab / Shift+Tab** moves between visible panes. **Ctrl+P** opens Commands without changing editor text. Use `/help` for the active controls.
 
 ## Features
 
-- A separate conversation browser with up to 24 active conversations per environment by default, project/lineage navigation and Resume to the active conversation. Settled threads stay out of the default list; working subagents load only on explicit expansion or selection. Search can find settled conversations.
+- A conversation sidebar with up to 24 unsettled root conversations per environment, explicit working-child expansion, lifecycle/type filters, broader search and paging. Browsing another environment preserves the attached conversation and its draft. Compact terminals retain the full browser.
+- Bounded command/tool/file-change/subagent activity, with exact source-bound result inspection on demand and separate activity history. A tool burst cannot crowd readable messages out of their page.
+- Clickable navigation and primary actions, focus-aware scrolling, and an optional responsive context pane. Mouse-off retains native terminal selection.
 - Markdown transcript with stable reading anchors, native composer editing, slash completion and searchable commands with portable controls.
 - One settings review for model and supported options, with searchable field choices and a single Apply. Question forms retain progress through Back/Next and validate before submission.
 - Exact external editing and bounded prompt recall, including recoverable rejected code pastes and explicit clears.
@@ -34,13 +36,21 @@ The client starts in the conversation browser. **Enter** opens a conversation; *
 - Current-thread, next-message and supported launch settings from the selected provider's advertised capabilities.
 - Human-authored messages with queue/steer intent, independent Stop with queue hold, request review and separate connection/run/receipt status.
 - Per-environment appearance with distinct defaults, fixed violet/cyan/lime choices and a Terminal theme that inherits terminal colors. See [theme controls](NATIVE-GO.md#themes).
-- Read-only `envs`, `threads`, `status` and `doctor` commands, with optional JSON output.
+- Read-only `envs`, `threads`, `status`, `doctor`, `capabilities`, `activity` and `inspect` commands. New inspection commands return versioned JSON success/error envelopes; existing arrays remain compatible.
 
-T3 owns providers, execution, durable conversations, queues and workspaces. The client keeps one detailed conversation attached; browsing other environments' lists uses temporary metadata helpers without opening their transcripts. Existing T3 work continues when the client disconnects. Full tool payloads, attachment uploads, provider configuration and full-history search remain in T3. See [controls and launch scope](NATIVE-GO.md) and [model/navigation semantics](docs/model-navigation.md).
+T3 owns providers, execution, durable conversations, queues and workspaces. The client keeps one detailed conversation attached; browsing other environments' lists uses temporary metadata helpers without opening their transcripts. Existing T3 work continues when the client disconnects. Results beyond the bounded inspector, attachment uploads, provider configuration and full-history search remain in T3. See [controls and launch scope](NATIVE-GO.md) and [model/navigation semantics](docs/model-navigation.md).
+
+See [the 0.7 architecture decision and reuse map](docs/reuse-t3term.md) for the four alternatives, exact t3term ports, process ownership and migration contract.
 
 ## Screenshots
 
-Version 0.5.1 in Ghostty, using synthetic demo conversations. Crops omit window chrome and unused margins.
+**0.7 workspace, 120×35.** Produced by the actual terminal model's `View` using synthetic state; this is a cell-accurate fixture rendering, not a native Mac capture. The sidebar browses Linux host while the main conversation remains attached to Build host.
+
+![t3oxide 0.7 workspace with environment navigation, attached transcript, recent tool and composer](docs/screenshots/workspace-120x35.png)
+
+[Compact 60×16 layout](docs/screenshots/workspace-60x16.png) · [Wide 170×40 context layout](docs/screenshots/workspace-170x40.png)
+
+The following **historical 0.5.1** captures use Ghostty and synthetic demo conversations. Crops omit window chrome and unused margins.
 
 **Conversation browser** — browse projects and conversations while keeping the active conversation attached.
 
