@@ -12,7 +12,7 @@ Source checks passed on the existing Go 1.27.2 darwin/arm64 and Node 24.21.0 too
 
 `golang.org/x/text` is pinned to v0.39.0 for GO-2026-5970 and Goldmark to v1.7.17 for the reachable GO-2026-5320 scanner finding. Existing license texts are unchanged; the license version index is updated. The pinned `scripts/check-security.sh` source scan reports zero reachable vulnerabilities; this is static call-path evidence, not an exploitability claim.
 
-The ARM64 bundle is ad-hoc signed and version/help/strict-signature checked. These source and native PTY checks do not claim a new physical-key, Ghostty GUI, resource or latency benchmark. Receiving-client file publication and nonproductive smoke are recorded separately. Earlier acceptance below retains its original build identity.
+The ARM64 bundle is ad-hoc signed and version/help/strict-signature checked. These source and native PTY checks do not claim a new physical-key, Ghostty GUI, resource or latency benchmark. The accepted executable was installed on the build client and atomically published through an existing receiving client’s versioned-release/current route. All 34 bundle files, ARM64, strict signature and version/help passed; immediate/final preservation snapshots matched for configuration, drafts, sidecars, lock, launcher, legacy app and all previous releases. No receiving-client productive connection or GUI check was performed; no active client was observed or terminated. The preceding 0.5.2 release remains rollback. Owned staging was consumed and temporary source/publication helpers removed after receipt consolidation. Earlier acceptance below retains its original build identity.
 
 ## Lean browser loading, 2026-10-23
 
