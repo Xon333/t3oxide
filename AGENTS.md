@@ -1,5 +1,7 @@
 # Working in t3oxide
 
+Mode: `dev`. [T3 project standard](https://github.com/Xon333/t3/blob/main/docs/policy/PROJECT-STANDARD.md) owns shared source workflow and native settings; this repo owns only client-specific behavior.
+
 t3oxide is a Go terminal client for existing T3 environments. Use [README](README.md) for scope, [architecture](docs/architecture.md) for protocol/recovery, and [installation](NATIVE.md) for installs. The Swift/AppKit client remains available as a legacy rollback.
 
 - Isolate nightly compatibility in `adapter/`; preserve the versioned client protocol or coordinate both sides. Use the existing Go/Bubble Tea UI and Node adapter. Preserve the retained Swift/AppKit rollback source and its separate state. Broader operations remain in T3.
