@@ -65,7 +65,7 @@ func TestIntuitiveDensityFeedbackPreservesFollowAndCompletionPosition(t *testing
 	}
 	panelRow := func() int {
 		for row, text := range strings.Split(ansi.Strip(m.View().Content), "\n") {
-			if strings.Contains(text, "Commands") {
+			if strings.Contains(text, "╭─ Commands") {
 				return row
 			}
 		}
@@ -291,17 +291,14 @@ func TestIntuitiveDensityDialogHelpTracksDetailsAndLaunchFocus(t *testing.T) {
 		t.Fatal("multiple-choice completion help is stale")
 	}
 	m.openPrompt(retiredPrompt(7105, launchQuestion(client.LaunchInput{})))
-	for _, focus := range []int{0, 1, len(m.launchActions()) + 1} {
-		m.dialog.launch.focus = focus
+	for _, tc := range []struct {
+		focus int
+		want  string
+	}{{0, "Enter newline"}, {1, "Enter continue"}, {2, "Enter create"}, {3, "Enter cancel"}, {7, "Enter editor"}} {
+		m.dialog.launch.focus = tc.focus
 		help := ansi.Strip(m.dialogHelp(56, true))
-		want := "Enter newline"
-		if focus == 1 {
-			want = "Enter continue"
-		} else if focus > 1 {
-			want = "Enter cancel"
-		}
-		if !strings.Contains(help, want) || strings.Count(help, "Ctrl+S") != 1 || !strings.Contains(help, "Ctrl+Q") {
-			t.Fatalf("launch focus help=%q, want %q", help, want)
+		if !strings.Contains(help, tc.want) || strings.Count(help, "Ctrl+S") != 1 || !strings.Contains(help, "Ctrl+Q") {
+			t.Fatalf("launch focus help=%q, want %q", help, tc.want)
 		}
 	}
 	m.dialog.details = true

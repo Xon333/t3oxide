@@ -91,6 +91,7 @@ func TestBubbleTeaFeaturesModelPickersAndGroupedNavigation(t *testing.T) {
 	r.waitText("Initial Markdown for Alpha")
 	r.send("/threads\r")
 	r.modalReady("Conversations")
+	// Wait for the reopened browser frame before traversing its controls.
 	r.send("\x1b[Z")
 	r.waitText("[More]")
 	r.send("\r")

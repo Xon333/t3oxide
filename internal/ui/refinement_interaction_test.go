@@ -71,7 +71,7 @@ func TestRefinementBrowserPreservesComposerSelectionAndReadingAnchor(t *testing.
 			m.openPrompt(retiredPrompt(6101, browserQuestion("a")))
 			m.restoreFocus()
 			view := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Browser", "Environments", "New", "Settings", "Resume", "Project"} {
+			for _, want := range []string{"Conversations", "Environments", "New", "Settings", "Resume", "Project"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("missing %q:\n%s", want, view)
 				}
@@ -217,9 +217,10 @@ func TestRefinementLaunchFocusLiteralTitleAndCanonicalRoundTrip(t *testing.T) {
 		t.Fatal("title syntax became a command")
 	}
 	preserved := m.launchInput()
-	m.Update(keyPress(tea.KeyTab))
-	m.Update(keyPress(tea.KeyTab)) // Editor then offered Model
-	if m.dialog.launch.focus != 3 {
+	m.Update(keyPress(tea.KeyTab)) // Create
+	m.Update(keyPress(tea.KeyTab)) // Cancel
+	m.Update(keyPress(tea.KeyTab)) // Model
+	if m.dialog.launch.focus != 4 {
 		t.Fatal("launch controls are not Tab reachable")
 	}
 	m.Update(keyPress(tea.KeyEnter))

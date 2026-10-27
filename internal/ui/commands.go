@@ -87,15 +87,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.navigator.focused && m.navigationVisible() {
-		return m.navigatorKey(msg)
-	}
-	if m.activityFocused {
-		return m.activityKey(msg)
-	}
-	if m.contextFocused && m.contextVisible() {
-		return m.contextKey(msg)
-	}
+	// Find temporarily owns the keyboard while retaining its invoking pane
+	// for Escape. Those pane flags must not route edits behind the search.
 	if m.searching {
 		switch msg.String() {
 		case "esc":
@@ -116,6 +109,15 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.restoreFocus()
 		}
 		return m.updateComponent("search", 0, msg)
+	}
+	if m.navigator.focused && m.navigationVisible() {
+		return m.navigatorKey(msg)
+	}
+	if m.activityFocused {
+		return m.activityKey(msg)
+	}
+	if m.contextFocused && m.contextVisible() {
+		return m.contextKey(msg)
 	}
 	switch {
 	case key.Matches(msg, k.Edit):
@@ -374,11 +376,14 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 			m.resize()
 			return m.restoreFocus()
 		}
+		if m.navigator.focused && m.navigationVisible() {
+			return m.openNavigatorDetail()
+		}
 		if m.preservedDraft != "" {
 			m.openDetail("Exact draft", m.preservedDraft)
 			m.detailCopy = m.preservedDraft
 		} else if !m.openFeedbackDetail() {
-			m.openDetail("Conversation details", m.status.Context+"\n"+m.status.ModelName+"\n"+m.status.RunState)
+			m.openDetail("Conversation details", m.conversationDetailText())
 		}
 		return nil
 	case "quit":
@@ -554,6 +559,9 @@ func (m *Model) copyText(which string) tea.Cmd {
 	})
 }
 func (m *Model) detailCopyText() string {
+	if m.detail == "" {
+		return ""
+	}
 	if m.detailCopy != "" {
 		return m.detailCopy
 	}

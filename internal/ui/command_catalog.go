@@ -24,13 +24,14 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"search", "Find in current page", "[text]", "", k.Search},
 		{"earlier", "Earlier history", "", "Pauses live detail", k.Earlier},
 		{"latest", "Latest", "", "Resumes live detail", k.Latest},
-		{"requests", "T3 requests", "", "", k.Requests},
+		{"requests", "Requests", "", "Review offered questions and approvals", k.Requests},
+		{"activity", "Activity and results", "[item-key]", "Tools and results; separate activity history", key.Binding{}},
 		{"help", "Keyboard help", "", "", k.Help},
 		{"edit", "Edit draft", "", "External editor", k.Edit},
 		{"recall", "Prompt history", "", "", k.Recall},
 		{"clear", "Clear draft", "", "Recoverable in prompt history", k.Clear},
 		{"env", "Environments", "", "", k.Environments},
-		{"threads", "Find conversations", "[words]", "Titles and projects", key.Binding{}},
+		{"threads", "Search conversations", "[words]", "Host titles and projects, including unloaded rows", key.Binding{}},
 		{"new", "New conversation", "[title]", "Uses the current workspace", key.Binding{}},
 		{"settings", "Settings", "", "Model, effort, tier and appearance", key.Binding{}},
 		{"details", "Details", "", "", k.Detail},
@@ -97,6 +98,26 @@ func (m *Model) commandSpec(name string) (commandSpec, bool) {
 
 func (m *Model) commandUnavailable(name string) string {
 	switch name {
+	case "requests":
+		if m.status.Requests == 0 {
+			return "Unavailable: no offered questions or approvals for the attached conversation"
+		}
+	case "stop":
+		if m.status.ActiveRunID == "" {
+			return "Unavailable: no reviewed active turn; use Latest to refresh"
+		}
+	case "earlier":
+		if m.snapshot == nil || !m.snapshot.Metadata.HasMore {
+			return "Unavailable: no earlier message page is offered"
+		}
+	case "activity":
+		if !m.status.Activity {
+			return "Unavailable: this attachment has no activity-capable adapter"
+		}
+	case "pending":
+		if !m.status.PendingAction && !m.status.PendingStop {
+			return "Unavailable: no saved operations for the attached conversation"
+		}
 	case "model", "effort", "speed", "override":
 		if !m.status.ModelControls {
 			return "Unavailable: connect a writable thread with a model-capable adapter"
@@ -137,7 +158,18 @@ func (m *Model) paletteItems() []list.Item {
 				variants = []struct{ args, label string }{{"", "ordinary action"}, {"stop", "Stop operation"}}
 			}
 			for _, variant := range variants {
-				items = append(items, choiceItem{title: spec.title + " · " + variant.label, description: spec.description, command: spec.name, args: variant.args})
+				row := choiceItem{title: spec.title + " · " + variant.label, description: spec.description, command: spec.name, args: variant.args}
+				if spec.name == "retry" || spec.name == "resolve" {
+					available := m.status.PendingAction
+					if variant.args == "stop" {
+						available = m.status.PendingStop
+					}
+					if !available {
+						row.disabled = true
+						row.description += " · Unavailable: no saved " + variant.label + " for this attachment"
+					}
+				}
+				items = append(items, row)
 			}
 			continue
 		}

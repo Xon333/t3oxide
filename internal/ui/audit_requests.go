@@ -75,6 +75,12 @@ func (m *Model) loadRequestAnswer() {
 	f := d.requestForm
 	q := f.questions[f.index]
 	f.option = 0
+	for i, option := range q.Options {
+		if requestOptionSelected(f.answers[q.ID], option.Value) {
+			f.option = i
+			break
+		}
+	}
 	f.problem = ""
 	if len(q.Options) == 0 {
 		f.focus = 1
@@ -90,6 +96,21 @@ func (m *Model) loadRequestAnswer() {
 	}
 	d.preservedInitial = ""
 	text, _ := f.answers[q.ID].(string)
+	// Offered choices and custom text are independent controls. A chosen
+	// option is never prefilled into the custom editor where merely visiting
+	// that editor could turn it into a second, hidden answer.
+	for _, option := range q.Options {
+		if text == option.Value {
+			text = ""
+			break
+		}
+	}
+	if q.AllowCustomAnswer && len(q.Options) > 0 && text != "" {
+		f.custom[q.ID] = text
+	}
+	if custom, ok := f.custom[q.ID]; ok {
+		text = custom
+	}
 	// Native editors must never silently change the original answer.
 	m.modalInput.SetValue("")
 	if len(text) <= maxInputBytes && strings.Count(text, "\n") < maxInputLines {
@@ -118,7 +139,7 @@ func (m *Model) saveRequestAnswer() bool {
 			return false
 		}
 		f.editors[q.ID] = requestEditorState{m.modalInput, d.preservedInitial}
-		if text == "" && q.MultiSelect && len(q.Options) > 0 && f.custom[q.ID] != "" {
+		if text == "" && len(q.Options) > 0 && f.custom[q.ID] != "" {
 			previous := f.custom[q.ID]
 			offered := false
 			for _, option := range q.Options {
@@ -128,9 +149,13 @@ func (m *Model) saveRequestAnswer() bool {
 				}
 			}
 			if !offered {
-				values, _ := f.answers[q.ID].([]string)
-				if i := slices.Index(values, previous); i >= 0 {
-					f.answers[q.ID] = slices.Delete(slices.Clone(values), i, i+1)
+				if q.MultiSelect {
+					values, _ := f.answers[q.ID].([]string)
+					if i := slices.Index(values, previous); i >= 0 {
+						f.answers[q.ID] = slices.Delete(slices.Clone(values), i, i+1)
+					}
+				} else if current, ok := f.answers[q.ID].(string); ok && current == previous {
+					delete(f.answers, q.ID)
 				}
 			}
 			delete(f.custom, q.ID)
@@ -152,6 +177,9 @@ func (m *Model) saveRequestAnswer() bool {
 				f.answers[q.ID] = values
 			} else {
 				f.answers[q.ID] = text
+				if len(q.Options) > 0 {
+					f.custom[q.ID] = text
+				}
 			}
 		}
 	}
@@ -215,6 +243,7 @@ func (m *Model) focusRequestForm() tea.Cmd {
 	return m.componentCmd("modal", d.serial, m.modalInput.Focus())
 }
 func (m *Model) requestFormKey(msg tea.KeyPressMsg) tea.Cmd {
+	defer m.resizeDialog()
 	d := m.dialog
 	f := d.requestForm
 	q := f.questions[f.index]
@@ -294,11 +323,13 @@ func (m *Model) toggleRequestOption() {
 		return
 	}
 	value := q.Options[f.option].Value
+	f.problem = ""
 	if !q.MultiSelect {
 		f.answers[q.ID] = value
 		m.modalInput.SetValue("")
 		m.dialog.preservedInitial = ""
 		delete(f.editors, q.ID)
+		delete(f.custom, q.ID)
 		return
 	}
 	values, _ := f.answers[q.ID].([]string)
@@ -314,28 +345,78 @@ func (m *Model) toggleRequestOption() {
 		delete(f.editors, q.ID)
 	}
 }
+
+func requestOptionSelected(answer any, value string) bool {
+	switch answer := answer.(type) {
+	case string:
+		return answer == value
+	case []string:
+		return slices.Contains(answer, value)
+	}
+	return false
+}
+
+func (m *Model) requestEditorVisible() bool {
+	d := m.dialog
+	f := d.requestForm
+	q := f.questions[f.index]
+	return len(q.Options) == 0 || q.AllowCustomAnswer && (f.focus == 1 || m.modalInput.Value() != "" || d.preservedInitial != "")
+}
+
+func (m *Model) requestFormPreferredHeight() int {
+	f := m.dialog.requestForm
+	q := f.questions[f.index]
+	width := max(1, m.modalWidth)
+	rows := 1 + strings.Count(ansi.Hardwrap(safeText(q.Question), width, true), "\n")
+	if q.Header != "" {
+		rows++
+	}
+	rows += len(q.Options)
+	if len(q.Options) == 0 || q.AllowCustomAnswer {
+		rows++ // answer/custom-answer label
+		if m.requestEditorVisible() {
+			rows += 3
+		}
+	}
+	if f.problem != "" {
+		rows++
+	}
+	return rows + 3 // pinned question/progress, actions, outer help
+}
+
 func (m *Model) requestFormView(width, height int) string {
 	d := m.dialog
 	f := d.requestForm
 	q := f.questions[f.index]
-	heading := fmt.Sprintf("Question %d/%d · %s", f.index+1, len(f.questions), q.Header)
-	question := ansi.Hardwrap(safeText(q.Question), width, true)
-	rows := []string{heading, question}
-	for i, option := range q.Options {
-		chosen := false
-		switch value := f.answers[q.ID].(type) {
-		case string:
-			chosen = value == option.Value
-		case []string:
-			chosen = slices.Contains(value, option.Value)
+	required := "Optional"
+	if q.Required {
+		required = "Required"
+	}
+	kind := "Text answer"
+	if len(q.Options) > 0 {
+		kind = "Choose one"
+		if q.MultiSelect {
+			kind = "Choose any"
 		}
+	}
+	heading := fmt.Sprintf("Question %d/%d · %s · %s", f.index+1, len(f.questions), required, kind)
+	question := ansi.Hardwrap(safeText(q.Question), width, true)
+	rows := []string{}
+	if q.Header != "" {
+		rows = append(rows, colors(m.theme).plain().Bold(true).Render(fitLine(safeText(q.Header), width)))
+	}
+	rows = append(rows, question)
+	optionStart := len(rows)
+	for i, option := range q.Options {
 		prefix := "○ "
-		if chosen {
+		if requestOptionSelected(f.answers[q.ID], option.Value) {
 			prefix = "✓ "
 		}
-		label := prefix + option.Label
+		label := fitLine(prefix+safeText(option.Label), max(1, width-2))
 		if f.focus == 0 && i == f.option {
-			label = colors(m.theme).selection().Render("› " + safeText(label))
+			label = colors(m.theme).selection().Render("› " + label)
+		} else {
+			label = "  " + label
 		}
 		rows = append(rows, label)
 	}
@@ -346,12 +427,20 @@ func (m *Model) requestFormView(width, height int) string {
 		}
 		if f.focus == 1 {
 			label = "› " + label
+		} else if !m.requestEditorVisible() {
+			label += " · Tab to write"
+		}
+		label = fitLine(label, width)
+		if f.focus == 1 {
+			label = colors(m.theme).active().Render(label)
 		}
 		rows = append(rows, label)
-		if d.preservedInitial != "" {
-			rows = append(rows, "Exact answer preserved · Ctrl+L review · Ctrl+Y copy")
-		} else {
-			rows = append(rows, m.modalInput.View())
+		if m.requestEditorVisible() {
+			if d.preservedInitial != "" {
+				rows = append(rows, fitLine("Exact answer preserved · Ctrl+L review", width))
+			} else {
+				rows = append(rows, m.modalInput.View())
+			}
 		}
 	}
 	body := strings.Join(rows, "\n")
@@ -368,16 +457,16 @@ func (m *Model) requestFormView(width, height int) string {
 	if f.index == 0 {
 		controls = controls[1:]
 	}
-	footer := strings.Join(controls, "  ") + "\n" + ansi.Truncate("Tab: field · ↑/↓: option · Space: select · Ctrl+Enter: next", width, "…")
+	footer := fitLine(strings.Join(controls, "  "), width)
 	if f.problem != "" {
 		footer = ansi.Truncate(f.problem, width, "…") + "\n" + footer
 	}
 	footerRows := strings.Count(footer, "\n") + 1
-	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, height-footerRows)))
+	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, height-footerRows-1)))
 	v.SetContent(body)
 	if f.focus == 0 && len(q.Options) > 0 {
 		// Question wraps and option rows contribute their actual display height.
-		before := strings.Join(rows[:2+f.option], "\n")
+		before := strings.Join(rows[:optionStart+f.option], "\n")
 		row := strings.Count(before, "\n") + 1
 		if row >= v.Height() {
 			v.SetYOffset(row - v.Height() + 1)
@@ -385,5 +474,5 @@ func (m *Model) requestFormView(width, height int) string {
 	} else if f.focus == 1 {
 		v.GotoBottom()
 	}
-	return v.View() + "\n" + footer
+	return colors(m.theme).subtle().Render(fitLine(heading, width)) + "\n" + v.View() + "\n" + footer
 }

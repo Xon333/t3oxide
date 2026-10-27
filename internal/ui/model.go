@@ -69,6 +69,7 @@ type Model struct {
 	activityFocused                            bool
 	activityFocusKey                           string
 	contextSelection                           int
+	contextFocusKey                            string
 	hitZones                                   []hitZone
 	hitGeneration                              uint64
 	layoutDirty                                bool
@@ -214,6 +215,7 @@ func (m *Model) Close() error {
 }
 
 func (m *Model) setSession(s *client.Session) {
+	m.navigator.review = nil
 	if m.navigator.cancel != nil {
 		m.navigator.cancel()
 		m.navigator.cancel = nil
@@ -224,6 +226,7 @@ func (m *Model) setSession(s *client.Session) {
 	m.activityFocused = false
 	m.activityFocusKey = ""
 	m.contextSelection = 0
+	m.contextFocusKey = ""
 	m.layoutDirty = true
 	if m.cancelBrowser != nil {
 		m.cancelBrowser()
@@ -426,13 +429,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.layoutDirty = true
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
-		if !m.navigationVisible() {
-			m.navigator.focused = false
-		}
-		if !m.contextVisible() && m.contextFocused {
-			m.contextFocused = false
-			m.transcriptFocus = true
-		}
+		m.reconcileWorkspaceFocus()
 		oldWidth := m.contentWidth
 		m.resize()
 		if oldWidth != m.contentWidth {
@@ -517,6 +514,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			commands = append(commands, m.requestRender(event.ResetScroll, event.Follow))
 		}
 		m.resize()
+		if m.reconcileWorkspaceFocus() {
+			commands = append(commands, m.restoreFocus())
+		}
 		return m, tea.Batch(commands...)
 	case sessionEndedMsg:
 		if msg.generation == m.generation && m.ctx.Err() == nil {
@@ -713,14 +713,15 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.resize()
 		case "navigator":
 			m.navigationHidden = msg.value == "off"
-			m.navigator.focused = false
+			m.reconcileWorkspaceFocus()
 			m.resize()
-			return m, tea.Batch(m.requestRender(false, false), m.loadNavigator("", "", false))
+			return m, tea.Batch(m.requestRender(false, false), m.loadNavigator("", "", false), m.restoreFocus())
 		case "sidebar":
 			m.sidebar = msg.value == "on"
-			m.notice = "Sidebar " + msg.value
+			m.notice = "Context pane " + msg.value
+			m.reconcileWorkspaceFocus()
 			m.resize()
-			return m, m.requestRender(false, false)
+			return m, tea.Batch(m.requestRender(false, false), m.restoreFocus())
 		}
 		return m, nil
 	case copyResultMsg:
@@ -849,6 +850,7 @@ func (m *Model) restoreDraft(text string) {
 }
 
 func (m *Model) restoreFocus() tea.Cmd {
+	m.reconcileWorkspaceFocus()
 	m.composer.Blur()
 	m.modalInput.Blur()
 	m.launchTitle.Blur()

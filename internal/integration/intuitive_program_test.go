@@ -36,7 +36,7 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r.send("\x10")
 	r.modalReady("Commands")
 	r.send("Conversations\r")
-	r.waitText("t3oxide  Browser")
+	r.waitText("t3oxide  Conversations")
 	r.waitText("Filter: Type to filter")
 	r.send("Beta")
 	r.waitText("Filter: Beta")

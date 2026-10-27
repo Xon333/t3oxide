@@ -64,7 +64,7 @@ func (m *Model) refreshCompletion() {
 }
 
 func (m *Model) completionVisible() bool {
-	return m.width >= 32 && m.height >= 12 && m.completion.active && m.detail == "" && m.dialog == nil && !m.searching && !m.transcriptFocus && m.preservedDraft == ""
+	return m.width >= 32 && m.height >= 12 && m.completion.active && m.detail == "" && m.dialog == nil && !m.searching && !m.transcriptFocus && !m.navigator.focused && !m.contextFocused && !m.activityFocused && m.preservedDraft == ""
 }
 
 func (m *Model) dismissCompletion() {

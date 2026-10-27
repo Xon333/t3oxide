@@ -2,6 +2,49 @@
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
+## UX refinement, 2026-10-27
+
+Version `0.7.1-bubbletea` implements the [UX refinement](ux-refinement.md) against packet revision `af58afb69d38653eb26170c8ce1b933cf5c7c0f9`. All 215 supplied source-manifest entries matched the immutable baseline before implementation. The pass changes Go presentation/event routing and its regressions; adapter, client execution, wire/config, shared scripts, module files, notices/licenses and retained Swift source are unchanged (104 relevant baseline files compared byte-for-byte).
+
+### Source and disposable-fixture verification
+
+The final source check passed on Linux amd64 with Go `1.26.10`, Node `24.22.1` and Python `3.12.14`:
+
+- `bash scripts/check-go.sh`: gofmt check, all six Go packages, `go vet ./...`, and the complete race run. The integration package passed in `47.897s` normally and `65.011s` with race detection. Tests exercise the actual unchanged Node adapter against disposable simulated T3 servers, direct Bubble Tea programs, and the assembled executable through a POSIX PTY. They do not contact a productive environment.
+- New regressions cover source-bound sidebar More activation through the actual filtered list; page/attachment retirement; metadata inspection without attachment; explicit Create; same-model option retention; required-answer clearing; compact settings/questions; search/caret and detail/copy restoration; nested prompt retirement; both saved operation lanes; rendered toolbar/mouse agreement; visible/source-qualified context selection; pane removal; and search opened from navigator/context/activity.
+- The short-wide `170×12` regression reproduces a one-row body. Context falls back to the existing local review instead of accepting an invisible activity selection; resize preserves the draft, attachment, operation and activity identity.
+- Existing causal receipt, independent Stop, exact input/recall, request revision, history, adapter journal and config compatibility checks remain in the passing full suite. Integration readiness now waits for real Commands/Conversations frames instead of the same words in persistent controls. Changed title, progress and launch traversal expectations retain exact-input, target and dispatch-count assertions.
+- `go mod verify` and `git diff --check` passed. No module version changed. `scripts/check.sh` was not run because adapter/shared-script/Swift code was not changed.
+
+An initial sandboxed suite was blocked by the environment denying loopback socket creation. The permitted fixture run exposed outdated heading/tab-order assertions and a dialog readiness ambiguity; these were corrected and the five affected program tests passed before the final full run. A focused rerun also corrected a test's optional-question label and an extra reverse traversal introduced while diagnosing readiness. These are recorded as failed intermediate checks, not silently counted as successes. Focused source review found and fixed search routing from a retained invoking pane and the one-row context case before the final check.
+
+### Portable build and render evidence
+
+`bash scripts/build-go.sh` passed for Linux amd64 and, with `GOOS=darwin GOARCH=arm64`, for a Darwin ARM64 cross-build. `file` identified ELF x86-64 and Mach-O ARM64 respectively. Linux `--version`, `--help`, and local `capabilities --json` passed; explicit nonexistent config/state paths remained absent. The version output is `t3oxide 0.7.1-bubbletea · Bubble Tea v2.1.0`.
+
+| Portable build | SHA-256 |
+| --- | --- |
+| Linux amd64 | `0baf49f3f48c12acee0ec5c38ff67d66bdc4f983b8e68a9f16f5a1e22741269c` |
+| Darwin ARM64 cross-build | `1df00ae41bda6341bfc58217656b6df9fa77a8f3b06ad5404f9af8123d1e79a0` |
+
+Fifteen synthetic fixtures render the actual `Model.View()` into bounded ANSI/text/cell grids and reproducible offscreen PNGs. They cover normal/wide workspace and browser, Commands, launch, model settings/choice, question/approval, result, error, `40×12` settings/question and `60×16` independent saved-action/Stop recovery. Visual inspection found reachable primary controls and distinct browse/attached scope; compact copy may wrap or ellipsize, with complete Details still available. These captures establish model-cell layout only, not a native terminal, physical-key, GUI, clipboard, accessibility or novice-usability result.
+
+### Native source verification and delivery limits
+
+On 2026-10-27 the return was integrated into the real macOS checkout at the stated baseline after all 215 baseline hashes and the return checksums matched. All 221 returned source hashes matched after applying the patch. Native `scripts/check-go.sh` passed formatting, all six Go packages, vet and the full race run. A native Apple Silicon build with Go `1.27.2` passed `scripts/build-go.sh`, ARM64 Mach-O identification, version, help, offline JSON capabilities and strict signature verification. The Go linker signature is ad hoc; no notarization is claimed. The native executable SHA-256 is `ff71610f178c1d3f043db04c847b0696415dc72c8da652096b30567688d5b6f5`. The offline capabilities check used an isolated empty home and created no state.
+
+### Installed-client delivery
+
+The same native executable above was published on two existing Apple Silicon clients: a verified same-directory temporary executable and atomic rename on the build client, then one complete 35-file bundle transfer through the required verified SMB share and an atomic swap of the receiving client’s existing release/current symlink. Native ARM64, strict signature, version and the complete executable hash matched after publication. Notice/license hashes matched the reviewed bundle. Existing prior releases and the receiving client’s launcher, command symlink and legacy app remained intact. No client process was terminated.
+
+The installed executable on each client passed read-only identity/authenticated-list doctor and capability checks against the existing host route: companion protocol 1, orchestration protocol 2, T3 `0.1.3-nightly.20261027.3754`, adapter revision `0e7346ccd9427c06161e222319e718e6bd70887f`. All eight installed adapter modules matched the unchanged source baseline; no adapter deployment was required. Checks opened only short-lived metadata helpers, without attaching a productive transcript.
+
+Existing Go state locks were acquired nonblocking for publication preservation checks. Profiles, Go drafts and recall sidecar, appearance, Swift drafts and lock-file hashes matched before/after publication and after the installed read-only checks. Recovery records remained in place; no state copy, migration, retry or restoration occurred. Host journals, services, active jobs, provider settings and legacy rollback were not changed. Private paths and preservation receipts remain outside Git.
+
+No GUI, physical-key, mouse, clipboard, accessibility, productive-write or performance acceptance is claimed from this delivery. Native source tests and synthetic captures retain their separate scope.
+
+Historical evidence below remains as supplied and was not relabeled as newly executed.
+
 ## Terminal workspace and t3term reuse, 2026-10-24
 
 Version `0.7.0-bubbletea` is implemented against the supplied t3oxide `ed43546c175e6d33467aaa89dae2503bb969b99f` and t3term `d1d33e89ae16dd09a4ff1e2a9f1570b3416a0c1e` baselines. All 380 input-manifest entries matched before and after work. [The architecture/reuse decision](reuse-t3term.md) records the exact ports and alternatives. The portable implementation pass accessed no live installation or personal state; the subsequent native adoption is recorded separately below.

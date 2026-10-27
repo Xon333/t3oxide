@@ -58,7 +58,7 @@ func TestNavigatorWorkspaceResponsiveActualViews(t *testing.T) {
 					t.Fatalf("width %d != %d: %q", ansi.StringWidth(row), size.w, row)
 				}
 			}
-			for _, want := range []string{"Build host", "Terminal redesign", "Actions", "Settings", "Stop"} {
+			for _, want := range []string{"Build host", "Terminal redesign", "Commands", "Settings", "Stop"} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("missing %q\n%s", want, plain)
 				}
@@ -275,7 +275,7 @@ func TestActivityStripUsesActualCommandSummary(t *testing.T) {
 	m := navigatorFixture(t, 120, 35)
 	m.snapshot.Metadata.Activity.Items = []wire.ActivityItem{{Key: "design/command", SourceThreadID: "design", ItemID: "command", Kind: "command_execution", Title: "Command", Summary: "go test ./...\nnot another label", Status: "running"}}
 	strip := ansi.Strip(m.activityStripView(80))
-	if strip != "Command · running  go test ./..." {
+	if strip != "Activity · Command · running  go test ./..." {
 		t.Fatalf("tool title concealed actual work: %q", strip)
 	}
 }

@@ -28,7 +28,7 @@ func TestPaletteTypesImmediatelyAndEnterRunsCurrentResult(t *testing.T) {
 	for _, raw := range m.dialog.list.Items() {
 		commands = append(commands, raw.(choiceItem).command)
 	}
-	if !slices.Equal(commands[:6], []string{"switch", "search", "earlier", "latest", "requests", "help"}) {
+	if !slices.Equal(commands[:6], []string{"switch", "search", "earlier", "latest", "requests", "activity"}) {
 		t.Fatalf("everyday commands do not lead the palette: %v", commands[:6])
 	}
 	typeDialogQuery(m, "Find in current page")

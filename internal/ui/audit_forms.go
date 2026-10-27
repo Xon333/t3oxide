@@ -78,6 +78,9 @@ func (m *Model) cycleModelSetting(delta int) {
 			}
 		}
 		next := models[(index+delta+len(models))%len(models)]
+		if next.Slug == f.selection.Model {
+			return
+		}
 		f.selection.Model, f.selection.Options = next.Slug, nil
 		for _, descriptor := range next.Options {
 			if value := descriptorDefault(descriptor); value != nil {
@@ -164,7 +167,19 @@ func (m *Model) applyModelSettings() tea.Cmd {
 }
 func (m *Model) modelSettingsView(width, height int) string {
 	f := m.dialog.settingsForm
-	rows := []string{"Source thread: " + f.review.Location.ThreadID, "Model  " + f.selection.Model}
+	state := "No changes"
+	if !f.selection.Equal(f.review.Selection) {
+		state = "Changes staged"
+	}
+	scope := f.review.Scope
+	if scope == "" {
+		scope = "Current thread"
+	}
+	heading := fitLine(scope+" · "+state, width)
+	rows := []string{"Model  " + f.selection.Model}
+	if f.model() == nil {
+		rows[0] += " · unavailable"
+	}
 	if model := f.model(); model != nil {
 		for _, descriptor := range model.Options {
 			value, exists := f.selection.Option(descriptor.ID)
@@ -185,7 +200,86 @@ func (m *Model) modelSettingsView(width, height int) string {
 		}
 	}
 	rows = append(rows, "Apply changes", "Cancel")
-	return m.focusedFormRows(rows, f.focus+1, width, height, "↑/↓ or Tab: field · ←/→: change · Enter: select · Esc: cancel")
+	return colors(m.theme).subtle().Render(heading) + "\n" + m.focusedFormRows(rows, f.focus, width, max(1, height-1), "")
+}
+
+// The form sizes to its content; large provider catalogs keep the focused
+// field in the native viewport instead of leaving a permanent empty panel.
+func (m *Model) modelSettingsPreferredHeight() int {
+	return m.dialog.settingsForm.optionCount() + 5 // scope, model, options, Apply, Cancel, help
+}
+
+// Full details use the source values, never the ellipsized form rendering.
+func (m *Model) modelSettingsDetails() string {
+	f := m.dialog.settingsForm
+	location := f.review.Location
+	rows := []string{
+		"Scope: " + f.review.Scope,
+		"Environment: " + location.Environment + " (" + location.EnvironmentID + ")",
+		"Profile: " + location.ProfileID,
+		"Source thread: " + location.ThreadID,
+		"Conversation: " + location.Title,
+		"Workspace: " + location.Workspace,
+		"Provider instance: " + f.selection.InstanceID,
+		"Saved: " + f.review.Selection.Summary(),
+		"Staged: " + f.selection.Summary(),
+	}
+	if model := f.model(); model != nil {
+		rows = append(rows, "", "Model: "+model.Name+" ("+model.Slug+")")
+		for _, descriptor := range model.Options {
+			value, exists := f.selection.Option(descriptor.ID)
+			label := "Provider default"
+			if exists {
+				label = fmt.Sprint(value)
+			}
+			rows = append(rows, "", descriptor.Label+" ("+descriptor.ID+"): "+label, descriptor.Description)
+			for _, choice := range descriptor.Options {
+				rows = append(rows, choice.Label+" · "+choice.ID+" · "+choice.Description)
+			}
+		}
+	} else {
+		rows = append(rows, "The staged model is no longer offered. Choose an advertised model before applying.")
+	}
+	if f.review.Catalog.RequiresNewThreadForModelChange {
+		rows = append(rows, "This provider requires a new conversation to change models.")
+	}
+	rows = append(rows, "", "Edits stay local until Apply changes. T3 validates the source and current catalog before updating it.")
+	return safeText(strings.Join(rows, "\n"))
+}
+
+// One context-sensitive help line owns each form's controls. The outer modal
+// renders it, keeping compact forms from paying for a second shortcut row.
+func (m *Model) formDialogHelpPairs() []string {
+	d := m.dialog
+	if d.settingsForm != nil {
+		f := d.settingsForm
+		action := "choose"
+		if f.focus == f.optionCount()+1 {
+			action = "apply"
+		} else if f.focus == f.optionCount()+2 {
+			action = "cancel"
+		}
+		return []string{"Enter", action, "Tab/↑↓", "field", "Ctrl+L", "details", "Esc", "back"}
+	}
+	if d.requestForm != nil {
+		f := d.requestForm
+		action := "select"
+		switch f.focus {
+		case 1:
+			return []string{"Tab", "continue", "Ctrl+J", "newline", "Ctrl+L", "details", "Esc", "back"}
+		case 2:
+			action = "back"
+		case 3:
+			action = "next"
+			if f.index == len(f.questions)-1 {
+				action = "submit"
+			}
+		case 4:
+			action = "cancel"
+		}
+		return []string{"Enter", action, "Tab", "controls", "Ctrl+L", "details", "Esc", "back"}
+	}
+	return nil
 }
 func (m *Model) focusedFormRows(rows []string, focus, width, height int, help string) string {
 	for i := range rows {
@@ -196,12 +290,19 @@ func (m *Model) focusedFormRows(rows []string, focus, width, height int, help st
 			rows[i] = "  " + rows[i]
 		}
 	}
-	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, height-1)))
+	available := height
+	if help != "" {
+		available--
+	}
+	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, available)))
 	v.SetContent(strings.Join(rows, "\n"))
 	if focus >= v.Height() {
 		v.SetYOffset(focus - v.Height() + 1)
 	}
-	return v.View() + "\n" + ansi.Truncate(help, width, "…")
+	if help != "" {
+		return v.View() + "\n" + ansi.Truncate(help, width, "…")
+	}
+	return v.View()
 }
 
 // Local return frames are bounded and contain no remote prompt. Native editor
@@ -238,6 +339,9 @@ func (m *Model) cancelForm() tea.Cmd {
 	if d != nil && d.prompt != nil {
 		answer := client.Answer{Action: "cancel", Cancelled: true}
 		if d.requestForm != nil {
+			if !m.saveRequestAnswer() {
+				return nil
+			}
 			answer.RequestAction = "cancel"
 			answer.RequestProgress = d.requestForm.progress()
 		}
@@ -273,6 +377,7 @@ func (m *Model) openModelSettingChooser() tea.Cmd {
 	f := source.settingsForm
 	var items []list.Item
 	local := "settings-model"
+	title, current := "Model", f.selection.Model
 	if f.focus == 0 {
 		if f.review.Catalog.RequiresNewThreadForModelChange {
 			m.notice = "This provider requires a new conversation to change models"
@@ -288,6 +393,14 @@ func (m *Model) openModelSettingChooser() tea.Cmd {
 	} else if model := f.model(); model != nil && f.focus <= len(model.Options) {
 		local = "settings-option"
 		descriptor := model.Options[f.focus-1]
+		title, current = descriptor.Label, "default"
+		if value, exists := f.selection.Option(descriptor.ID); exists {
+			if descriptor.Type == "boolean" {
+				current = fmt.Sprint(value)
+			} else {
+				current = "value:" + fmt.Sprint(value)
+			}
+		}
 		items = append(items, choiceItem{id: "default", title: "Provider default"})
 		if descriptor.Type == "boolean" {
 			items = append(items, choiceItem{id: "true", title: "On"}, choiceItem{id: "false", title: "Off"})
@@ -305,11 +418,22 @@ func (m *Model) openModelSettingChooser() tea.Cmd {
 		return nil
 	}
 	m.dialogSerial++
-	d := &dialog{serial: m.dialogSerial, title: "Choose setting", local: local, formSource: source}
+	d := &dialog{serial: m.dialogSerial, title: title + " · staged choice", local: local, formSource: source}
 	d.list = m.newList(d.title, items)
 	d.list.SetFilterText("")
 	d.list.SetFilterState(list.Filtering)
+	for i, raw := range items {
+		item := raw.(choiceItem)
+		if item.id == current {
+			item.description = strings.TrimSuffix("Selected · "+item.description, " · ")
+			d.list.SetItem(i, item)
+			d.refilter(false)
+			d.list.Select(i)
+			break
+		}
+	}
 	m.dialog = d
+	m.refreshDialogDetails()
 	m.resize()
 	return m.restoreFocus()
 }
@@ -339,6 +463,9 @@ func (m *Model) chooseModelSetting(selected choiceItem) tea.Cmd {
 	if d.local == "settings-model" {
 		for _, model := range f.review.Catalog.Models {
 			if model.Slug == selected.id {
+				if model.Slug == f.selection.Model {
+					return m.restoreFocus()
+				}
 				f.selection.Model, f.selection.Options = model.Slug, nil
 				for _, descriptor := range model.Options {
 					if value := descriptorDefault(descriptor); value != nil {

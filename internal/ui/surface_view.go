@@ -98,9 +98,9 @@ func (m *Model) browserControls(width int) string {
 	if actions.Len() > 0 {
 		parts = append(parts, browserControlViewport(actions.String(), width, 2, focusedActionRow))
 	}
-	detail := "Search · Tab: Results · Ctrl+F: Search all"
+	detail := "Filter loaded"
 	if m.dialog.resultsFocused || m.dialog.list.FilterState() != list.Filtering {
-		detail = "Results · type: Search"
+		detail = "Loaded conversations"
 	}
 	if selected, ok := m.dialog.list.SelectedItem().(choiceItem); ok && m.dialog.actionFocus == 0 {
 		for _, group := range m.dialog.prompt.Question.BrowserPage.Groups {
@@ -136,7 +136,7 @@ func (m *Model) browserControlsHeight(width int) int {
 func (m *Model) fullSurfaceView() string {
 	p := colors(m.theme)
 	width := m.workspaceWidth()
-	header := p.active().Render("t3oxide") + "  " + p.plain().Render("Browser")
+	header := p.active().Render("t3oxide") + "  " + p.plain().Render("Conversations")
 	if m.launchPage && !m.browserPage {
 		header = p.active().Render("t3oxide") + "  " + p.plain().Render("New conversation")
 	}
@@ -145,7 +145,7 @@ func (m *Model) fullSurfaceView() string {
 	}
 	if m.dialog != nil && m.dialog.prompt != nil && m.dialog.prompt.Question.BrowserPage != nil {
 		page := m.dialog.prompt.Question.BrowserPage
-		header += "  " + p.subtle().Render(fitLine(page.Location, max(1, width-20)))
+		header += "  " + p.subtle().Render(fitLine(page.Location, max(1, width-25)))
 	}
 	help := m.dialogHelp(width, true)
 	parts := []string{header, p.operational().Render(fitLine(m.attachedTargetStatus(), width))}
@@ -196,12 +196,14 @@ func (m *Model) launchView(width, height int) string {
 		label := actionLabel(action)
 		if f.focus == i+2 {
 			label = p.selection().Render("[" + label + "]")
+		} else if action == "create" {
+			label = p.active().Bold(true).Render(label)
 		} else {
 			label = p.plain().Render(label)
 		}
 		controls = append(controls, label)
 	}
-	parts := []string{p.subtle().Render(fitLine(location, width)), p.plain().Bold(true).Render(fitLine(f.review.Summary, width)), framed("First message", padBlock(message, width-6, m.modalInput.Height()), width-6, p, f.focus == 0), "Title  " + title, ansi.Hardwrap(strings.Join(controls, "  "), width, true)}
+	parts := []string{p.subtle().Render(fitLine("New in "+location, width)), p.plain().Bold(true).Render(fitLine(f.review.Summary, width)), framed("First message", padBlock(message, width-6, m.modalInput.Height()), width-6, p, f.focus == 0), "Title  " + title, ansi.Hardwrap(strings.Join(controls, "  "), width, true)}
 	if f.review.Unavailable != "" {
 		parts = append(parts, p.subtle().Render(fitLine(f.review.Unavailable, width)))
 	}

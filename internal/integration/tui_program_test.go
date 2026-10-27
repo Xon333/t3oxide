@@ -179,8 +179,12 @@ func (r *tuiProgram) waitText(want string) {
 
 func (r *tuiProgram) modalReady(want string) {
 	r.t.Helper()
+	// These names also appear in persistent shell controls. Wait for the
+	// actual dialog frame before sending a query or navigation keys.
+	if want == "Commands" || want == "Conversations" {
+		want = "╭─ " + want
+	}
 	r.waitText(want)
-
 }
 
 func (r *tuiProgram) waitEmptyComposer() {
@@ -439,12 +443,14 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	r.send("operator note\t")
 	r.waitText("[Back]")
 	r.send("\r")
-	r.waitText("Question 1/2 · Choice")
+	r.waitText("Question 1/2 · Required")
+	r.waitText("Choice")
 	r.waitText("Continue")
 	r.send("\t")
 	r.waitText("[Next]")
 	r.send("\r")
-	r.waitText("Question 2/2 · Notes")
+	r.waitText("Question 2/2 · Optional")
+	r.waitText("Notes")
 	r.waitText("operator note")
 	if effects, dispatches := f.counts(); effects != 1 || dispatches != 1 {
 		t.Fatalf("question Next/Back submitted prematurely: %d/%d", effects, dispatches)

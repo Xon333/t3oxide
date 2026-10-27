@@ -293,7 +293,7 @@ func actionLabel(action string) string {
 	case "types", "filter":
 		return "Thread type"
 	case "search":
-		return "Search all conversations"
+		return "Search conversations"
 	case "lifecycle":
 		return "Lifecycle"
 	case "next-page":
@@ -544,13 +544,13 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) launchActions() []string {
-	actions := []string{"editor"}
-	for _, action := range []string{"model", "effort", "tier", "create", "cancel"} {
+	var actions []string
+	for _, action := range []string{"create", "cancel", "model", "effort", "tier"} {
 		if slices.Contains(m.dialog.launch.review.Actions, action) {
 			actions = append(actions, action)
 		}
 	}
-	return actions
+	return append(actions, "editor")
 }
 
 func (m *Model) refreshLaunchDetails() {

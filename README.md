@@ -22,6 +22,8 @@ Follow [installation](NATIVE.md) to prepare the host adapter and environment pro
 
 The client starts in the conversation browser. **Enter** opens a conversation. Wide terminals keep a conversation sidebar beside the attached transcript; **Ctrl+O** focuses it, while compact terminals use the full browser. **Tab / Shift+Tab** moves between visible panes. **Ctrl+P** opens Commands without changing editor text. Use `/help` for the active controls.
 
+The **0.7.1 UX refinement** adds source-bound navigation menus, compact staged forms, context-aware controls and reliable return to the invoking pane. See [changes and interaction rules](docs/ux-refinement.md) and [verification](docs/verification.md).
+
 ## Features
 
 - A conversation sidebar with up to 24 unsettled root conversations per environment, explicit working-child expansion, lifecycle/type filters, broader search and paging. Browsing another environment preserves the attached conversation and its draft. Compact terminals retain the full browser.

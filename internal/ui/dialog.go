@@ -67,6 +67,7 @@ type dialog struct {
 	settingsForm              *modelSettingsForm
 	requestForm               *requestForm
 	paletteSource             *dialog
+	paletteReturn             *paletteReturn
 	formSource                *dialog
 	browserSource             *dialog // exact suspended source for local More
 }
@@ -189,7 +190,7 @@ func (m *Model) cancelDialog() tea.Cmd {
 	if m.dialog != nil && m.dialog.formSource != nil {
 		return m.restoreSettingsForm()
 	}
-	if m.dialog != nil && m.dialog.local == "palette" && m.dialog.paletteSource != nil {
+	if m.dialog != nil && m.dialog.local == "palette" && (m.dialog.paletteSource != nil || m.dialog.paletteReturn != nil) {
 		return m.restorePaletteSource()
 	}
 	if m.dialog != nil && (m.dialog.settingsForm != nil || m.dialog.requestForm != nil) {
@@ -318,7 +319,12 @@ func (m *Model) chooseDialog() tea.Cmd {
 		m.resize()
 		return m.restoreFocus()
 	}
-	if d.local == "palette" && d.paletteSource != nil {
+	if d.local == "palette" && (d.paletteSource != nil || d.paletteReturn != nil) {
+		// Copy consumes the inspected source. Other deliberate actions leave
+		// the suspended local inspection/search; Esc alone restores it.
+		if selected.command != "copy" {
+			d.paletteReturn = nil
+		}
 		m.restorePaletteSource()
 		return m.dispatch(selected.command, selected.args)
 	}
@@ -371,6 +377,9 @@ func (m *Model) openPalette() tea.Cmd {
 	m.dialogSerial++
 	d.serial = m.dialogSerial
 	d.paletteSource = source
+	if m.detail != "" || m.searching {
+		d.paletteReturn = &paletteReturn{generation: m.generation, searching: m.searching, detail: m.detail, title: m.detailTitle, copy: m.detailCopy, viewport: m.detailViewport}
+	}
 	if m.navigator.focused && m.navigator.profile != m.status.ProfileID && m.status.ThreadID != "" {
 		d.title = "Commands · " + m.attachedTargetStatus()
 	}
@@ -379,7 +388,7 @@ func (m *Model) openPalette() tea.Cmd {
 	d.list.SetFilterText("")
 	d.list.SetFilterState(list.Filtering)
 	m.dialog = d
-	m.detail = ""
+	m.detail, m.detailTitle, m.detailCopy = "", "", ""
 	m.searching = false
 	m.composer.Blur()
 	m.questionViewport.SetContent(d.description)
@@ -649,17 +658,21 @@ func (m *Model) refreshDialogDetails() {
 	}
 	text := safeText(d.title) + "\n\n" + safeText(d.description)
 	if d.settingsForm != nil {
-		text += "\n\n" + m.modelSettingsView(max(40, m.modalWidth), d.settingsForm.optionCount()+5)
+		text += "\n\n" + m.modelSettingsDetails()
 	}
 	if d.requestForm != nil {
 		f := d.requestForm
 		for i, q := range f.questions {
-			text += fmt.Sprintf("\n\nQuestion %d/%d: %s\n%s", i+1, len(f.questions), q.Header, q.Question)
+			requirement := "Optional"
+			if q.Required {
+				requirement = "Required"
+			}
+			text += fmt.Sprintf("\n\nQuestion %d/%d: %s · %s\n%s", i+1, len(f.questions), safeText(q.Header), requirement, safeText(q.Question))
 			for _, option := range q.Options {
-				text += "\n" + option.Label + " · " + option.Description
+				text += "\n" + safeText(option.Label) + " · " + safeText(option.Description)
 			}
 			if answer, ok := f.answers[q.ID]; ok {
-				text += "\nAnswer: " + fmt.Sprint(answer)
+				text += "\nAnswer: " + safeText(fmt.Sprint(answer))
 			}
 		}
 	}
@@ -711,9 +724,8 @@ func (m *Model) beginSearch() tea.Cmd {
 	m.searching = true
 	m.searchInput.SetValue(m.searchTerm)
 	m.searchInput.CursorEnd()
-	m.composer.Blur()
 	m.resize()
-	return m.componentCmd("search", 0, m.searchInput.Focus())
+	return m.restoreFocus()
 }
 func (m *Model) refreshSearch(move bool) {
 	if m.searchTerm == "" {

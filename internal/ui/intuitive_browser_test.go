@@ -317,8 +317,8 @@ func TestIntuitiveLaunchTitleEnterFocusesCreateWithoutEffects(t *testing.T) {
 	if m.modalInput.Placeholder != "" {
 		t.Fatal("field label still repeats as a placeholder")
 	}
-	if !slices.Equal(m.launchActions(), []string{"editor", "model", "effort", "tier", "create", "cancel"}) {
-		t.Fatal("Title Enter changed the established Tab order")
+	if !slices.Equal(m.launchActions(), []string{"create", "cancel", "model", "effort", "tier", "editor"}) {
+		t.Fatal("primary launch actions must precede optional settings")
 	}
 	m.Update(keyPress(tea.KeyTab))
 	m.Update(keyPress(tea.KeyEnter))

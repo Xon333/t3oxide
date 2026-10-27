@@ -49,7 +49,7 @@ func (m *Model) recordWorkspaceHits() {
 	}
 	m.addHit(x, composerY, m.contentWidth, m.composer.Height()+2, "composer", "", 0)
 	buttonX := x
-	for _, a := range m.toolbarActions() {
+	for _, a := range m.visibleToolbarActions(inner) {
 		w := ansi.StringWidth(a.label)
 		if buttonX-x+w > inner {
 			break
@@ -64,7 +64,7 @@ func (m *Model) recordWorkspaceHits() {
 		serial := m.navigator.serial
 		m.addHit(0, 1, w, 1, "navigator", "environment", serial)
 		m.addHit(0, 2, 3, 1, "navigator", "new", serial)
-		m.addHit(5, 2, 7, 1, "navigator", "actions", serial)
+		m.addHit(5, 2, 4, 1, "navigator", "actions", serial)
 		m.addHit(0, 3, w, 1, "navigator-focus", "", serial)
 		start, end := m.navigator.list.Paginator.GetSliceBounds(len(m.navigator.list.VisibleItems()))
 		for index := start; index < end; index++ {
@@ -97,18 +97,15 @@ func (m *Model) recordWorkspaceHits() {
 		cx := x + m.contentWidth + 2
 		m.addHit(cx, m.transcriptTop(), 28, m.bodyHeight, "context-focus", "", 0)
 		if m.snapshot != nil && m.snapshot.Metadata.Activity != nil {
-			y := m.transcriptTop() + 1
-			for _, value := range m.contextFacts() {
-				if value != "" {
-					y++
-				}
-			}
-			y += 2
+			_, first, offset := m.contextPanel(28, m.bodyHeight)
+			y := m.transcriptTop() + first - offset
 			for _, item := range m.snapshot.Metadata.Activity.Items {
-				if y >= m.transcriptTop()+m.bodyHeight-1 {
+				if y >= m.transcriptTop()+m.bodyHeight {
 					break
 				}
-				m.addHit(cx, y, 28, 1, "activity", item.Key, 0)
+				if y > m.transcriptTop() {
+					m.addHit(cx, y, 28, 1, "activity", item.Key, 0)
+				}
 				y++
 			}
 		}
@@ -196,6 +193,7 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			m.navigator.focused = false
 			m.transcriptFocus = false
 			m.contextFocused = true
+			m.reviewContextSelection()
 			m.resizeNavigator()
 			return m.restoreFocus()
 		case "activity":
@@ -254,6 +252,7 @@ func (m *Model) workspaceWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
 		} else if msg.Button == tea.MouseWheelDown && m.snapshot != nil && m.snapshot.Metadata.Activity != nil {
 			m.contextSelection = min(max(0, len(m.snapshot.Metadata.Activity.Items)-1), m.contextSelection+1)
 		}
+		m.reviewContextSelection()
 		return true, nil
 	}
 	return false, nil

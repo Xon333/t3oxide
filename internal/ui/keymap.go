@@ -35,7 +35,7 @@ var applicationKeys = appKeyMap{
 	Help: bind("/help", "help", "f1"), Palette: bind("Ctrl+P", "commands", "ctrl+p", "ctrl+space", "ctrl+@", "f3"),
 	Threads: bind("Ctrl+O", "browser", "ctrl+o", "f6"), Environments: bind("Ctrl+E", "environments", "ctrl+e"),
 	Requests: bind("Ctrl+R", "requests", "ctrl+r"), Search: bind("Ctrl+F", "find", "ctrl+f"),
-	Sidebar: bind("Ctrl+B", "sidebar", "ctrl+b"), Model: bind(optionKey("M"), "model", "alt+m"),
+	Sidebar: bind("Ctrl+B", "context", "ctrl+b"), Model: bind(optionKey("M"), "model", "alt+m"),
 	Effort: bind(optionKey("E"), "effort", "alt+e"), Speed: bind(optionKey("S"), "speed", "alt+s"),
 	Parent: bind(optionKey("↑"), "parent", "alt+up"), Earlier: bind(optionKey("←"), "earlier", "alt+left"),
 	Latest: bind(optionKey("→"), "latest", "alt+right"), Copy: bind("Ctrl+Y", "copy", "ctrl+y"),

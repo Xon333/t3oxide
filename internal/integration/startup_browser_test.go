@@ -32,7 +32,7 @@ func TestBubbleTeaStartupBrowserOpensSelectedConversationAndKeepsLaterBrowseInde
 		return s.ThreadID == "thread-b" && s.Connected
 	})
 	r.waitText("Initial Markdown for Beta")
-	r.waitText("╭─ Message")
+	r.waitText("╭─ > Message")
 	if view := r.views.text(); strings.Contains(view, "Loading…") || strings.Contains(view, "Conversations") {
 		t.Fatalf("startup retained the browser after opening the selected thread:\n%s", view)
 	}
@@ -58,7 +58,7 @@ func TestBubbleTeaStartupBrowserOpensSelectedConversationAndKeepsLaterBrowseInde
 	}
 	r.send("\x1b")
 	r.waitText(pushed)
-	r.waitText("╭─ Message")
+	r.waitText("╭─ > Message")
 	if session.Draft() != draft {
 		t.Fatal("Resume changed the selected thread draft")
 	}
@@ -91,20 +91,24 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 	const message = "Exact first message before settings"
 	r.program.Send(tea.PasteMsg{Content: message})
 	r.waitText(message)
-	r.send(strings.Repeat("\t", 3)) // Title, Editor, Model.
+	r.send(strings.Repeat("\t", 4)) // Title, Create, Cancel, Model.
 	r.waitText("[Model]")
 	r.send("\r")
 	r.modalReady("Model · New conversation")
 	r.send("\x1b")
 	r.waitText("First message")
 	r.waitText(message)
-	r.send(strings.Repeat("\t", 4)) // Title, Editor, Model, Effort.
-	for _, control := range []string{"Effort", "Tier", "Create", "Cancel"} {
+	r.send(strings.Repeat("\t", 5)) // Title, Create, Cancel, Model, Effort.
+	for _, control := range []string{"Effort", "Tier", "Editor"} {
 		r.waitText("[" + control + "]")
-		if control != "Cancel" {
+		if control != "Editor" {
 			r.send("\t")
 		}
 	}
+	r.send(strings.Repeat("\t", 3)) // Message, Title, Create.
+	r.waitText("[Create]")
+	r.send("\t")
+	r.waitText("[Cancel]")
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
 		t.Fatal("local review/settings focus dispatched a mutation")
 	}

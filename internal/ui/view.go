@@ -85,10 +85,12 @@ func (m *Model) resizeDialog() {
 		if m.dialog.details {
 			m.questionViewport.SetHeight(max(1, m.modalHeight-helpHeight))
 		} else if m.dialog.settingsForm != nil {
+			m.modalHeight = min(m.modalHeight, m.modelSettingsPreferredHeight())
 			return
 		} else if m.dialog.requestForm != nil {
+			m.modalHeight = min(m.modalHeight, m.requestFormPreferredHeight())
 			m.modalInput.SetWidth(m.modalWidth)
-			m.modalInput.SetHeight(max(1, min(6, m.modalHeight-7)))
+			m.modalInput.SetHeight(max(1, min(4, m.modalHeight-7)))
 			return
 		} else if m.dialog.launch != nil {
 			m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
@@ -185,7 +187,7 @@ func (m *Model) View() tea.View {
 	}
 	header := p.active().Render("t3oxide") + "  " + p.plain().Render(fitLine(contextLine, max(1, inner-9)))
 	if m.navigationVisible() {
-		header = p.plain().Bold(true).Render(fitLine(contextLine, inner))
+		header = p.active().Render("t3oxide") + "  " + p.plain().Bold(true).Render(fitLine("Attached · "+contextLine, max(1, inner-9)))
 	}
 	state := m.authoritativeStatus()
 	if state == "" {
@@ -194,21 +196,13 @@ func (m *Model) View() tea.View {
 	if conn := m.status.ConnectionState; conn != "" && conn != "connected" && conn != "synchronized" {
 		state = conn + " · " + state
 	}
-	position := "latest"
-	if m.snapshot != nil && m.snapshot.Metadata.Historical {
-		position = "history · /latest"
-	} else if m.snapshot != nil && m.snapshot.Metadata.HasMore && m.follow {
-		position = "Earlier messages · /earlier"
-	} else if !m.follow {
-		position = fmt.Sprintf("reading %d%% · End latest", int(m.viewport.ScrollPercent()*100))
+	if m.status.ThreadID != "" && !m.status.Writable {
+		state = "Read only · " + state
 	}
 	stateWidth := min(ansi.StringWidth(state), max(16, inner*2/3))
 	model := p.plain().Bold(true).Render(fitLine(modelStatusLine(m.status.ModelName), max(1, inner-stateWidth-2)))
 	status := edgeLine(model, p.operational().Render(fitLine(state, stateWidth)), inner)
 	toolbar := m.toolbarView(inner)
-	if inner-ansi.StringWidth(toolbar)-ansi.StringWidth(position) >= 3 {
-		toolbar = edgeLine(toolbar, p.subtle().Render(position), inner)
-	}
 	body := m.bodyView()
 	if m.contextVisible() {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.contextView(28, m.bodyHeight))
@@ -226,6 +220,9 @@ func (m *Model) View() tea.View {
 	if m.searching {
 		label = "Find in current page"
 	}
+	if m.composer.Focused() || m.searching {
+		label = "> " + label
+	}
 	composer := m.composer.View()
 	if m.searching {
 		composer = m.searchInput.View()
@@ -233,7 +230,7 @@ func (m *Model) View() tea.View {
 	frame := framed(label, padBlock(composer, max(1, m.contentWidth-4), m.composer.Height()), m.contentWidth-4, p, m.composer.Focused() || m.searching)
 	parts := []string{header, status, toolbar}
 	if operation := m.operationLine(); operation != "" {
-		parts = append(parts, p.operational().Render(fitLine(operation, inner)))
+		parts = append(parts, m.operationView(inner))
 	}
 	parts = append(parts, padBlock(body, inner, m.bodyHeight))
 	if strip := m.activityStripView(inner); strip != "" {
@@ -454,6 +451,8 @@ func (m *Model) dialogHelp(width int, fullSurface bool) string {
 		pairs = []string{"Esc", "back", "Ctrl+Y", "copy", "↑/↓", "scroll"}
 	case d != nil && d.details:
 		pairs = []string{"Ctrl+L/Esc", "back", "↑/↓", "scroll"}
+	case d != nil && (d.settingsForm != nil || d.requestForm != nil):
+		pairs = m.formDialogHelpPairs()
 	case d != nil && d.launch != nil:
 		activation := "newline"
 		if d.launch.focus == 1 {

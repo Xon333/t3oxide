@@ -56,12 +56,13 @@ func (m *Model) activityStripView(width int) string {
 	case "todo_list":
 		kind = "Tasks"
 	}
-	text := kind + " · " + item.Status + "  " + activityLabel(*item)
+	text := "Activity · " + kind + " · " + item.Status + "  " + activityLabel(*item)
 	if item.Truncated {
 		text += " …"
 	}
 	style := colors(m.theme).operational()
 	if m.activityFocused {
+		text = "> " + text
 		style = colors(m.theme).selection()
 	}
 	return style.Render(fitLine(text, width))

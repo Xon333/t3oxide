@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/client"
+	"github.com/Xon333/t3oxide/internal/wire"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -86,7 +87,8 @@ func TestUnavailableModelActionsAreDisabledInPalette(t *testing.T) {
 		t.Fatal("disabled action executed")
 	}
 	m.dialog = nil
-	m.status = client.Status{ModelControls: true, ModelCatalog: true, ThreadNavigation: true, RuntimeDetails: true, ParentAvailable: true}
+	m.status = client.Status{ModelControls: true, ModelCatalog: true, ThreadNavigation: true, RuntimeDetails: true, ParentAvailable: true, Requests: 1, ActiveRunID: "run", Activity: true, PendingAction: true, PendingStop: true}
+	m.snapshot = &wire.Snapshot{Metadata: wire.Metadata{HasMore: true}}
 	m.openPalette()
 	for _, raw := range m.dialog.list.Items() {
 		item := raw.(choiceItem)
