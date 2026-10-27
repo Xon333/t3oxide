@@ -56,3 +56,12 @@ The existing integration suite continues to cover exact input, causal receipts, 
 Version is `0.7.1-bubbletea`. Go modules, checks/build scripts, client execution owners, adapter, wire/config packages and Swift rollback source are unchanged. No state migration, new host component, watcher, service or account is introduced. Existing compatible adapters do not need redeployment for this pass.
 
 The native worker applies the baseline patch to the real checkout, resolves concurrent writers, builds and verifies the native ARM64 release, then uses the existing client installation mechanism. The same reviewed native release is transferred to the second client and atomically published through its established updater. Full private destination instructions are supplied separately from maintained source. Source tests and a cross-build do not establish that installation has happened.
+
+## Proposed startup and creation flow
+
+- Open directly into one workspace: list threads from both configured environments on the left and show an empty conversation pane on the right. Do not start with an environment picker.
+- Keep the established per-environment loading limits, budgets and filters. Show each thread's environment with a simple open-source icon compatible with the existing Bubble Tea interface, alongside an understandable environment label; avoid icon-specific tests.
+- Selecting a thread opens it in the right pane, as today.
+- The empty pane can also start a new thread. Use the available defaults and let the user choose environment, project and model when they want to change them, following the T3 creation flow.
+- Allow creation directly from a selected project, including its first thread, without requiring an existing source conversation. Offer the applicable workspace choice and valid provider/model defaults; preserve exact target validation, drafts and durable uncertain-operation recovery.
+- Keep the existing filters and unrelated features. This is a proposal; the current source-thread-based launch and startup behavior remain in place until implemented.
