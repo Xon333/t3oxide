@@ -12,3 +12,5 @@ t3oxide is a Go terminal client for existing T3 environments. Use [README](READM
 Choose affected checks: `scripts/check-go.sh` covers the primary Go client; `scripts/check.sh` covers the shared adapter/scripts and retained Swift checks. Build the primary client with `scripts/build-go.sh`. Native behavior changes need relevant macOS checks/build from a host-local checkout. Documentation alone needs no app build/deployment. Reuse unchanged evidence; hosted CI is not a prerequisite.
 
 [Verification](docs/verification.md) separates compatibility and installed-instance results from source tests; update it when results change. Do not claim untested GUI behavior or resource savings. Historical acceptance neither prescribes a fleet topology nor authorizes access to another installation.
+
+After capability changes, run `scripts/check-capabilities.sh` on the canonical knowledge host and review only affected existing Personal records. The host-local `capability-records` helper owns location/dependencies; no vault checkout or private path belongs in this repository. A missing helper is an explicit pending knowledge update, not verified coverage.
