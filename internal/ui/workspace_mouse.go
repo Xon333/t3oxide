@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -16,6 +18,8 @@ type hitZone struct {
 	x, y, width, height int
 	action, args        string
 	serial              uint64
+	owner               string
+	target              client.InboxTarget
 }
 
 func (z hitZone) contains(x, y int) bool {
@@ -116,36 +120,57 @@ func (m *Model) recordWorkspaceHits() {
 }
 
 func (m *Model) recordModalHits() {
+	m.hitZones = m.modalHitZones()
+}
+
+func (m *Model) modalHitZones() []hitZone {
 	if m.detail != "" || m.dialog == nil {
-		return
+		return nil
 	}
 	d := m.dialog
-	// Existing form controllers own their precise keyboard navigation. Mouse
-	// never falls through a form to activate the hidden attachment.
-	if d.kind == client.EnterText || d.details || d.settingsForm != nil || d.requestForm != nil || d.launch != nil {
-		return
+	if d.details {
+		return nil
 	}
-	panel := m.modalView()
-	x, y := max(0, (m.width-lipgloss.Width(panel))/2), max(0, (m.height-lipgloss.Height(panel))/2)
+	var hits []hitZone
 	if m.browserPage || m.launchPage {
-		x, y = 0, 2
+		hits = m.fullSurfaceLayout().hits
+	} else {
+		panel := m.modalLayout()
+		x, y := max(0, (m.width-lipgloss.Width(panel.content))/2), max(0, (m.height-lipgloss.Height(panel.content))/2)
+		hits = moveHits(panel.hits, x, y)
 	}
-	listY := y + 2 + m.questionViewport.Height()
-	if d.surface == client.SurfaceBrowser {
-		listY += m.browserControlsHeight(m.modalWidth)
-	}
-	start, end := d.list.Paginator.GetSliceBounds(len(d.list.VisibleItems()))
-	for index := start; index < end; index++ {
-		item, ok := d.list.VisibleItems()[index].(choiceItem)
-		if !ok {
-			continue
+	owner := ""
+	if d.settingsForm != nil {
+		// Summary intentionally omits unrecognized options; hit identity must
+		// retain every staged value, including those native defaults preserve.
+		selection, err := json.Marshal(d.settingsForm.selection)
+		if err != nil {
+			return nil
 		}
-		identity := item.id
-		if identity == "" {
-			identity = item.command + "\x00" + item.args
-		}
-		m.addHit(x+2, listY+index-start, m.modalWidth, 1, "dialog-row", identity, d.serial)
+		owner = string(selection)
 	}
+	for i := range hits {
+		hits[i].serial = d.serial
+		if d.settingsForm != nil {
+			// The same option name on a different model is a different offer.
+			hits[i].owner = owner
+		}
+	}
+	return clipHits(hits, 0, 0, m.width, m.height)
+}
+
+func modalPromptLive(d *dialog) bool {
+	if d == nil {
+		return false
+	}
+	if d.prompt != nil {
+		select {
+		case <-d.prompt.Done:
+			return false
+		default:
+		}
+	}
+	return d.formSource == nil || modalPromptLive(d.formSource)
 }
 
 func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
@@ -158,21 +183,11 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			continue
 		}
 		if m.dialog != nil || m.detail != "" {
-			if z.action != "dialog-row" || m.dialog == nil || m.dialog.serial != z.serial {
+			if m.dialog == nil || m.dialog.serial != z.serial || !modalPromptLive(m.dialog) || !slices.Contains(m.modalHitZones(), z) {
 				return nil
 			}
-			for j, raw := range m.dialog.list.VisibleItems() {
-				item := raw.(choiceItem)
-				id := item.id
-				if id == "" {
-					id = item.command + "\x00" + item.args
-				}
-				if id == z.args {
-					m.dialog.list.Select(j)
-					return m.chooseDialog()
-				}
-			}
-			return nil
+			m.layoutDirty = true
+			return m.activateModalHit(z)
 		}
 		switch z.action {
 		case "toolbar":
@@ -228,9 +243,122 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	return nil
 }
 
+// Route controls directly to their existing controller after validating the
+// displayed identity/geometry. In particular, pointer input never synthesizes
+// a global Send key or changes editor focus before saving a request answer.
+func (m *Model) activateModalHit(z hitZone) tea.Cmd {
+	d := m.dialog
+	defer m.resizeDialog()
+	switch z.action {
+	case "dialog-row":
+		for i, raw := range d.list.VisibleItems() {
+			item, ok := raw.(choiceItem)
+			if !ok || item.disabled {
+				continue
+			}
+			id := item.id
+			if id == "" {
+				id = item.command + "\x00" + item.args
+			}
+			if id == z.args {
+				d.list.Select(i)
+				return m.chooseDialog()
+			}
+		}
+	case "dialog-finish":
+		if d.kind == client.ChooseMany {
+			return m.finishMultiple()
+		}
+	case "launch-field":
+		if d.launch != nil {
+			d.launch.focus = 0
+			if z.args == "title" {
+				d.launch.focus = 1
+			}
+			return m.restoreFocus()
+		}
+	case "launch-action":
+		if d.launch != nil {
+			if index := slices.Index(m.launchActions(), z.args); index >= 0 {
+				d.launch.focus = index + 2
+				if z.args == "editor" {
+					return m.editLaunch()
+				}
+				return m.launchAction(z.args)
+			}
+		}
+	case "settings-field":
+		if f := d.settingsForm; f != nil {
+			if z.args == "model" {
+				f.focus = 0
+				return m.openModelSettingChooser()
+			}
+			if model := f.model(); model != nil {
+				for i, option := range model.Options {
+					if option.ID == z.args {
+						f.focus = i + 1
+						return m.openModelSettingChooser()
+					}
+				}
+			}
+		}
+	case "settings-action":
+		if d.settingsForm != nil {
+			if z.args == "apply" {
+				return m.applyModelSettings()
+			}
+			return m.cancelForm()
+		}
+	case "request-option", "request-field", "request-action":
+		f := d.requestForm
+		if f == nil || f.questions[f.index].ID != z.owner {
+			return nil
+		}
+		if z.action == "request-action" {
+			switch z.args {
+			case "back":
+				return m.advanceRequest(true)
+			case "next":
+				return m.advanceRequest(false)
+			case "cancel":
+				return m.cancelForm()
+			}
+		}
+		if !m.saveRequestAnswer() {
+			return nil
+		}
+		if z.action == "request-field" {
+			f.focus = 1
+			return m.restoreFocus()
+		}
+		for i, option := range f.questions[f.index].Options {
+			if option.Value == z.args {
+				f.focus, f.option = 0, i
+				m.toggleRequestOption()
+				m.refreshDialogDetails()
+				return m.restoreFocus()
+			}
+		}
+	case "text-field":
+		d.actionFocus = 0
+		return m.restoreFocus()
+	case "text-action":
+		if z.args == "Submit" {
+			return m.chooseDialog()
+		}
+		return m.cancelDialog()
+	}
+	return nil
+}
+
 func (m *Model) workspaceWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
 	if !m.mouse {
 		return true, nil
+	}
+	if m.dialog != nil && m.detail == "" && !m.dialog.details {
+		if handled, cmd := m.formWheel(msg); handled {
+			return true, cmd
+		}
 	}
 	if m.dialog != nil || m.detail != "" {
 		return false, nil
@@ -256,6 +384,63 @@ func (m *Model) workspaceWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// Scroll long forms through their existing focused rows. This exposes every
+// field to the pointer without a second independent viewport position. A wheel
+// never toggles an offered value or activates a submission control.
+func (m *Model) formWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
+	d := m.dialog
+	if d == nil || d.launch == nil && d.settingsForm == nil && d.requestForm == nil {
+		return false, nil
+	}
+	if m.layoutDirty || m.hitGeneration != m.generation || !modalPromptLive(d) {
+		return true, nil
+	}
+	delta := 0
+	if msg.Button == tea.MouseWheelUp {
+		delta = -1
+	} else if msg.Button == tea.MouseWheelDown {
+		delta = 1
+	}
+	if delta == 0 {
+		return true, nil
+	}
+	panel := m.modalLayout()
+	x, y := max(0, (m.width-lipgloss.Width(panel.content))/2), max(0, (m.height-lipgloss.Height(panel.content))/2)
+	bounds := hitZone{x: x, y: y, width: lipgloss.Width(panel.content), height: lipgloss.Height(panel.content)}
+	if m.browserPage || m.launchPage {
+		bounds = hitZone{x: 0, y: 2, width: m.workspaceWidth(), height: max(1, m.height-2-m.surfaceHelpHeight)}
+	}
+	if !bounds.contains(msg.X, msg.Y) {
+		return true, nil
+	}
+	for _, hit := range m.modalHitZones() {
+		if hit.contains(msg.X, msg.Y) && m.modalInput.Focused() && (hit.action == "launch-field" && hit.args == "message" || hit.action == "request-field") {
+			return true, m.updateComponent("modal", d.serial, msg)
+		}
+	}
+	if f := d.settingsForm; f != nil {
+		f.focus = max(0, min(f.optionCount()+2, f.focus+delta))
+	} else if f := d.launch; f != nil {
+		f.focus = max(0, min(len(m.launchActions())+1, f.focus+delta))
+	} else if f := d.requestForm; f != nil {
+		q := f.questions[f.index]
+		if len(q.Options) == 0 || !m.saveRequestAnswer() {
+			return true, nil
+		}
+		if delta > 0 && f.option == len(q.Options)-1 && q.AllowCustomAnswer {
+			f.focus = 1
+		} else {
+			if f.focus == 0 {
+				f.option = max(0, min(len(q.Options)-1, f.option+delta))
+			}
+			f.focus = 0
+		}
+	}
+	m.layoutDirty = true
+	m.resizeDialog()
+	return true, m.restoreFocus()
 }
 
 // Keep path-bearing facts readable without using their bytes as controls.

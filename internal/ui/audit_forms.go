@@ -11,7 +11,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/client"
 	"github.com/Xon333/t3oxide/internal/config"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // Forms stage values locally. The original prompt remains the only authority
@@ -165,6 +164,10 @@ func (m *Model) applyModelSettings() tea.Cmd {
 	return m.restoreFocus()
 }
 func (m *Model) modelSettingsView(width, height int) string {
+	return m.modelSettingsLayout(width, height).content
+}
+
+func (m *Model) modelSettingsLayout(width, height int) renderedSurface {
 	f := m.dialog.settingsForm
 	state := "No changes"
 	if !f.selection.Equal(f.review.Selection) {
@@ -176,6 +179,7 @@ func (m *Model) modelSettingsView(width, height int) string {
 	}
 	heading := fitLine(scope+" · "+state, width)
 	rows := []string{"Model  " + f.selection.Model}
+	controls := []surfaceControl{{action: "settings-field", args: "model", disabled: f.review.Catalog.RequiresNewThreadForModelChange || len(f.review.Catalog.Models) == 0}}
 	if f.model() == nil {
 		rows[0] += " · unavailable"
 	}
@@ -196,10 +200,13 @@ func (m *Model) modelSettingsView(width, height int) string {
 				}
 			}
 			rows = append(rows, descriptor.Label+"  "+label)
+			controls = append(controls, surfaceControl{action: "settings-field", args: descriptor.ID})
 		}
 	}
 	rows = append(rows, "Apply changes", "Cancel")
-	return colors(m.theme).subtle().Render(heading) + "\n" + m.focusedFormRows(rows, f.focus, width, max(1, height-1), "")
+	controls = append(controls, surfaceControl{action: "settings-action", args: "apply", disabled: !slices.Contains(f.review.Actions, "apply")}, surfaceControl{action: "settings-action", args: "cancel"})
+	body := m.focusedFormLayout(rows, controls, f.focus, width, max(1, height-1))
+	return renderedSurface{content: colors(m.theme).subtle().Render(heading) + "\n" + body.content, hits: moveHits(body.hits, 0, 1)}
 }
 
 // The form sizes to its content; large provider catalogs keep the focused
@@ -289,28 +296,25 @@ func (m *Model) formDialogHelpPairs() []string {
 	}
 	return nil
 }
-func (m *Model) focusedFormRows(rows []string, focus, width, height int, help string) string {
+func (m *Model) focusedFormLayout(rows []string, controls []surfaceControl, focus, width, height int) renderedSurface {
+	var hits []hitZone
 	for i := range rows {
-		rows[i] = ansi.Truncate(safeText(rows[i]), max(1, width-2), "…")
+		rows[i] = fitLine(rows[i], max(1, width-2))
 		if i == focus {
 			rows[i] = colors(m.theme).selection().Render("› " + rows[i])
 		} else {
 			rows[i] = "  " + rows[i]
 		}
+		if i < len(controls) && !controls[i].disabled {
+			hits = append(hits, hitZone{x: 0, y: i, width: width, height: 1, action: controls[i].action, args: controls[i].args})
+		}
 	}
-	available := height
-	if help != "" {
-		available--
-	}
-	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, available)))
+	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, height)))
 	v.SetContent(strings.Join(rows, "\n"))
 	if focus >= v.Height() {
 		v.SetYOffset(focus - v.Height() + 1)
 	}
-	if help != "" {
-		return v.View() + "\n" + ansi.Truncate(help, width, "…")
-	}
-	return v.View()
+	return (renderedSurface{content: strings.Join(rows, "\n"), hits: hits}).inViewport(v)
 }
 
 // Local return frames are bounded and contain no remote prompt. Native editor

@@ -180,7 +180,7 @@ func (m *Model) openPrompt(p *client.Prompt) {
 	if q.ModelSettings != nil {
 		m.initModelSettings(q.ModelSettings)
 	}
-	if len(q.RequestQuestions) > 0 {
+	if len(q.RequestQuestions) > 0 || q.ConfirmChoice {
 		m.initRequestForm(q)
 	}
 	if d.launch != nil {
@@ -479,6 +479,31 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.questionViewport.GotoBottom()
 		}
 		return nil
+	}
+	if m.dialog.kind == client.EnterText {
+		switch msg.String() {
+		case "tab", "shift+tab":
+			delta := 1
+			if msg.String() == "shift+tab" {
+				delta = -1
+			}
+			m.dialog.actionFocus = (m.dialog.actionFocus + delta + 3) % 3
+			return m.restoreFocus()
+		case "enter":
+			if m.dialog.actionFocus == 2 {
+				return m.cancelDialog()
+			}
+			return m.chooseDialog()
+		}
+		if m.dialog.actionFocus > 0 {
+			switch msg.String() {
+			case "left", "up":
+				m.dialog.actionFocus = 1
+			case "right", "down":
+				m.dialog.actionFocus = 2
+			}
+			return nil
+		}
 	}
 	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany && key.Matches(msg, m.actionBinding("browser.search")) {
 		return m.browserAction("search")

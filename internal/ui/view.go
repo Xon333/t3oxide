@@ -131,6 +131,9 @@ func (m *Model) resizeDialog() {
 	}
 	m.modalInput.SetWidth(m.modalWidth)
 	m.modalInput.SetHeight(max(1, m.modalHeight-questionHeight-helpHeight))
+	if m.dialog != nil && m.dialog.kind == client.EnterText {
+		m.modalInput.SetHeight(max(1, m.modalInput.Height()-1)) // explicit Submit/Cancel
+	}
 	if m.dialog != nil && m.dialog.prompt != nil && m.dialog.prompt.Question.SingleLine {
 		m.modalInput.SetHeight(1)
 	}
@@ -168,6 +171,8 @@ func (m *Model) View() tea.View {
 		return tea.NewView("")
 	}
 	if m.width < 20 || m.height < 8 {
+		m.hitZones = nil
+		m.layoutDirty = true
 		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · Ctrl+Q exits"), m.width, m.height))
 	}
 	if m.browserPage || m.launchPage {
@@ -348,6 +353,10 @@ func (m *Model) feedbackVisible() bool {
 }
 
 func (m *Model) modalView() string {
+	return m.modalLayout().content
+}
+
+func (m *Model) modalLayout() renderedSurface {
 	p := colors(m.theme)
 	w, h := m.modalWidth, m.modalHeight
 	localHelp := ""
@@ -360,20 +369,29 @@ func (m *Model) modalView() string {
 		localHelp = "\n" + localHelp
 	}
 	if m.detail != "" {
-		return framed(m.detailTitle, padBlock(m.detailViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)
+		return renderedSurface{content: framed(m.detailTitle, padBlock(m.detailViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)}
 	}
 	d := m.dialog
 	if d == nil {
-		return ""
+		return renderedSurface{}
 	}
 	if d.settingsForm != nil && !d.details {
-		return framed(d.title, m.modelSettingsView(w, h-helpHeight)+localHelp, w, p, true)
+		surface := m.modelSettingsLayout(w, h-helpHeight)
+		surface.content += localHelp
+		return m.frameSurface(d.title, surface, w)
 	}
 	if d.requestForm != nil && !d.details {
-		return framed(d.title, m.requestFormView(w, h-helpHeight)+localHelp, w, p, true)
+		surface := m.requestFormLayout(w, h-helpHeight)
+		surface.content += localHelp
+		return m.frameSurface(d.title, surface, w)
 	}
 	if d.details {
-		return framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)
+		return renderedSurface{content: framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)}
+	}
+	if d.kind == client.EnterText {
+		surface := m.textFormSurface(w, h-helpHeight)
+		surface.content += localHelp
+		return m.frameSurface(d.title, surface, w)
 	}
 	var parts []string
 	if d.surface == client.SurfaceBrowser && d.kind != client.ChooseMany {
@@ -382,9 +400,22 @@ func (m *Model) modalView() string {
 	if m.questionViewport.Height() > 0 {
 		parts = append(parts, m.questionViewport.View())
 	}
-	if d.kind == client.EnterText {
-		parts = append(parts, padBlock(m.modalInput.View(), w, max(1, h-m.questionViewport.Height()-helpHeight)))
-		return framed(d.title, strings.Join(parts, "\n")+localHelp, w, p, true)
+	listY := 1 // the query editor directly precedes the native list
+	if len(parts) > 0 {
+		listY += lipgloss.Height(strings.Join(parts, "\n"))
+	}
+	var hits []hitZone
+	start, end := d.list.Paginator.GetSliceBounds(len(d.list.VisibleItems()))
+	for index := start; index < end; index++ {
+		item, ok := d.list.VisibleItems()[index].(choiceItem)
+		if !ok || item.disabled || index-start >= d.list.Height() {
+			continue
+		}
+		identity := item.id
+		if identity == "" {
+			identity = item.command + "\x00" + item.args
+		}
+		hits = append(hits, hitZone{x: 0, y: listY + index - start, width: w, height: 1, action: "dialog-row", args: identity})
 	}
 	// Keep the native query editor visible before typing and when completion
 	// owns focus. The selected-result row stays visible even when Bubbles dims
@@ -409,9 +440,10 @@ func (m *Model) modalView() string {
 			label = "> " + label
 			style = p.selection()
 		}
+		hits = append(hits, hitZone{x: 0, y: lipgloss.Height(strings.Join(parts, "\n")), width: w, height: 1, action: "dialog-finish"})
 		parts = append(parts, style.Render(fitLine(label, w)))
 	}
-	return framed(d.title, strings.Join(parts, "\n")+localHelp, w, p, true)
+	return m.frameSurface(d.title, renderedSurface{content: strings.Join(parts, "\n") + localHelp, hits: hits}, w)
 }
 
 func (m *Model) pickerSelectionView(width int) string {
@@ -488,9 +520,17 @@ func (m *Model) dialogHelp(width int, fullSurface bool) string {
 				activation = strings.ToLower(actionLabel(actions[index]))
 			}
 		}
-		pairs = []string{"Enter", activation, "Tab", "controls", info, detailLabel, dismiss, escape}
+		traversal := "Tab"
+		if d.launch.focus >= 2 {
+			traversal = "Tab/←↑↓→"
+		}
+		pairs = []string{"Enter", activation, traversal, "controls", info, detailLabel, dismiss, escape}
 	case d != nil && d.kind == client.EnterText:
-		pairs = []string{"Enter", "answer", "Ctrl+J", "newline", info, detailLabel, dismiss, escape}
+		activation := "answer"
+		if d.actionFocus == 2 {
+			activation = "cancel"
+		}
+		pairs = []string{"Enter", activation, "Tab", "controls", "Ctrl+J", "newline", info, detailLabel, dismiss, escape}
 		if d.preservedInitial != "" {
 			pairs = []string{info, "Info", copyKey, "copy", "Ctrl+U", "replace", dismiss, escape}
 		}

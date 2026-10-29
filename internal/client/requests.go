@@ -135,7 +135,7 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 			allowed[decision] = true
 			choices = append(choices, Choice{ID: decision, Label: stringValue(o["label"]), Description: stringValue(o["warning"])})
 		}
-		answer, err := a.asker.Ask(requestCtx, Question{Kind: ChooseOne, Title: "T3 approval", Prompt: stringValue(selected["prompt"]), Choices: choices})
+		answer, err := a.asker.Ask(requestCtx, Question{Kind: ChooseOne, Title: "T3 approval", Prompt: stringValue(selected["prompt"]), Choices: choices, ConfirmChoice: true})
 		if err != nil {
 			return err
 		}

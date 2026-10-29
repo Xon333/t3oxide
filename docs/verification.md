@@ -1,5 +1,46 @@
 # Verification
 
+## Native integration of form and decision refinement, 2026-10-29
+
+The returned implementation was verified against its immutable 265-file baseline and applied as a patch to the matching clean dev checkout. All 269 returned source files matched the return manifest's hashes and Unix modes before integration fixes. Four independent reviews covered request ownership, rendered geometry/AgentBox, regression quality and the return contract. One blocking regression was corrected: the structured approval form now displays each offered warning beside its option, wraps it within the form, and preserves the selected consequence while Submit has focus. Clicking warning text stages that exact offered option and cannot submit it.
+
+Native source checks use Go **1.27.2** darwin/arm64, Node **24.21.0** and Apple Swift **6.4**. The check results below supersede the corresponding cloud-only pending checks; they do not establish physical terminal or installed-instance acceptance. Program mouse tests decode ordered input through `io.Pipe`; actual assembled-executable PTY tests provide separate terminal-lifecycle coverage.
+
+Before the additional status-label refinement, `bash scripts/check-go.sh` passed formatting, all six package suites, vet and the complete race run on the integrated source. Integration took 87.376 seconds normally and 176.276 seconds under race. `bash scripts/check.sh` passed 196 Node tests, adapter/script syntax, shell parsing, five Python tests, Swift model typecheck/App parse, and the compiled Swift model and macOS transport tests. `go mod verify` and `go mod tidy -diff` passed unchanged dependencies. The native ARM64 build passed version/help and strict ad-hoc signature verification.
+
+The warning regression failed against the returned decision renderer before correction. Its corrected UI cases passed across all four supported sizes, including a wrapped consequence that remains visible at Submit. The actual-program request mouse matrix passed under race in 24.435 seconds, preserving exact request/decision values, dispatch counts and source drafts; the complete final UI race run after word-wrapping correction passed in 60.917 seconds.
+
+The owner additionally requested clearer thread-state indicators. Conversation and AgentBox rows now share bold, right-aligned symbol-and-word badges with existing operational, warning and error color roles. Failed, Waiting and Blocked are distinct; queued follow-ups are not hidden by a previous completed run; reviewed/unreported metadata never implies Done. Focus/selection, project identity, mouse target geometry and native state ownership remain unchanged. Renderer tests cover selected/unselected rows and terminal/default palettes at 22–34 columns, plus complete AgentBox views at 60×16, 80×24, 120×35 and 170×40. An initial combined run exposed title clipping from the wider badges and one assertion tied to the previous request label. The list panes now reserve the added badge width instead of taking it from ordinary titles; source-bound mouse opening and exact launch/request program tests passed again in 24.183 seconds. The retirement assertion retains its exact one-request check using the new visible Waiting label. No identity, payload or dispatch-count assertion was removed.
+
+The final combined `bash scripts/check-go.sh` passed formatting, all six package suites, vet and the full race run after the status-layout corrections. Integration took 89.343 seconds normally and 175.358 seconds under race; the UI package passed in 6.967 and 61.629 seconds respectively. The unchanged shared layer retains the native Node/Swift results above. The final native ARM64 build passed version/help, Mach-O inspection and strict ad-hoc signature verification; executable SHA-256: `0fd947a19a59ed99ed457a6df6d54ca02edb23e7938522b2fe6456b457c2921a`.
+
+Physical mouse/wheel and Command-key delivery, installed-instance publication and disposable live mutation/recovery acceptance remain unverified for this source change. No installation, service restart, productive native mutation, capability-backend change or Vault write was performed.
+
+## Portable form and decision refinement, 2026-10-29
+
+This source implements F01–F03 from the intuitive-flow packet against exact upstream baseline `6a7960aaa0fe52a03120c7c26e631f06b6e0fe3b`. Version remains `0.8.2-bubbletea`; there is no release or installation claim for these changes. Go modules, adapter/transport contracts, check/build scripts, native defaults, recovery storage, notices and retained Swift source are unchanged.
+
+The cloud checks used Go **1.26.10** linux/amd64, Node **24.22.1**, Python **3.12.14** and Git **2.51.1**. The existing pinned toolchain cache was reused, with version, binary hash and build module information recorded. Tests use the actual top-level UI router, Bubble Tea programs, Node adapter and disposable native-shaped HTTP/WebSocket fixtures. Executable PTY tests are included in the complete suite. They do not establish physical input or installed-native acceptance.
+
+| Check | Actual result |
+| --- | --- |
+| `bash scripts/check-go.sh` | Passed formatting, all six package suites, `go vet ./...` and the complete race run. Total 304.122 seconds; integration 95.360 seconds normally and 200.284 seconds with race detection. No test subset replaced the production gate. |
+| `bash scripts/check.sh` | Passed all 196 Node tests, adapter/script syntax, shell parsing and five Python tests. `swiftc` is absent, so conditional Swift/AppKit checks did not run. |
+| `go mod verify`; `go mod tidy -diff` | Passed; dependency lockfiles remain identical to the input. |
+| `bash scripts/build-go.sh` | Passed Linux amd64 production build and version output. |
+| `GOOS=darwin GOARCH=arm64 T3OXIDE_OUTPUT=dist/t3oxide-darwin-arm64 bash scripts/build-go.sh` | Passed the Darwin ARM64 cross-build; file inspection reports Mach-O arm64. This executable was not run or signed on macOS. |
+| Focused before/after regressions | The same `intuitive_flows_test.go` bytes fail all six original missing-behavior cases on the supplied baseline and pass after the changes. The extended safety suite also passes. |
+
+New `TestIntuitiveFlow…` cases locate controls in actual composed views and reject stale geometry, retired/replaced prompts, changed model selections, scrolled-out options, old Next/Submit coordinates and mode/resize/generation transitions. They cover exact text, single/multi-selection, clearing custom answers, required validation, disabled submission, nested chooser ownership, wheel access and mouse-off. Settings hit identity retains every option, including native options omitted by its display summary.
+
+`TestIntuitiveMouseProgram…` verifies launch fields and local choosers, cancellation/reopening, one exact Create; staged model/effort/tier and one exact Apply; approval selection followed by explicit Submit decision; question Back/Next/custom text and exact final Submit answers; plain text Submit/Cancel and durable input; and AgentBox Changes, Reply and Reviewed. It uses decoded SGR clicks and ordered bracketed paste at **60×16, 80×24, 120×35 and 170×40**, in Developer and AgentBox wherever applicable. The extended unified-startup program test verifies Enter/click parity for duplicate thread IDs across environments at those sizes, including metadata-only startup and preserved scoped drafts.
+
+All earlier delivery, queue/steer, request retirement, native-default validation, independent Stop, late/uncertain acknowledgement, explicit original-ID recovery, palette and local terminal-exit regressions remain in the complete run. Navigation and staging assert zero mutation; explicit submission asserts exact native payload/count. No new polling, watcher, provider selector or scheduling backend was added, and no comparative latency/resource claim follows from these tests.
+
+The return contains command/exit-code logs, the acceptance map, the exact patch, source hashes/modes and fresh-baseline reconstruction evidence. Initial sandbox loopback/subprocess restrictions and intermediate test-driver corrections are recorded separately from passing final gates. The archive audit also restored original executable modes from the supplied ZIP without changing input bytes; the disposable comparison commit was corrected to those original modes before patch generation.
+
+**Native pending:** retained Swift/AppKit checks, macOS build/signature and installed-instance checks, physical mouse/scroll and Command-key delivery, and authorized disposable live mutation/recovery acceptance on the designated native host. No deployment, service restart, live account/model change or Vault write was performed. There was no capability-backend change requiring the canonical capability-record helper.
+
 ## Public release 0.8.2, 2026-10-29
 
 The public release is standardized on `0.8.2-bubbletea`, including the Command-arrow and compact-layout fixes after 0.8.1. The Apple Silicon release build passed version/help, ARM64 inspection and strict ad-hoc signature verification. Earlier test and installed-instance evidence below retains its original version scope.

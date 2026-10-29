@@ -440,6 +440,11 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	r.send("\r")
 	r.modalReady("Once")
 	r.send("\r")
+	r.waitText("✓ Once")
+	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
+		t.Fatal("approval option submitted before explicit Submit")
+	}
+	r.send("\t\r")
 	approval := f.waitRequest(t, "approval-a")
 	if approval["decision"] != "accept" {
 		t.Fatalf("first offered approval changed: %#v", approval)

@@ -188,15 +188,18 @@ type LaunchReview struct {
 type Question struct {
 	// StoreText retains only an explicit human draft, bound by its client
 	// owner. It is never a permission response or remote operation.
-	StoreText                           func(string) error
-	Surface                             Surface
-	BrowserPage                         *BrowserPage
-	LaunchReview                        *LaunchReview
-	ModelSettings                       *ModelSettingsReview
-	RequestQuestions                    []RequestQuestion
-	RequestProgress                     *RequestProgress
-	SingleLine                          bool
-	Navigation                          bool
+	StoreText        func(string) error
+	Surface          Surface
+	BrowserPage      *BrowserPage
+	LaunchReview     *LaunchReview
+	ModelSettings    *ModelSettingsReview
+	RequestQuestions []RequestQuestion
+	RequestProgress  *RequestProgress
+	SingleLine       bool
+	Navigation       bool
+	// ConfirmChoice stages an offered decision in the existing request form.
+	// Only its explicit Submit returns ChoiceIDs to the native request owner.
+	ConfirmChoice                       bool
 	Kind                                Kind
 	Title, Prompt, Placeholder, Initial string
 	Choices                             []Choice

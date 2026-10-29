@@ -1,17 +1,28 @@
 package integration_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/client"
 	"github.com/Xon333/t3oxide/internal/config"
 )
 
 func TestUnifiedStartupRealAdapterPartialHostsDuplicateIDsAndMouseOpen(t *testing.T) {
+	for _, size := range intuitiveMouseSizes {
+		for _, activation := range []string{"enter", "mouse"} {
+			t.Run(fmt.Sprintf("%s/%dx%d", activation, size[0], size[1]), func(t *testing.T) {
+				unifiedStartupActivation(t, size, activation)
+			})
+		}
+	}
+}
+
+func unifiedStartupActivation(t *testing.T, size [2]int, activation string) {
+	t.Helper()
 	first := newEnvironmentFixture(t, "env-first", "first", "First")
 	second := newEnvironmentFixture(t, "env-second", "second", "Second")
 	unavailable := newEnvironmentFixture(t, "actual-offline", "offline", "Offline")
@@ -44,6 +55,7 @@ func TestUnifiedStartupRealAdapterPartialHostsDuplicateIDsAndMouseOpen(t *testin
 	r.waitText("First alpha")
 	r.waitText("Second alpha")
 	r.waitText("! offline")
+	sizeIntuitiveProgram(t, r, size, "developer")
 	for _, host := range []*fixture{first, second, unavailable} {
 		counts := host.requestCounts()
 		if counts["rpc:orchestration.subscribeThread"] != 0 {
@@ -69,12 +81,21 @@ func TestUnifiedStartupRealAdapterPartialHostsDuplicateIDsAndMouseOpen(t *testin
 	if !filtered {
 		t.Fatalf("real filter did not finish before the click: %s", r.views.text())
 	}
-	// Hit coordinates are the real rendered first filtered metadata row.
-	r.program.Send(tea.MouseClickMsg{X: 5, Y: 4, Button: tea.MouseLeft})
+	r.send("\x1b[B\x1b[A")
+	if first.requestCounts()["rpc:orchestration.subscribeThread"] != 0 || second.requestCounts()["rpc:orchestration.subscribeThread"] != 0 {
+		t.Fatal("result arrows attached before explicit activation")
+	}
+	if activation == "mouse" {
+		// The query repeats the title; the environment-qualified rendered row
+		// is the offered identity, independently located from the real View.
+		clickIntuitiveControl(t, r, "[S] Second alpha")
+	} else {
+		r.send("\r")
+	}
 	r.waitText("Exact second environment transcript")
 	r.waitText("second source draft")
 	if first.requestCounts()["rpc:orchestration.subscribeThread"] != 0 || second.requestCounts()["rpc:orchestration.subscribeThread"] != 1 {
-		t.Fatal("mouse open lost the environment half of a duplicate thread identity")
+		t.Fatal("explicit open lost the environment half of a duplicate thread identity")
 	}
 	if state.Draft("env-first", "thread-a") != "first source draft" || state.Draft("env-second", "thread-a") != "second source draft" {
 		t.Fatal("source drafts crossed during explicit open")

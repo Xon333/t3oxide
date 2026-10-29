@@ -99,9 +99,13 @@ func (d navigatorDelegate) Render(w io.Writer, model list.Model, index int, raw 
 	if attached {
 		prefix = "• " + strings.TrimLeft(prefix, " ")
 	}
-	status := navigatorStatus(row.Status)
+	badge := threadStatusBadge(row)
+	status := badge.label
 	if row.Lineage.Type() == "fork" {
-		status = "fork · " + status
+		prefix += "fork "
+	}
+	if index == model.Index() && d.focused {
+		prefix = ">" + strings.TrimPrefix(prefix, " ")
 	}
 	mark := "[" + environmentMark(i.label, i.profile) + "]"
 	left := fitLine(prefix+mark+" "+safeText(row.Title), max(1, model.Width()-ansi.StringWidth(status)-2))
@@ -109,7 +113,6 @@ func (d navigatorDelegate) Render(w io.Writer, model list.Model, index int, raw 
 	style := p.plain()
 	if index == model.Index() && d.focused {
 		style = p.selection()
-		text = ">" + strings.TrimPrefix(text, " ")
 	}
 	if attached {
 		style = style.Bold(true)
@@ -125,10 +128,7 @@ func (d navigatorDelegate) Render(w io.Writer, model list.Model, index int, raw 
 		markerStyle = p.plain().Reverse(true)
 	}
 	text = fitLine(text, model.Width())
-	rendered := style.Render(text)
-	if before, after, found := strings.Cut(text, mark); found {
-		rendered = style.Render(before) + markerStyle.Render(mark) + style.Render(after)
-	}
+	rendered := renderStatusRow(text, mark, badge, p, style, markerStyle)
 	fmt.Fprint(w, rendered)
 }
 
@@ -170,7 +170,8 @@ func (m *Model) navigatorWidth() int {
 	}
 	// Ported from t3term tui/mod.rs::sidebar_width with a larger minimum
 	// conversation width appropriate to t3oxide's source-bound controls.
-	return min(max(m.width/4, 26), 34)
+	// Reserve the badge's added width without taking it from thread titles.
+	return min(max(m.width/4+8, 34), 42)
 }
 
 func (m *Model) initNavigator() {

@@ -134,6 +134,10 @@ func (m *Model) browserControlsHeight(width int) int {
 // Browser/launch replace the page. Underlying native editors and viewports are
 // retained untouched until an explicit offered open returns another session.
 func (m *Model) fullSurfaceView() string {
+	return m.fullSurfaceLayout().content
+}
+
+func (m *Model) fullSurfaceLayout() renderedSurface {
 	p := colors(m.theme)
 	width := m.workspaceWidth()
 	header := p.active().Render("t3oxide") + "  " + p.plain().Render("Conversations")
@@ -155,32 +159,37 @@ func (m *Model) fullSurfaceView() string {
 		feedback = m.feedbackView(width)
 		remaining -= lipgloss.Height(feedback)
 	}
-	var body string
+	var body renderedSurface
 	if m.detail != "" {
-		body = m.modalView()
+		body = m.modalLayout()
 	} else if m.dialog != nil && m.dialog.launch != nil {
-		body = m.launchView(width, max(1, remaining))
+		body = m.launchLayout(width, max(1, remaining))
 	} else if m.dialog != nil {
-		body = m.modalView()
+		body = m.modalLayout()
 	} else {
-		body = p.subtle().Render("Loading…")
+		body.content = p.subtle().Render("Loading…")
 	}
-	parts = append(parts, padBlock(body, width, max(1, remaining)))
+	hits := moveHits(clipHits(body.hits, 0, 0, width, max(1, remaining)), 0, lipgloss.Height(strings.Join(parts, "\n")))
+	parts = append(parts, padBlock(body.content, width, max(1, remaining)))
 	if feedback != "" {
 		parts = append(parts, feedback)
 	}
 	parts = append(parts, help)
 	content := strings.Join(parts, "\n")
 	canvas := padBlock(content, m.width, m.height)
-	return clipBlock(canvas, m.width, m.height)
+	return renderedSurface{content: clipBlock(canvas, m.width, m.height), hits: clipHits(hits, 0, 0, m.width, m.height)}
 }
 
 func (m *Model) launchView(width, height int) string {
+	return m.launchLayout(width, height).content
+}
+
+func (m *Model) launchLayout(width, height int) renderedSurface {
 	d := m.dialog
 	f := d.launch
 	p := colors(m.theme)
 	if d.details {
-		return m.modalView()
+		return m.modalLayout()
 	}
 	location := launchLocation(f.review.Location)
 	message := m.modalInput.View()
@@ -191,7 +200,7 @@ func (m *Model) launchView(width, height int) string {
 	if f.preservedTitle != "" {
 		title = p.subtle().Render("Exact title preserved · " + m.actionBinding("info").Help().Key + " Info")
 	}
-	var controls []string
+	var controls []surfaceControl
 	for i, action := range m.launchActions() {
 		label := actionLabel(action)
 		if f.focus == i+2 {
@@ -201,9 +210,14 @@ func (m *Model) launchView(width, height int) string {
 		} else {
 			label = p.plain().Render(label)
 		}
-		controls = append(controls, label)
+		controls = append(controls, surfaceControl{label: label, action: "launch-action", args: action, disabled: action == "create" && f.review.Unavailable != ""})
 	}
-	parts := []string{p.subtle().Render(fitLine("New in "+location, width)), p.plain().Bold(true).Render(fitLine(f.review.Summary, width)), framed("First message", padBlock(message, width-6, m.modalInput.Height()), width-6, p, f.focus == 0), "Title  " + title, ansi.Hardwrap(strings.Join(controls, "  "), width, true)}
+	buttons := controlSurface(width, controls)
+	messageFrame := framed("First message", padBlock(message, width-6, m.modalInput.Height()), width-6, p, f.focus == 0)
+	titleY := 2 + lipgloss.Height(messageFrame)
+	parts := []string{p.subtle().Render(fitLine("New in "+location, width)), p.plain().Bold(true).Render(fitLine(f.review.Summary, width)), messageFrame, "Title  " + title, buttons.content}
+	hits := []hitZone{{x: 0, y: 2, width: lipgloss.Width(messageFrame), height: lipgloss.Height(messageFrame), action: "launch-field", args: "message"}, {x: 0, y: titleY, width: width, height: 1, action: "launch-field", args: "title"}}
+	hits = append(hits, moveHits(buttons.hits, 0, titleY+1)...)
 	if f.review.Unavailable != "" {
 		parts = append(parts, p.subtle().Render(fitLine(f.review.Unavailable, width)))
 	}
@@ -212,8 +226,22 @@ func (m *Model) launchView(width, height int) string {
 	// title/control region; the message textarea owns its own reading position.
 	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(height))
 	v.SetContent(content)
-	if f.focus > 0 {
-		v.GotoBottom()
+	// Reveal the actual focused row, including wrapped actions. Keeping the
+	// entire tail at the bottom can hide the selected first action on short
+	// terminals when optional controls occupy several rows.
+	focusY := 2
+	if f.focus == 1 {
+		focusY = titleY
+	} else if f.focus >= 2 && f.focus-2 < len(controls) {
+		for _, hit := range buttons.hits {
+			if hit.args == controls[f.focus-2].args {
+				focusY = titleY + 1 + hit.y
+				break
+			}
+		}
 	}
-	return v.View()
+	if focusY >= height {
+		v.SetYOffset(focusY - height + 1)
+	}
+	return (renderedSurface{content: content, hits: hits}).inViewport(v)
 }

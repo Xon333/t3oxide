@@ -557,6 +557,15 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		f.focus = (f.focus + delta + len(actions) + 2) % (len(actions) + 2)
 		return m.restoreFocus()
+	case "left", "up", "right", "down":
+		if f.focus >= 2 {
+			delta := 1
+			if msg.String() == "left" || msg.String() == "up" {
+				delta = -1
+			}
+			f.focus = max(2, min(len(actions)+1, f.focus+delta))
+			return m.restoreFocus()
+		}
 	case "enter":
 		if f.focus >= 2 {
 			if actions[f.focus-2] == "editor" {

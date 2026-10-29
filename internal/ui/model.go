@@ -928,7 +928,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 		if m.dialog.launch != nil {
 			return m.focusLaunch()
 		}
-		if m.dialog.kind == client.EnterText && m.dialog.preservedInitial == "" {
+		if m.dialog.kind == client.EnterText && m.dialog.preservedInitial == "" && m.dialog.actionFocus == 0 {
 			return m.componentCmd("modal", m.dialog.serial, m.modalInput.Focus())
 		}
 		if m.dialog.actionFocus > 0 || m.dialog.resultsFocused {

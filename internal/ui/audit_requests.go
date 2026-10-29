@@ -39,6 +39,13 @@ func (f *requestForm) progress() *client.RequestProgress {
 	return &client.RequestProgress{Index: f.index, Answers: answers}
 }
 func (m *Model) initRequestForm(q client.Question) {
+	if q.ConfirmChoice {
+		question := client.RequestQuestion{ID: "decision", Question: q.Prompt, Required: true}
+		for _, choice := range q.Choices {
+			question.Options = append(question.Options, client.RequestOption{Label: choice.Label, Value: choice.ID, Description: choice.Description})
+		}
+		q.RequestQuestions = []client.RequestQuestion{question}
+	}
 	f := &requestForm{questions: q.RequestQuestions, answers: map[string]any{}, editors: map[string]requestEditorState{}, custom: map[string]string{}}
 	if q.RequestProgress != nil {
 		f.index = max(0, min(len(f.questions)-1, q.RequestProgress.Index))
@@ -211,12 +218,12 @@ func (m *Model) advanceRequest(back bool) tea.Cmd {
 	if back && f.index > 0 {
 		f.index--
 		m.loadRequestAnswer()
-		return m.focusRequestForm()
+		return m.restoreFocus()
 	}
 	if !back && f.index < len(f.questions)-1 {
 		f.index++
 		m.loadRequestAnswer()
-		return m.focusRequestForm()
+		return m.restoreFocus()
 	}
 	if back {
 		return nil
@@ -226,10 +233,15 @@ func (m *Model) advanceRequest(back bool) tea.Cmd {
 			f.index = i
 			m.loadRequestAnswer()
 			f.problem = "An answer is required"
-			return m.focusRequestForm()
+			return m.restoreFocus()
 		}
 	}
-	if !d.prompt.Respond(client.Answer{RequestAction: "submit", RequestProgress: f.progress()}) {
+	answer := client.Answer{RequestAction: "submit", RequestProgress: f.progress()}
+	if d.prompt.Question.ConfirmChoice {
+		value, _ := f.answers[f.questions[0].ID].(string)
+		answer = client.Answer{ChoiceIDs: []string{value}}
+	}
+	if !d.prompt.Respond(answer) {
 		m.notice = "This request was retired; no answers sent"
 	}
 	m.dialog = nil
@@ -371,6 +383,11 @@ func (m *Model) requestFormPreferredHeight() int {
 		rows++
 	}
 	rows += len(q.Options)
+	for _, option := range q.Options {
+		if option.Description != "" {
+			rows += strings.Count(ansi.Wrap(safeText(option.Description), max(1, width-4), ""), "\n") + 1
+		}
+	}
 	if len(q.Options) == 0 || q.AllowCustomAnswer {
 		rows++ // answer/custom-answer label
 		if m.requestEditorVisible() {
@@ -384,6 +401,10 @@ func (m *Model) requestFormPreferredHeight() int {
 }
 
 func (m *Model) requestFormView(width, height int) string {
+	return m.requestFormLayout(width, height).content
+}
+
+func (m *Model) requestFormLayout(width, height int) renderedSurface {
 	d := m.dialog
 	f := d.requestForm
 	q := f.questions[f.index]
@@ -405,7 +426,9 @@ func (m *Model) requestFormView(width, height int) string {
 		rows = append(rows, colors(m.theme).plain().Bold(true).Render(fitLine(safeText(q.Header), width)))
 	}
 	rows = append(rows, question)
-	optionStart := len(rows)
+	optionRows := make([]int, len(q.Options))
+	optionHeights := make([]int, len(q.Options))
+	var hits []hitZone
 	for i, option := range q.Options {
 		prefix := "○ "
 		if requestOptionSelected(f.answers[q.ID], option.Value) {
@@ -417,9 +440,21 @@ func (m *Model) requestFormView(width, height int) string {
 		} else {
 			label = "  " + label
 		}
+		y := strings.Count(strings.Join(rows, "\n"), "\n") + 1
+		optionRows[i] = y
 		rows = append(rows, label)
+		height := 1
+		if option.Description != "" {
+			for _, line := range strings.Split(ansi.Wrap(safeText(option.Description), max(1, width-4), ""), "\n") {
+				rows = append(rows, colors(m.theme).plain().Render("    "+line))
+				height++
+			}
+		}
+		optionHeights[i] = height
+		hits = append(hits, hitZone{x: 0, y: y, width: width, height: height, action: "request-option", args: option.Value, owner: q.ID})
 	}
 	if len(q.Options) == 0 || q.AllowCustomAnswer {
+		start := strings.Count(strings.Join(rows, "\n"), "\n") + 1
 		label := "Answer"
 		if len(q.Options) > 0 {
 			label = "Custom answer"
@@ -427,7 +462,7 @@ func (m *Model) requestFormView(width, height int) string {
 		if f.focus == 1 {
 			label = "› " + label
 		} else if !m.requestEditorVisible() {
-			label += " · Tab to write"
+			label += " · click or Tab to write"
 		}
 		label = fitLine(label, width)
 		if f.focus == 1 {
@@ -441,37 +476,55 @@ func (m *Model) requestFormView(width, height int) string {
 				rows = append(rows, m.modalInput.View())
 			}
 		}
+		end := strings.Count(strings.Join(rows, "\n"), "\n") + 1
+		hits = append(hits, hitZone{x: 0, y: start, width: width, height: end - start, action: "request-field", owner: q.ID})
 	}
 	body := strings.Join(rows, "\n")
 	next := "Next"
 	if f.index == len(f.questions)-1 {
 		next = "Submit answers"
-	}
-	controls := []string{"Back", next, "Cancel"}
-	for i := range controls {
-		if f.focus == i+2 {
-			controls[i] = "[" + controls[i] + "]"
+		if d.prompt != nil && d.prompt.Question.ConfirmChoice {
+			next = "Submit decision"
 		}
 	}
-	if f.index == 0 {
-		controls = controls[1:]
+	labels := []string{"Back", next, "Cancel"}
+	controls := []surfaceControl{}
+	for i, label := range labels {
+		if i == 0 && f.index == 0 {
+			continue
+		}
+		if f.focus == i+2 {
+			label = "[" + label + "]"
+		}
+		controls = append(controls, surfaceControl{label: label, action: "request-action", args: []string{"back", "next", "cancel"}[i]})
 	}
-	footer := fitLine(strings.Join(controls, "  "), width)
+	buttons := controlSurface(width, controls)
+	footer := buttons.content
+	buttonOffset := 0
 	if f.problem != "" {
 		footer = ansi.Truncate(f.problem, width, "…") + "\n" + footer
+		buttonOffset = 1
 	}
 	footerRows := strings.Count(footer, "\n") + 1
 	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, height-footerRows-1)))
 	v.SetContent(body)
-	if f.focus == 0 && len(q.Options) > 0 {
-		// Question wraps and option rows contribute their actual display height.
-		before := strings.Join(rows[:optionStart+f.option], "\n")
-		row := strings.Count(before, "\n") + 1
-		if row >= v.Height() {
-			v.SetYOffset(row - v.Height() + 1)
+	if f.focus != 1 && len(q.Options) > 0 {
+		// Keep the selected consequence visible while reviewing or submitting.
+		// Long warnings remain fully available through the existing Info view.
+		row, height := optionRows[f.option], optionHeights[f.option]
+		if height > v.Height() {
+			v.SetYOffset(row)
+		} else if row+height > v.Height() {
+			v.SetYOffset(row + height - v.Height())
 		}
 	} else if f.focus == 1 {
 		v.GotoBottom()
 	}
-	return colors(m.theme).subtle().Render(fitLine(heading, width)) + "\n" + v.View() + "\n" + footer
+	visible := (renderedSurface{content: body, hits: hits}).inViewport(v)
+	hits = moveHits(visible.hits, 0, 1)
+	for _, hit := range moveHits(buttons.hits, 0, 1+v.Height()+buttonOffset) {
+		hit.owner = q.ID
+		hits = append(hits, hit)
+	}
+	return renderedSurface{content: colors(m.theme).subtle().Render(fitLine(heading, width)) + "\n" + visible.content + "\n" + footer, hits: clipHits(hits, 0, 0, width, height)}
 }

@@ -222,7 +222,7 @@ func TestAgentBoxProgramFormalDecisionCannotBeResolvedByReplyOrStaleForm(t *test
 	f.broadcast("thread-a", "runtime-request.updated", object{"id": "approval-a", "status": "resolved"}, sequence)
 	awaitStatus(t, a, func(s client.Status) bool { return s.Requests == 1 })
 	waitWorkspaceFrame(t, r, func(v string) bool {
-		return !strings.Contains(v, "T3 approval") && !strings.Contains(v, "Loading…") && strings.Contains(v, "Awaiting input (1)")
+		return !strings.Contains(v, "T3 approval") && !strings.Contains(v, "Loading…") && strings.Contains(v, "? Waiting · 1 request")
 	}, "retired exact approval form and refreshed source")
 	r.send("r")
 	r.waitText("Reply · Alpha")

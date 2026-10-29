@@ -24,15 +24,15 @@ The inbox defaults to **Needs you**. `V` or Commands changes view; `/` searches 
 | All | Every loaded eligible native task row, including states outside the current decision view. |
 | Unknown | Missing native inbox projection. Open the conversation for exact available state; absence does not mean success or Inbox Zero. |
 
-J/K or arrows select a row; Enter opens its exact T3 conversation for a focused decision. The summary is a bounded native assistant message/excerpt, not a newly invented outcome or a parse of prose into authoritative completion. Reported runtime state remains separate. `S` toggles the excerpt. Use `O` for Developer, `/activity` for source-bound tools, and `/web` to inspect full T3 history, artifacts and attachments through the existing configured address. HTML or visual artifacts are not rendered by a hidden browser.
+J/K or arrows select a row; Enter or a row click opens its exact T3 conversation for a focused decision. The summary is a bounded native assistant message/excerpt, not a newly invented outcome or a parse of prose into authoritative completion. Reported runtime state remains separate. `S` toggles the excerpt. Use `O` for Developer, `/activity` for source-bound tools, and `/web` to inspect full T3 history, artifacts and attachments through the existing configured address. HTML or visual artifacts are not rendered by a hidden browser.
 
-The decision offers Changes, Reply and Reviewed when appropriate. A formal request changes those options to Requests, Conversation and Later. Numerals activate only the displayed current choice and can open a request review; they do not approve a permission. A normal reply never clears a still-offered formal request.
+The decision offers Changes, Reply and Reviewed when appropriate. A formal request changes those options to Requests, Conversation and Later. Numerals or a single click activate only the displayed current choice and can open a request review; they do not approve a permission. Summary text is inert. Controls retain their source and revision, and old clicks are rejected after a changed offer, source loading/reordering, resize or mode switch. `/mouse off` disables clicks. A normal reply never clears a still-offered formal request.
 
 ## Reply and formal requests
 
 `R` reuses the same native thread and ordinary composer. Enter inserts a newline. Explicit Send uses the selected native delivery (`auto` initially); explicit Steer is separate and does not change that saved delivery preference. During reply, letters, punctuation and numerals are text. Escape returns to the decision while preserving the exact draft.
 
-Requests retain the existing exact request ID, revision, allowed answers and validation. Back/Next preserves staged multi-question answers. Submit is distinct from ordinary Send. A stale/replaced request cannot receive an answer through an old form. Ctrl+S remains an independent reviewed-run Stop with native queue hold, even over another action or dialog.
+Requests retain the existing exact request ID, revision, allowed answers and validation. Click an approval or question option to stage its exact value; Submit decision or Submit answers is the explicit final action. Click answer fields to edit, Back/Next to retain staged multi-question answers, or Cancel to leave without answering. Submit is distinct from ordinary Send. A stale/replaced request cannot receive an answer through an old form. Ctrl+S remains an independent reviewed-run Stop with native queue hold, even over another action or dialog.
 
 ## Changes, review and Later
 
@@ -57,3 +57,5 @@ One live Session owns the detailed thread. Inbox metadata uses bounded helpers; 
 Switching modes retains the existing attachment, composer/caret/selection, form identity, pending operations, receipts and reading anchors. Exact source-qualified return state survives local thread changes; durable drafts/journals survive restart. See [state and recovery](state-recovery.md) and [native contracts](native-workflows.md).
 
 AgentBox-inspired behavior is independently authored. Pinned upstream source and tests were inspected for behavior, but no GPL code, tests, worker instructions or artwork were copied or translated into this source tree. Existing t3oxide and third-party notices are retained, with the native adapter adaptation scope updated; this source snapshot does not add a blanket license.
+
+Thread status badges use the same labels as Developer: Active, Waiting, Failed, Blocked, Queued, Done, Stopped, Idle and Unknown. Failed work remains visible as Failed even with a pending request; the decision pane separately shows the request count. Native review/snooze disposition is separate from run completion. The badges retain selection highlighting and use text as well as color.

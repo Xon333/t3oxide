@@ -45,9 +45,25 @@ Every Command action has a Control fallback in the same context. macOS help pref
 
 Modern Ctrl+P opens Commands in the composer and plain answer editors. `/keyboard legacy` gives those editors native previous-line Ctrl+P; Ctrl+Space still opens Commands. `/keyboard modern` restores the existing default. Ctrl+A/E/B/F, movement, selection, word deletion and paste retain their focused editor ownership. Ctrl+N and Ctrl+G stay next-line and Select All in multiline editors. Editable navigator/browser queries keep Ctrl+B/E/F and Alt+Left/Right; their search uses Ctrl+Alt+F and navigator environment selection uses Ctrl+Alt+E. Earlier/Latest remains in Commands while a query owns those word-movement keys.
 
+## Forms and mouse
+
+The visible form controls work in Developer and AgentBox. Tab/Shift+Tab keeps the existing complete focus order. Mouse capture must be enabled; `/mouse off` disables both clicks and wheel handling.
+
+| Surface | Navigation and activation |
+| --- | --- |
+| New review | Click First message or Title to edit. Editor arrows move within text. Enter in the message adds a newline; Enter in Title focuses Create. When an action owns focus, Left/Up selects the previous action and Right/Down the next, clamped at either end. Click an offered action or press Enter on it to activate. Create alone dispatches the reviewed launch. |
+| Conversation Settings | Click a model/option field or press Enter to open its current chooser. Chooser navigation selects locally; accepting a choice stages it. Apply changes submits once; Cancel leaves the saved selection intact. Existing Left/Right cycling on a settings row remains local. |
+| Formal questions and approvals | Click an offered value to stage/toggle it. Click the answer/custom field to edit; Enter there adds a newline. Back/Next preserves staged answers and enforces required fields. Approval warnings remain visible with their offered options. An approval uses Submit decision; questions use Submit answers. Ctrl+Enter, when delivered distinctly, invokes the focused form's next/submit action. Ordinary Send cannot answer a form. |
+| Plain text prompts | Click the text field to edit, or use the visible Submit and Cancel controls. Tab reaches both controls. Existing Enter-to-answer and Ctrl+J newline behavior remain available while editing; Enter on Cancel cancels. |
+| Long forms | Wheel over the form advances its focused visible rows without selecting an answer or activating an action. Wheel over a focused multiline editor stays with that editor. Hidden or clipped controls are inactive. |
+
+A resize, a replacement prompt, a changed source/offer or a mode switch retires old click geometry. Nested choosers return to the exact owning form. A form blocks clicks from reaching the workspace behind it. Contextual help shows launch action arrows only while actions own focus.
+
 ## AgentBox context
 
 These keys apply to the focused inbox/decision, never ordinary reply text or its search editor. Decisions use only actually offered choices. A numbered choice may open a formal request review; it does not approve it. `E` records a supported review disposition and never grants a permission.
+
+Click a visible inbox row to open its exact source. The displayed Changes / Reply / Reviewed or Requests / Conversation / Later controls are also clickable and invoke the same current offered actions as their numbered keys. Summary text is inert. Reply focuses the existing composer; Reviewed and Later retain their existing review menus and native busy/request checks.
 
 `/file-many` opens a local batch input with one task per line. Each task receives its own native launch review and explicit Create action, using isolated work by default. Pending local filing is retained for recovery; this does not add a background scheduler or promise future local dispatch after exit.
 

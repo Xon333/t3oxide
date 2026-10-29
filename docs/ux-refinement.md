@@ -2,6 +2,20 @@
 
 The 2026-10-29 implementation uses a unified flat recent list, stable project accents, compact activity/status, Info, native-default/project-only New and additive AgentBox. Earlier grouping and source-inheriting New proposals below are historical and superseded. Enter is composer newline, explicit Send is Ctrl+], and independent Ctrl+S Stop remains. The current authoritative guides are [Developer setup](../NATIVE-GO.md), [AgentBox](agentbox.md), [shortcuts](shortcuts.md), [native contracts](native-workflows.md), [recovery](state-recovery.md) and [verification](verification.md).
 
+## Form and decision activation, 2026-10-29
+
+The follow-up implements findings F01–F03 against supplied source head `6a7960aaa0fe52a03120c7c26e631f06b6e0fe3b`. It retains version `0.8.2-bubbletea`, the pinned dependencies and native contracts. Selection remains local; Create, Apply, Send and formal Submit remain deliberate actions.
+
+| Finding | Interaction and owner |
+| --- | --- |
+| F01 — form mouse parity | Launch fields/actions, combined settings, structured requests and plain text prompts carry hit targets through their actual wrapping, clipping, viewport and placement. Clicks use the existing form controllers; long forms expose offscreen rows through wheel focus. Prompt serial/lifetime, attachment generation, current source/selection and layout checks reject stale input. Owners: `form_layout.go`, `workspace_mouse.go`, `surface_view.go`, `audit_forms.go`, `audit_requests.go`, `view.go`, `dialog.go`. |
+| F02 — launch action arrows | Left/Up selects the previous action, Right/Down the next, clamped at the ends. Full Tab order remains intact. Native title/message editors keep arrows; Title Enter focuses Create and message Enter inserts a newline. The existing contextual help reflects the current owner. Owner: `browser_launch.go`. |
+| F03 — AgentBox decision clicks | Current visible decision controls invoke the same handlers as their configured numbered keys. Hits retain the exact source/revision and displayed offer; loading, reorder, prompt/offer change, resize and mode changes reject old input. Reply only edits, Changes only reads, and Reviewed/Later retain native gates. Owner: `agentbox_view.go`. |
+
+Acceptance A05 also requires approval selection to stage before final Submit. A client prompt flag routes approvals through the existing structured form and returns the unchanged exact native decision. No transport, provider, default, scheduler or persisted-state contract is added. Plain text prompts gain clickable Submit/Cancel while retaining their established keyboard behavior.
+
+The focused `TestIntuitiveFlow…` regressions render the actual composed view before clicking and use the top-level input router. `TestIntuitiveMouseProgram…` runs decoded SGR clicks and ordered bracketed paste through the real Bubble Tea program and Node adapter, checking exact source/draft/payload and dispatch counts at 60×16, 80×24, 120×35 and 170×40 in both applicable modes. Existing discovery, native-default, delivery, Stop, recovery, palette, executable PTY and request-retirement tests remain the safety foundation. See [verification](verification.md) for actual final results and native/physical limits.
+
 The original accepted proposal is retained below for traceability; it is not evidence that an installed host supports new native capabilities.
 
 ---
