@@ -10,7 +10,7 @@ The final `scripts/check-go.sh` passed formatting, all six package suites, vet a
 
 On the receiving client's Ghostty 1.4.0, a focused `cmd+enter=unbind` removed only its inherited fullscreen mapping; native config validation and running-app `reload_config` passed. A disposable native terminal probe received synthetic Cmd+Enter, Ctrl+Alt+M and Ctrl+Alt+H as distinct `ESC[13;9u`, `ESC[109;7u` and `ESC[104;7u` events. It used no productive conversation or existing terminal input. This is native event-delivery evidence, not a physical-key or full GUI acceptance claim.
 
-The combined client is ready for the authorized receiving-client publication; its installed-file and state-preservation result is recorded separately after the swap.
+The same 0.8.1 executable is installed on the build client and published through the receiving client's existing release/current pointer. All 38 bundle files, ARM64 identity, strict signature, version/help and configuration-free capabilities passed. Both configured profiles passed read-only doctor checks. Immediate preservation and final comparison found unchanged configuration, drafts, sidecars, locks, command symlink, launcher, legacy app and earlier releases. One existing client process was preserved and uses its loaded release until relaunch. The preceding release remains available for rollback; consumed staging was removed. Physical Send and light/dark GUI acceptance remain unverified.
 
 ## Native integration, 2026-10-29
 
