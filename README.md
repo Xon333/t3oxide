@@ -4,8 +4,6 @@
 
 ![Developer conversation browser in the violet theme](docs/screenshots/native-violet-developer.png)
 
-*M1 Pro native capture. The list is filtered to one public task; no conversation is attached.*
-
 ## Overview
 
 Browse conversations across your configured [T3 Code](https://github.com/pingdotgg/t3code) environments, open a thread, and keep working from your terminal. **Developer** gives you a unified conversation browser. **AgentBox** turns those same threads into a task inbox.
@@ -35,13 +33,11 @@ See configured environments together, ordered by recent native activity. Filter 
 
 Read streaming Markdown, compose a reply, inspect tools and changes, or answer a native request. Conversation and Info sidebars keep context close. Drafts, pending requests and operation identities survive supported returns; uncertain mutations require an explicit retry.
 
-The native captures below show navigation and settings without opening a transcript. They do not demonstrate live sending or tool inspection.
-
 ### Review tasks in AgentBox
 
 Start with **Needs you**, then move between Working, Queued, Later, Done, All and Unknown. File work into an existing project, review each launch, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
 
-Priorities organize this client's view. They do not schedule future work after exit: the verified native contract has no general priority backlog scheduler. Existing native runs and accepted message queues continue independently. See the [AgentBox guide](docs/agentbox.md) for the full workflow.
+Priorities organize the client view; they do not schedule work after exit. Existing native runs and accepted message queues continue independently. See the [AgentBox guide](docs/agentbox.md) for the full workflow.
 
 ![AgentBox Needs you view with a public task](docs/screenshots/native-violet-agentbox-inbox.png)
 
@@ -57,13 +53,16 @@ Use `/theme` or **Settings → Appearance** to choose an environment's theme. Vi
 
 ![Appearance picker with Electric violet highlighted](docs/screenshots/native-violet-theme-picker.png)
 
-*All four images are native Terminal captures at 1316 × 866, cropped only to remove window chrome. The violet palette is rendered by the app; no pixels were recoloured or upscaled. [Capture scope](docs/verification.md#readme-native-captures-2026-10-29).*
 
 ## Installation
+
+Download [0.8.1 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.8.1), or build the newer 0.8.2 source from main:
 
 Requirements: **Go 1.26.10+**, **Node 22.4+** on each adapter host, and an existing T3 instance. Remote profiles use your existing OpenSSH configuration.
 
 ```sh
+git clone https://github.com/Xon333/t3oxide.git
+cd t3oxide
 bash scripts/build-go.sh
 ./dist/t3oxide envs
 ./dist/t3oxide
@@ -71,7 +70,7 @@ bash scripts/build-go.sh
 
 Follow [installation](NATIVE.md) to configure host adapters and environment profiles, then [Go setup](NATIVE-GO.md) for executable installation and appearance. Preserve existing profiles and drafts when updating.
 
-Building the client does not install or restart T3. Version 0.8.1 has installed-client and read-only native checks; physical Send, light/dark GUI behavior and newer mutation journeys retain the limits recorded in [verification](docs/verification.md). See [native contracts](docs/native-workflows.md) for the adapter boundary.
+Building the client does not install or restart T3. See [verification](docs/verification.md) for tested versions and known limits, and [native contracts](docs/native-workflows.md) for the adapter boundary.
 
 ## Usage
 
@@ -102,6 +101,6 @@ The Go checks cover formatting, tests, vet and race detection. Shared checks cov
 
 Read [architecture](docs/architecture.md) for the protocol boundary, [state and recovery](docs/state-recovery.md) before changing persistence, and [verification](docs/verification.md) for portable tests versus installed-instance evidence. Remaining native acceptance is tracked in [native remainder](NATIVE-REMAINDER.md).
 
-Preserve `NOTICE`, `LICENSES/`, old releases and `operations-v1/`. Go stores drafts in `go-drafts.json`; Swift keeps its separate `drafts.json`. AgentBox is independently authored after source research; no AgentBox GPL source, tests or assets are included. This snapshot has no top-level license grant; third-party notices do not establish a blanket license for t3oxide.
+Third-party attribution is in [NOTICE](NOTICE) and [LICENSES/](LICENSES/). This repository has no top-level license grant; third-party notices do not establish a blanket license for t3oxide.
 
 The visual feature walkthrough follows the layout of [LazyGit's README](https://github.com/jesseduffield/lazygit#readme), with original t3oxide prose.

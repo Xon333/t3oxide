@@ -2,7 +2,7 @@
 
 The primary t3oxide client uses Bubble Tea v2 directly, with Bubbles controls, Lip Gloss styling and Glamour Markdown. It connects through the existing T3oxide Node adapter. The retained Swift/AppKit client is a legacy rollback with separate state.
 
-See the [demo screenshots](README.md#screenshots) for the browser and conversation view.
+See the [README](README.md) for native captures of the browser, AgentBox, Commands and theme picker.
 
 ## Build and open
 
