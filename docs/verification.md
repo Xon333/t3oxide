@@ -1,5 +1,9 @@
 # Verification
 
+## Public release 0.8.2, 2026-10-29
+
+The public release is standardized on `0.8.2-bubbletea`, including the Command-arrow and compact-layout fixes after 0.8.1. The Apple Silicon release build passed version/help, ARM64 inspection and strict ad-hoc signature verification. Earlier test and installed-instance evidence below retains its original version scope.
+
 ## README native captures, 2026-10-29
 
 The four `docs/screenshots/native-violet-*.png` images were captured from the installed Go client in Terminal on M1 Pro. The app used `--theme violet` with `TERM=xterm-256color`, `COLORTERM=truecolor` and `NO_COLOR` unset. An earlier launch inherited `NO_COLOR=1` and rendered monochrome; it was gracefully closed and only the capture client was relaunched. No T3 service was restarted.

@@ -56,7 +56,7 @@ Use `/theme` or **Settings → Appearance** to choose an environment's theme. Vi
 
 ## Installation
 
-Download [0.8.1 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.8.1), or build the newer 0.8.2 source from main:
+Download [0.8.2 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.8.2), or build from source:
 
 Requirements: **Go 1.26.10+**, **Node 22.4+** on each adapter host, and an existing T3 instance. Remote profiles use your existing OpenSSH configuration.
 
