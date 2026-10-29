@@ -6,7 +6,7 @@ Ctrl+S retains the independent Stop + queue-hold lane, including while a normal 
 
 ## Application defaults
 
-The optional Command aliases below apply only when the terminal delivers a distinct Super/Command event. macOS help prefers that alias and marks it with `*`; the Control alternatives remain active. macOS and terminals can consume Command+H/M/N, modified arrows, digits and other shortcuts before the TUI receives them. No terminal or OS keybindings are changed by t3oxide. **Commands is the portable alternative for every listed action.**
+Every Command action has a Control fallback in the same context. macOS help prefers the delivered Command alias and marks it with `*`; `/shortcuts` lists every resolved Control binding. Ctrl+Alt chords preserve ordinary Control editing keys. macOS and terminals can consume Command+H/M/N, modified arrows, digits and other shortcuts before the TUI receives them. Modified digits/arrows still require distinct terminal events; the listed ordinary navigation routes remain available. No terminal or OS keybindings are changed by t3oxide. **Commands is the portable alternative for every listed action.**
 
 | Action | Shipped keys | Context / Command alias |
 | --- | --- | --- |
@@ -14,26 +14,26 @@ The optional Command aliases below apply only when the terminal delivers a disti
 | Switch conversation | Ctrl+O; F6 | Ordinary workspace; delivered Cmd+O. In the sidebar, F6 retains More. |
 | More sidebar actions | Alt+A; F6 | Sidebar query/results; the visible More control uses the same actions. |
 | Info | Ctrl+L; F2 | All surfaces; delivered Cmd+I. `/details` remains an alias for `/info`. |
-| Help | `?` in reading/activity; F1 | `/help` or Commands in any editor; delivered Cmd+H. |
+| Help | Ctrl+Alt+H; `?` in reading/activity; F1 | `/help` or Commands in any editor; delivered Cmd+H. |
 | Send / execute recognized command | Ctrl+] | Composer only; delivered Cmd+Enter. |
 | Send literal text | Ctrl+\; Ctrl+Enter when distinct | Composer only; does not interpret slash commands. |
 | Steer | Ctrl+Alt+Enter when distinct | Composer only; delivered Cmd+Shift+Enter, or Commands → Steer. |
 | Request next / Submit | Ctrl+Enter when distinct | Only an actual request form; Enter on its focused Next/Submit button remains the portable route. This action never sends an ordinary reply or creates a thread. |
-| New | Ctrl+N outside multiline editors | Delivered Cmd+N also works from the composer. |
-| New in same project | Ctrl+Alt+N outside editors | Enhanced Ctrl+Shift+N or delivered Cmd+Shift+N; `/new-same`. |
-| Settings | Ctrl+G outside multiline editors | Delivered Cmd+, from ordinary workspace; Ctrl+G remains Select All in multiline editors; the navigator query uses it for Settings. |
-| Thread model | Alt+M outside editors | Delivered Cmd+M; `/model`. |
-| Effort | Alt+E outside editors | Delivered Cmd+E; `/effort`. |
+| New | Ctrl+N outside multiline editors; Ctrl+Alt+N in the composer | Delivered Cmd+N also works from the composer; Ctrl+N retains next-line editing there. |
+| New in same project | Ctrl+Alt+T; Ctrl+Alt+N outside editors | Enhanced Ctrl+Shift+N or delivered Cmd+Shift+N; `/new-same`. |
+| Settings | Ctrl+Alt+G; Ctrl+G outside multiline editors | Delivered Cmd+, from ordinary workspace; Ctrl+G remains Select All in multiline editors; the navigator query uses it for Settings. |
+| Thread model | Ctrl+Alt+M; Alt+M outside editors | Delivered Cmd+M; `/model`. |
+| Effort | Ctrl+Alt+D; Alt+E outside editors | Delivered Cmd+E; D is depth and avoids the navigator's environment shortcut. `/effort`. |
 | Speed | Alt+S outside editors | `/speed`. |
 | Conversation types | Ctrl+/ or Ctrl+_ outside editors | `/filter`; legacy terminals often encode these alike. |
 | Requests | Ctrl+R | Review exact offered questions/approvals; never answered by ordinary Send. |
 | Environments | Ctrl+E in reading panes; Ctrl+Alt+E in the navigator | `/env` and the visible environment chooser remain available. Ctrl+E stays line-end in every text editor. |
-| Refresh metadata | Alt+R | Delivered Cmd+R; `/refresh`. AgentBox uses Ctrl+R for its inbox. |
+| Refresh metadata | Ctrl+Alt+R; Alt+R outside editors | Delivered Cmd+R; `/refresh`. AgentBox uses Ctrl+R for its inbox. |
 | Find loaded transcript | Ctrl+F or `/` while reading | Delivered Cmd+F; `/search`. Navigator/full-browser Ctrl+Alt+F searches host metadata; Ctrl+F stays cursor movement in editable filters and composers. |
-| Context/activity pane | Ctrl+B in reading panes | Delivered Cmd+B; `/sidebar`. Ctrl+B remains cursor movement in every text editor, including the navigator filter. |
+| Context/activity pane | Ctrl+Alt+A; Ctrl+B in reading panes | Delivered Cmd+B; `/sidebar`. Ctrl+B remains cursor movement in every text editor, including the navigator filter. |
 | Pane focus | Tab / Shift+Tab | Visible panes only; Tab completes an active slash suggestion. |
-| Navigation / composer focus | Delivered Cmd+Left / Cmd+Right | Conditional enhanced events; Tab or Ctrl+O provides ordinary navigation. |
-| Visible thread 1–9 | Delivered Cmd+1…9 | Exact current visible sidebar rows; arrows + Enter is the portable path. |
+| Navigation / composer focus | Ctrl+Alt+Left / Ctrl+Alt+Right | Delivered Cmd+Left / Cmd+Right; Tab or Ctrl+O provides ordinary navigation. |
+| Visible thread 1–9 | Ctrl+Alt+1…9 | Delivered Cmd+1…9; exact current visible sidebar rows. Arrows + Enter is the portable path when modified digits are unavailable. |
 | Parent / earlier / latest | Alt+Up / Alt+Left / Alt+Right while reading | `/parent`, `/earlier`, `/latest`; editor word movement remains local. |
 | Copy | Ctrl+Y | Context-specific copy; `/copy` variants expose exact source choices. |
 | Clear draft | Ctrl+X | Recoverable via `/recall`; never remote Stop. |

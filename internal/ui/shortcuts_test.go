@@ -37,6 +37,50 @@ func TestShortcutDefaultsHaveNoDispatchCollision(t *testing.T) {
 	}
 }
 
+func TestCommandActionsRetainControlFallbacksInTheirContexts(t *testing.T) {
+	c := &ShortcutConfig{Version: 1}
+	for _, context := range shortcutContexts {
+		for _, action := range shortcutActions {
+			command, control := false, false
+			for _, k := range c.keysFor(action, context) {
+				command = command || strings.Contains(k, "super+")
+				control = control || strings.HasPrefix(k, "ctrl+")
+			}
+			if command && !control {
+				t.Errorf("%s.%s has Command bindings without a Control fallback", context, action.id)
+			}
+		}
+	}
+}
+
+func TestControlFallbacksPreserveComposerAndReachLocalActions(t *testing.T) {
+	m := testModel(t)
+	m.composer.SetValue("keep exact draft")
+	m.composer.CursorEnd()
+	m.Update(keyPress('n', tea.ModCtrl))
+	m.Update(keyPress('g', tea.ModCtrl))
+	if m.dialog != nil || m.actionBusy || m.currentDraft() != "keep exact draft" || m.composer.SelectedText() != "keep exact draft" {
+		t.Fatal("Control editing keys became New or Settings")
+	}
+	selection, column := m.composer.SelectedText(), m.composer.Column()
+	m.Update(keyPress('h', tea.ModCtrl, tea.ModAlt))
+	if m.detailTitle != "Keyboard and commands" {
+		t.Fatal("Control Help fallback did not open help")
+	}
+	m.Update(keyPress(tea.KeyEscape))
+	sidebar := m.sidebar
+	_, cmd := m.Update(keyPress('a', tea.ModCtrl, tea.ModAlt))
+	finishCommand(t, m, cmd)
+	if m.sidebar == sidebar || m.currentDraft() != "keep exact draft" || m.composer.SelectedText() != selection || m.composer.Column() != column {
+		t.Fatal("Control Activity fallback failed or altered the editor")
+	}
+	m.transcriptFocus = true
+	m.Update(keyPress(tea.KeyRight, tea.ModCtrl, tea.ModAlt))
+	if m.transcriptFocus || !m.composer.Focused() || m.composer.SelectedText() != selection {
+		t.Fatal("Control Compose fallback did not preserve the editor")
+	}
+}
+
 func TestShortcutLabelsPreferConditionalCommandOnMac(t *testing.T) {
 	for _, tc := range []struct {
 		keys                    []string
@@ -60,6 +104,7 @@ func TestTerminalByteDecoderKeepsAmbiguousKeysSafe(t *testing.T) {
 	for _, tc := range []struct{ bytes, name string }{
 		{"\r", "enter"}, {"\t", "tab"}, {"\x1d", "ctrl+]"}, {"\x1c", "ctrl+\\"},
 		{"\x1b[13;9u", "super+enter"}, {"\x1b[13;5u", "ctrl+enter"}, {"\x1b[13;7u", "ctrl+alt+enter"},
+		{"\x1bh", "alt+h"}, {"\x1b\x08", "ctrl+alt+h"}, {"\x1b[1;7D", "ctrl+alt+left"}, {"\x1b[49;7u", "ctrl+alt+1"},
 	} {
 		decoder := uv.EventDecoder{}
 		n, event := decoder.Decode([]byte(tc.bytes))

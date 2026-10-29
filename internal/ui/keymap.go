@@ -155,6 +155,7 @@ func (m *Model) helpMap() contextHelp {
 
 func (m *Model) helpText() string {
 	h := help.New()
+	h.Styles = colors(m.theme).helpStyles()
 	h.SetWidth(max(20, m.modalWidth))
 	h.ShowAll = true
 	var parts []string

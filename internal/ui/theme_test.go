@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"charm.land/bubbles/v2/textinput"
 	"context"
 	"regexp"
 	"strings"
@@ -119,5 +120,47 @@ func TestTerminalThemeRoundTripPreservesDraftAndStylesDialogs(t *testing.T) {
 	m.openThemes()
 	if items := m.dialog.list.Items(); len(items) != 5 || items[0].(choiceItem).args != "default" || items[1].(choiceItem).args != "terminal" {
 		t.Fatal("environment default or terminal theme missing from chooser")
+	}
+}
+
+func TestTerminalThemeNestedHelpAndEditorsRoundTrip(t *testing.T) {
+	m := testModel(t)
+	m.launchTitle.SetValue("Exact title 界")
+	m.launchTitle.SetCursor(3)
+	m.agentbox.query.SetValue("Exact query")
+	m.agentbox.query.SetCursor(2)
+	m.openPalette()
+	for _, theme := range []string{"terminal", "cyan", "terminal", "violet"} {
+		m.theme = theme
+		if err := m.settings.OverrideTheme(theme); err != nil {
+			t.Fatal(err)
+		}
+		m.applyTheme()
+		m.resizeNavigator()
+		if m.launchTitle.Value() != "Exact title 界" || m.launchTitle.Position() != 3 || m.agentbox.query.Value() != "Exact query" || m.agentbox.query.Position() != 2 {
+			t.Fatal("theme application changed editor contents or caret")
+		}
+		if theme != "terminal" {
+			if m.dialog.list.Help.Styles.FullDesc.Render("description") != colors(theme).helpStyles().FullDesc.Render("description") {
+				t.Fatal("nested help retained Terminal styles")
+			}
+			for _, input := range []textinput.Model{m.launchTitle, m.agentbox.query} {
+				if input.Styles().Focused.Placeholder.Render("placeholder") != textinput.DefaultStyles(true).Focused.Placeholder.Render("placeholder") {
+					t.Fatal("auxiliary editor did not regain its original style")
+				}
+			}
+			continue
+		}
+		assertTerminalPalette(t, m.helpText())
+		for _, full := range []bool{false, true} {
+			m.dialog.list.Help.ShowAll = full
+			assertTerminalPalette(t, m.dialog.list.Help.View(m.dialog.list))
+		}
+		for _, input := range []textinput.Model{m.launchTitle, m.agentbox.query, m.navigator.list.FilterInput} {
+			s := input.Styles()
+			for _, state := range []textinput.StyleState{s.Focused, s.Blurred} {
+				assertTerminalPalette(t, state.Placeholder.Render("placeholder")+state.Suggestion.Render("suggestion")+state.Text.Render("text"))
+			}
+		}
 	}
 }

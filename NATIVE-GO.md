@@ -56,6 +56,8 @@ The [complete resolved command/key reference](docs/shortcuts.md) is the maintain
 
 **Enter is newline; Ctrl+] sends.** Distinct Ctrl+Enter and portable Ctrl+\ send literal text, including a known slash command. Commands → Steer and distinct Ctrl+Alt+Enter steer one message without silently changing the saved delivery selection. Ctrl+S remains independent Stop, including over requests, launch reviews, help and errors. Ctrl+Backspace retains deletion. Ctrl+I is Tab, so Info uses Ctrl+L. Delivered Command aliases appear on macOS with a delivery caveat; portable controls and palette routes remain available.
 
+Version 0.8.1 adds a Control fallback for every Command action in its active context. Composer shortcuts include Ctrl+Alt+N New, Ctrl+Alt+T New in same project, Ctrl+Alt+G Settings, Ctrl+Alt+M Model, Ctrl+Alt+D Effort, Ctrl+Alt+R Refresh and Ctrl+Alt+A Activity. Ctrl+Alt+H opens Help; ordinary editor movement and Select All remain unchanged. See the [complete fallback table](docs/shortcuts.md) and `/shortcuts` for focus and visible-thread bindings.
+
 Modern Ctrl+P opens Commands, including over a populated composer. `/keyboard legacy` retains previous-line editing and uses Ctrl+Space or a reading-pane command route. The composer retains Bubbles' line/word movement, selection, deletion, transpose and Select All. Literal punctuation and AgentBox letters/numbers stay with the focused editor. Application remaps cannot steal reserved editing keys.
 
 Slash completion remains local: Tab completes; explicit Send invokes a known complete command. Unknown slash-prefixed text sends as ordinary text. Input is bounded to 64 KiB and 9,999 editable lines. Text the component would normalize is preserved as an exact buffer or rejected as a whole with its attempted bytes recoverable in `/recall`. `/edit` uses the existing external-editor path; its output is never trimmed or normalized. Ctrl+L reviews an exact buffer and `/copy draft` copies the original bytes. Recall remains source-bound and bounded to 24 entries / 512 KiB.
@@ -80,6 +82,8 @@ Warnings and errors retain separate meanings. Terminal selections use the defaul
 `/theme` or Settings → Appearance changes the active browser profile or attached environment. Choose Environment default to clear that profile's override, or use `/theme default`. Defaults derive context accents for up to eight configured profile IDs, independent of browse order, and keep all three highlight slots distinct. The existing saved global theme remains the base; its initial value is violet. Profile count and theme choice do not change the three roles.
 
 Use `/theme terminal` for the current profile to inherit your terminal's default foreground/background and ANSI palette, including syntax highlighting. Selections use inverse colors for light and dark backgrounds. Fixed violet, cyan and lime remain available with Dracula syntax highlighting. A saved global Terminal theme remains Terminal across profiles rather than adding fixed environment colors.
+
+Terminal also resets full help, nested list help, launch-title and inbox/search editor styles. Switching back restores the fixed theme's defaults without changing text, caret or selection.
 
 Appearance is stored in `terminal.json` beside the Go state file. `--theme terminal` (or another supported theme) is a nonpersistent launch override; it does not replace saved profile choices. A successful explicit theme change clears that override. No theme watcher or terminal configuration changes are required.
 

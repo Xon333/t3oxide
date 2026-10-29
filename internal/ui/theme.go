@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
@@ -113,6 +114,14 @@ func (m *Model) applyTheme() {
 	search.Cursor.Color = lipgloss.Color(p.accent)
 	search.Cursor.Blink = false
 	m.searchInput.SetStyles(search)
+	// These editors previously retained Bubbles' fixed placeholder/suggestion
+	// colors. Reapply their defaults too when leaving Terminal.
+	auxiliary := textinput.DefaultStyles(true)
+	if p.name == "terminal" {
+		auxiliary = search
+	}
+	m.launchTitle.SetStyles(auxiliary)
+	m.agentbox.query.SetStyles(auxiliary)
 	m.viewport.HighlightStyle = p.highlight()
 	if m.dialog != nil && m.dialog.kind != client.EnterText {
 		m.styleList(&m.dialog.list)
@@ -122,6 +131,7 @@ func (m *Model) applyTheme() {
 func (m *Model) styleList(l *list.Model) {
 	p := colors(m.theme)
 	l.Styles = list.DefaultStyles(true)
+	l.Help.Styles = p.helpStyles()
 	d := list.NewDefaultDelegate()
 	d.SetSpacing(0)
 	d.ShowDescription = false
@@ -164,4 +174,16 @@ func (m *Model) styleList(l *list.Model) {
 	l.Styles.Filter.Cursor.Color = lipgloss.Color(p.accent)
 	l.Styles.Filter.Cursor.Blink = false
 	l.FilterInput.SetStyles(l.Styles.Filter)
+}
+
+// Nested help renders its own colors; styling the outer container cannot
+// override the short/full bindings or truncation marker.
+func (p palette) helpStyles() help.Styles {
+	s := help.DefaultStyles(true)
+	if p.name == "terminal" {
+		s.ShortKey, s.FullKey = p.plain(), p.plain()
+		s.ShortDesc, s.FullDesc = p.subtle(), p.subtle()
+		s.ShortSeparator, s.FullSeparator, s.Ellipsis = p.subtle(), p.subtle(), p.subtle()
+	}
+	return s
 }

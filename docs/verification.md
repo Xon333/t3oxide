@@ -1,5 +1,17 @@
 # Verification
 
+## Control fallbacks and Terminal restyling, 2026-10-29
+
+Version `0.8.1-bubbletea` gives every Command action a Control fallback in its active context, including composer New/Settings/Model/Effort/Refresh, pane focus and visible-thread shortcuts. Existing Enter, Stop, Control editing, Command aliases and manual overrides retain their owners. The [complete table](shortcuts.md) identifies the fallbacks and terminal-delivery limits. Registry collision/coverage checks, real Model action tests and byte-decoder cases passed.
+
+Terminal mode now resets full and nested list help, launch-title and AgentBox query editors, and navigator suggestions to terminal-default text/background with ANSI accents. Round-trip regressions verify restored fixed-theme defaults and unchanged text/caret; existing Markdown/syntax palette regressions pass. No dependency changed.
+
+The final `scripts/check-go.sh` passed formatting, all six package suites, vet and the complete race run on Go `1.27.2` darwin/arm64. Integration passed in 58.682 seconds normally and 85.779 seconds under race detection. The native build passed ARM64 inspection, strict ad-hoc signature verification and version output. Executable SHA-256: `314b5c8b6635227dab87fc3cbcc368094ea9306fd41ecbd83878ec54c302b04b`. Unchanged adapter, Swift and dependency layers retain the 0.8 native evidence below.
+
+On the receiving client's Ghostty 1.4.0, a focused `cmd+enter=unbind` removed only its inherited fullscreen mapping; native config validation and running-app `reload_config` passed. A disposable native terminal probe received synthetic Cmd+Enter, Ctrl+Alt+M and Ctrl+Alt+H as distinct `ESC[13;9u`, `ESC[109;7u` and `ESC[104;7u` events. It used no productive conversation or existing terminal input. This is native event-delivery evidence, not a physical-key or full GUI acceptance claim.
+
+The combined client is ready for the authorized receiving-client publication; its installed-file and state-preservation result is recorded separately after the swap.
+
 ## Native integration, 2026-10-29
 
 The 0.8 return was applied to its exact working-tree baseline. All 261 returned source files matched the final manifest's bytes and modes before native corrections. The accepted pre-existing documentation edit was retained.

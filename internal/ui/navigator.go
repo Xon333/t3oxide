@@ -206,6 +206,9 @@ func (m *Model) resizeNavigator() {
 	styles.Focused.Text = p.plain()
 	styles.Focused.Prompt = p.active()
 	styles.Focused.Placeholder = p.subtle()
+	if p.name == "terminal" {
+		styles.Focused.Suggestion = p.subtle()
+	}
 	styles.Blurred = styles.Focused
 	styles.Cursor.Color = lipgloss.Color(p.accent)
 	styles.Cursor.Blink = false
