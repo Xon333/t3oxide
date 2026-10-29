@@ -431,7 +431,7 @@ func TestEnhancedArrowPaneFocusPreservesComposerAndConversation(t *testing.T) {
 			m.composer.SetValue("first 界\nsecond line")
 			m.composer.CursorEnd()
 			m.Update(keyPress(tea.KeyLeft, tea.ModShift))
-			draft, snapshot := m.currentDraft(), m.snapshot
+			draft, snapshot, width := m.currentDraft(), m.snapshot, m.contentWidth
 			line, column, selection := m.composer.Line(), m.composer.Column(), m.composer.SelectedText()
 			decode := func(suffix string) tea.KeyPressMsg {
 				t.Helper()
@@ -462,6 +462,9 @@ func TestEnhancedArrowPaneFocusPreservesComposerAndConversation(t *testing.T) {
 			finishCommand(t, m, cmd)
 			if m.navigator.focused || !m.composer.Focused() || m.transcriptFocus || m.activityFocused || m.contextFocused {
 				t.Fatalf("width %d modifier %s: right did not return to composer", size[0], modifiers)
+			}
+			if m.contentWidth != width || !strings.Contains(ansi.Strip(m.View().Content), "Message") {
+				t.Fatal("return to composer retained the compact navigator layout")
 			}
 			if m.currentDraft() != draft || m.snapshot != snapshot || m.composer.Line() != line || m.composer.Column() != column || m.composer.SelectedText() != selection || m.actionBusy {
 				t.Fatal("pane focus changed draft/caret/selection, attached conversation or mutation state")

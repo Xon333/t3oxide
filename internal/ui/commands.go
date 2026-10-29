@@ -153,7 +153,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.focusNavigator()
 	case key.Matches(msg, k.FocusComposer):
 		m.navigator.focused, m.contextFocused, m.activityFocused, m.transcriptFocus = false, false, false, false
-		return m.restoreFocus()
+		return m.resizeWorkspaceFocus()
 	case key.Matches(msg, k.Sidebar):
 		return m.setting("sidebar", boolWord(!m.sidebar))
 	case key.Matches(msg, k.Model):
