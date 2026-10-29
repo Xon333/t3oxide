@@ -1,5 +1,14 @@
 # Verification
 
+## README native captures, 2026-10-29
+
+The four `docs/screenshots/native-violet-*.png` images were captured from the installed Go client in Terminal on M1 Pro. The app used `--theme violet` with `TERM=xterm-256color`, `COLORTERM=truecolor` and `NO_COLOR` unset. An earlier launch inherited `NO_COLOR=1` and rendered monochrome; it was gracefully closed and only the capture client was relaunched. No T3 service was restarted.
+
+Sources were native window PNGs at 1316 × 934, with 68 pixels of title/tab chrome cropped to produce 1316 × 866 images. These are native 1× logical-display captures, without artificial upscaling or recolouring; Retina/2× capture was not obtained. The Developer browser, theme picker, AgentBox inbox and Commands views were visually reviewed. Lists were filtered to the single public “Public repo update” task; no transcript was opened. These images demonstrate those visible surfaces, not Send, approval, tool-detail or recovery acceptance. Earlier synthetic fixtures remain separately named.
+
+Mode switching for capture rewrote client appearance settings, then returned to Developer default with the saved violet theme retained. Profiles and drafts were not written. The themed client was left running.
+
+
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 
 ## UX refinement, 2026-10-27
