@@ -61,8 +61,9 @@ var shortcutActions = []shortcutAction{
 	{"copy", "copy", "copy", map[string][]string{"composer": {"ctrl+y"}, "reading": {"ctrl+y"}, "detail": {"ctrl+y"}, "form": {"ctrl+y"}, "agentbox": {"ctrl+y"}}},
 	{"focus-next", "", "focus", map[string][]string{"composer": {"tab"}, "reading": {"tab"}, "navigator": {"tab"}, "activity": {"tab"}, "context": {"tab"}}},
 	{"focus-previous", "", "focus back", map[string][]string{"composer": {"shift+tab"}, "reading": {"shift+tab"}, "navigator": {"shift+tab"}, "activity": {"shift+tab"}, "context": {"shift+tab"}}},
-	{"focus-navigation", "", "conversations", workspaceKeys([]string{"ctrl+alt+left", "super+left"}, []string{"ctrl+alt+left", "super+left"})},
-	{"focus-composer", "", "compose", workspaceKeys([]string{"ctrl+alt+right", "super+right"}, []string{"ctrl+alt+right", "super+right"})},
+	// CSI arrow modifiers use Meta for the Command bit; Kitty u uses Super.
+	{"focus-navigation", "", "conversations", workspaceKeys([]string{"ctrl+alt+left", "super+left", "meta+left"}, []string{"ctrl+alt+left", "super+left", "meta+left"})},
+	{"focus-composer", "", "compose", workspaceKeys([]string{"ctrl+alt+right", "super+right", "meta+right"}, []string{"ctrl+alt+right", "super+right", "meta+right"})},
 	{"clear", "clear", "clear draft", map[string][]string{"composer": {"ctrl+x"}}},
 	{"edit", "edit", "editor", map[string][]string{"composer": {"f4"}}},
 	{"recall", "recall", "prompts", map[string][]string{"composer": {"f5"}, "reading": {"f5"}}},

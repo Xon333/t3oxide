@@ -424,6 +424,52 @@ func TestConditionalCommandAliasesKeepEditorOwnership(t *testing.T) {
 	}
 }
 
+func TestEnhancedArrowPaneFocusPreservesComposerAndConversation(t *testing.T) {
+	for _, size := range [][2]int{{60, 16}, {120, 35}} {
+		for _, modifiers := range []string{"9", "7", "kitty"} { // Command CSI, Control+Alt, Command Kitty
+			m := navigatorFixture(t, size[0], size[1])
+			m.composer.SetValue("first 界\nsecond line")
+			m.composer.CursorEnd()
+			m.Update(keyPress(tea.KeyLeft, tea.ModShift))
+			draft, snapshot := m.currentDraft(), m.snapshot
+			line, column, selection := m.composer.Line(), m.composer.Column(), m.composer.SelectedText()
+			decode := func(suffix string) tea.KeyPressMsg {
+				t.Helper()
+				bytes := "\x1b[1;" + modifiers + suffix
+				if modifiers == "kitty" {
+					bytes = "\x1b[57350;9u"
+					if suffix == "C" {
+						bytes = "\x1b[57351;9u"
+					}
+				}
+				n, event := new(uv.EventDecoder).Decode([]byte(bytes))
+				press, ok := event.(uv.KeyPressEvent)
+				if !ok || n != len(bytes) {
+					t.Fatalf("decode pane key %q: %d %#v", bytes, n, event)
+				}
+				return tea.KeyPressMsg(press)
+			}
+			left := decode("D")
+			if !key.Matches(left, m.keyMap().FocusNavigation) {
+				t.Fatalf("decoded left %q does not match %v; context=%s mode=%s", left.String(), m.keyMap().FocusNavigation.Keys(), m.shortcutContext(), m.mode)
+			}
+			_, cmd := m.Update(left)
+			finishCommand(t, m, cmd)
+			if !m.navigator.focused || m.composer.Focused() {
+				t.Fatalf("width %d modifier %s: left did not focus conversations: navigator=%v composer=%v visible=%v context=%s", size[0], modifiers, m.navigator.focused, m.composer.Focused(), m.navigationVisible(), m.shortcutContext())
+			}
+			_, cmd = m.Update(decode("C"))
+			finishCommand(t, m, cmd)
+			if m.navigator.focused || !m.composer.Focused() || m.transcriptFocus || m.activityFocused || m.contextFocused {
+				t.Fatalf("width %d modifier %s: right did not return to composer", size[0], modifiers)
+			}
+			if m.currentDraft() != draft || m.snapshot != snapshot || m.composer.Line() != line || m.composer.Column() != column || m.composer.SelectedText() != selection || m.actionBusy {
+				t.Fatal("pane focus changed draft/caret/selection, attached conversation or mutation state")
+			}
+		}
+	}
+}
+
 func TestAgentBoxReplyCharactersRemainText(t *testing.T) {
 	m := testModel(t)
 	m.mode = "agentbox"
