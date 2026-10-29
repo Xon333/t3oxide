@@ -181,7 +181,8 @@ func TestIntuitiveDensityEditorsHaveOneLabel(t *testing.T) {
 func TestIntuitiveDensityCompactFooterUsesContext(t *testing.T) {
 	m := testModel(t)
 	footer := ansi.Strip(m.footerView(39))
-	if !strings.Contains(footer, "Ctrl+P commands") || strings.Contains(footer, "^Space") || strings.Index(footer, "Ctrl+S") > strings.Index(footer, "Ctrl+P") {
+	palette := m.actionBinding("palette").Help().Key
+	if !strings.Contains(footer, palette+" commands") || strings.Contains(footer, "^Space") || strings.Index(footer, "Ctrl+S") > strings.Index(footer, palette) {
 		t.Fatalf("compact footer lost contextual command/Stop packing: %q", footer)
 	}
 	m.status.Requests = 2
@@ -191,11 +192,11 @@ func TestIntuitiveDensityCompactFooterUsesContext(t *testing.T) {
 	}
 	m.status.Requests = 0
 	m.restoreDraft("nonempty human draft")
-	if footer = ansi.Strip(m.footerView(56)); !strings.Contains(footer, "Ctrl+P commands") {
+	if footer = ansi.Strip(m.footerView(56)); !strings.Contains(footer, palette+" commands") {
 		t.Fatalf("nonempty editor advertised wrong context: %q", footer)
 	}
 	finishCommand(t, m, m.dispatch("keyboard", "legacy"))
-	if footer = ansi.Strip(m.footerView(70)); !strings.Contains(footer, "Shift+Tab→Ctrl+P commands") {
+	if footer = ansi.Strip(m.footerView(70)); !strings.Contains(footer, m.actionBinding("palette").Help().Key+" commands") {
 		t.Fatalf("legacy editor lost its explicit command route: %q", footer)
 	}
 }
@@ -304,7 +305,8 @@ func TestIntuitiveDensityDialogHelpTracksDetailsAndLaunchFocus(t *testing.T) {
 	m.dialog.details = true
 	m.questionViewport.SetContent("Complete Details")
 	m.resize()
-	if strings.Contains(ansi.Strip(m.modalView()), "Ctrl+L/Esc") || !strings.Contains(ansi.Strip(m.dialogHelp(56, true)), "Ctrl+L/Esc back") {
+	infoDismiss := m.actionBinding("info").Help().Key + "/" + m.actionBinding("dismiss").Help().Key
+	if strings.Contains(ansi.Strip(m.modalView()), infoDismiss) || !strings.Contains(ansi.Strip(m.dialogHelp(56, true)), infoDismiss+" back") {
 		t.Fatal("full-page Details retained duplicate local help")
 	}
 }
@@ -348,7 +350,7 @@ func TestIntuitiveDensityFullPageHelpHasOneOwner(t *testing.T) {
 			m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 			m.openPrompt(retiredPrompt(7102, browserQuestion("a")))
 			local := ansi.Strip(m.modalView())
-			if strings.Contains(local, "Ctrl+L") || strings.Contains(local, "Enter open") {
+			if strings.Contains(local, m.actionBinding("info").Help().Key) || strings.Contains(local, "Enter open") {
 				t.Fatal("full page modal retained local help")
 			}
 			help := ansi.Strip(m.dialogHelp(m.workspaceWidth(), true))
@@ -357,7 +359,7 @@ func TestIntuitiveDensityFullPageHelpHasOneOwner(t *testing.T) {
 				t.Fatalf("compact primary/Stop hidden: %q", first)
 			}
 			view := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Enter open", "Tab controls", "Ctrl+L details", "Esc resume", "Ctrl+S", "Ctrl+Q"} {
+			for _, want := range []string{"Enter open", "Tab controls", m.actionBinding("info").Help().Key + " Info", "Esc resume", "Ctrl+S", "Ctrl+Q"} {
 				if strings.Count(view, want) != 1 {
 					t.Fatalf("expected one %q:\n%s", want, view)
 				}

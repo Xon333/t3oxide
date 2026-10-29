@@ -28,7 +28,7 @@ func TestPaletteTypesImmediatelyAndEnterRunsCurrentResult(t *testing.T) {
 	for _, raw := range m.dialog.list.Items() {
 		commands = append(commands, raw.(choiceItem).command)
 	}
-	if !slices.Equal(commands[:6], []string{"switch", "search", "earlier", "latest", "requests", "activity"}) {
+	if !slices.Equal(commands[:6], []string{"model", "effort", "new", "new-same", "review", "switch"}) {
 		t.Fatalf("everyday commands do not lead the palette: %v", commands[:6])
 	}
 	typeDialogQuery(m, "Find in current page")
@@ -82,7 +82,7 @@ func TestPaletteNoMatchesAndDisabledActionsRemainOpen(t *testing.T) {
 		t.Fatal("no-match Enter selected an older or unfiltered command")
 	}
 	m.dialogKey(keyPress('u', tea.ModCtrl))
-	typeDialogQuery(m, "Thread model")
+	typeDialogQuery(m, "Model")
 	item := m.dialog.list.SelectedItem().(choiceItem)
 	if item.command != "model" || !item.disabled || !strings.Contains(item.description, "Unavailable") {
 		t.Fatal("filter lost model capability guard or offered description")

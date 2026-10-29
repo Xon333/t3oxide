@@ -1,16 +1,14 @@
 # t3oxide
 
-A Go terminal client for existing [T3 Code](https://github.com/pingdotgg/t3code) environments, built directly with **Bubble Tea v2**, Bubbles, Lip Gloss and Glamour. Read conversations, send messages, answer questions and approvals, and stop a reviewed active turn from your terminal. This is the primary client; the Swift/AppKit app remains available as a legacy rollback.
+A Go terminal client for existing [T3 Code](https://github.com/pingdotgg/t3code) environments, built with **Bubble Tea v2**, Bubbles, Lip Gloss and Glamour.
 
-```text
-Go CLI / Bubble Tea TUI
-  └─ SSH or local stdio
-      └─ on-demand Node adapter → existing T3 server
-```
+**Developer** opens a unified recent-conversation list across configured environments. Open a thread deliberately to read, compose, inspect tools, review requests or stop a run. **AgentBox** presents those same native threads as a task inbox: file work, prioritize your view, review changes, answer and return to the same conversation.
 
-## Build and install
+T3 owns execution, permissions, threads, worktrees and queues. The on-demand Node adapter translates bounded client operations. Closing the TUI leaves existing native work running. The Swift/AppKit client remains available as a separate rollback.
 
-Build with **Go 1.26.0+**. Each T3 host needs Node.js 22.4+ and the host adapter; remote profiles use your existing OpenSSH configuration. The primary CI artifact targets Apple Silicon macOS.
+## Build and open
+
+Requirements: Go **1.26.10+** for the client; Node **22.4+** on each adapter host. Remote profiles use your existing OpenSSH configuration.
 
 ```sh
 bash scripts/build-go.sh
@@ -18,53 +16,47 @@ bash scripts/build-go.sh
 ./dist/t3oxide
 ```
 
-Follow [installation](NATIVE.md) to prepare the host adapter and environment profiles, then [Go setup and controls](NATIVE-GO.md) to install the executable on your PATH. Distributions include `NOTICE` and `LICENSES/` alongside the binary. Installation does not install, upgrade, start or restart T3.
+Use [installation](NATIVE.md) for host profiles and [Go setup](NATIVE-GO.md) for the executable. This source pass does not install, update or restart T3. Native integration of the new adapter extension is required before claiming installed support; see [native contracts](docs/native-workflows.md) and [verification](docs/verification.md).
 
-The client starts in the conversation browser. **Enter** opens a conversation. Wide terminals keep a conversation sidebar beside the attached transcript; **Ctrl+O** focuses it, while compact terminals use the full browser. **Tab / Shift+Tab** moves between visible panes. **Ctrl+P** opens Commands without changing editor text. Use `/help` for the active controls.
+## Developer
 
-The **0.7.1 UX refinement** adds source-bound navigation menus, compact staged forms, context-aware controls and reliable return to the invoking pane. See [changes and interaction rules](docs/ux-refinement.md) and [verification](docs/verification.md).
+- All configured environments appear together, ordered by recent native activity. The right pane starts empty; arrows and filtering do not subscribe to transcripts. Enter or a click opens the exact environment/thread pair. An unavailable host leaves healthy rows usable.
+- Stable project accents use filled markers, with text and selection cues. Info retains exact environment, project, thread, model, state and recovery details. At 60 columns navigation occupies the window when focused; at 80 columns and above it sits beside the conversation.
+- New resolves target-native model, options and workspace policy, then uses an existing project. New in the same project carries only the project identity. First-thread projects work. When no configured creation target exists, the client asks because T3's desktop environment default is not exposed by its server API.
+- Bounded tools, command results, file changes and children remain available on demand. Streaming Markdown retains reading anchors; exact drafts, selection, pending requests and operation identities survive supported returns.
 
-## Features
+## AgentBox
 
-- A conversation sidebar with up to 24 unsettled root conversations per environment, explicit working-child expansion, lifecycle/type filters, broader search and paging. Browsing another environment preserves the attached conversation and its draft. Compact terminals retain the full browser.
-- Bounded command/tool/file-change/subagent activity, with exact source-bound result inspection on demand and separate activity history. A tool burst cannot crowd readable messages out of their page.
-- Clickable navigation and primary actions, focus-aware scrolling, and an optional responsive context pane. Mouse-off retains native terminal selection.
-- Markdown transcript with stable reading anchors, native composer editing, slash completion and searchable commands with portable controls.
-- One settings review for model and supported options, with searchable field choices and a single Apply. Question forms retain progress through Back/Next and validate before submission.
-- Exact external editing and bounded prompt recall, including recoverable rejected code pastes and explicit clears.
-- One New conversation review for the first message, title and supported local model/effort/tier choices in the selected existing workspace.
-- Smaller latest pages, Earlier/Latest navigation, complete new-conversation drafts and explicit recovery of uncertain writes.
-- Explicit lifecycle filters and bounded list continuation; optional versioned JSON output retains scope and completeness.
-- Current-thread, next-message and supported launch settings from the selected provider's advertised capabilities.
-- Human-authored messages with queue/steer intent, independent Stop with queue hold, request review and separate connection/run/receipt status.
-- Per-environment appearance with distinct defaults, fixed violet/cyan/lime choices and a Terminal theme that inherits terminal colors. See [theme controls](NATIVE-GO.md#themes).
-- Read-only `envs`, `threads`, `status`, `doctor`, `capabilities`, `activity` and `inspect` commands. New inspection commands return versioned JSON success/error envelopes; existing arrays remain compatible.
+Use **Commands → AgentBox** or `/mode agentbox`; `/mode developer` returns. Developer is the default for a new settings file.
 
-T3 owns providers, execution, durable conversations, queues and workspaces. The client keeps one detailed conversation attached; browsing other environments' lists uses temporary metadata helpers without opening their transcripts. Existing T3 work continues when the client disconnects. Results beyond the bounded inspector, attachment uploads, provider configuration and full-history search remain in T3. See [controls and launch scope](NATIVE-GO.md) and [model/navigation semantics](docs/model-navigation.md).
+Needs you leads the inbox. Working, Queued, Later, Done, All and Unknown use actual native state. File one task or explicitly review a task list, choose an existing project and review every launch; AgentBox defaults to native isolated worktrees. Reply uses the ordinary source-bound composer. Requests use the existing exact approval/question forms. Changes shows real native diffs, changed files and linked PR metadata. Reviewed means a native visibility disposition, not a merge or proof of integration.
 
-See [the 0.7 architecture decision and reuse map](docs/reuse-t3term.md) for the four alternatives, exact t3term ports, process ownership and migration contract.
+Project and task priorities organize this client's view. **Priority-driven future dispatch after exit is unavailable:** the verified native contract has no general one-shot priority backlog scheduler. Existing native runs and accepted native message queues continue independently. No additional scheduler, database, provider worker or always-running client process is installed. See the [AgentBox guide](docs/agentbox.md) for supported workflows and limits.
 
-## Screenshots
+## Everyday controls
 
-**0.7 workspace, 120×35.** Produced by the actual terminal model's `View` using synthetic state; this is a cell-accurate fixture rendering, not a native Mac capture. The sidebar browses Linux host while the main conversation remains attached to Build host.
+| Action | Portable default |
+| --- | --- |
+| Commands | Ctrl+P; Ctrl+Space also opens it |
+| Conversations / Info | Ctrl+O / Ctrl+L |
+| Newline / Send | Enter / Ctrl+] |
+| Literal send | Ctrl+\; distinct Ctrl+Enter is also accepted |
+| Steer this message | Commands → Steer; distinct Ctrl+Alt+Enter |
+| Independent Stop with native queue hold | Ctrl+S, including over dialogs |
+| Move focus / dismiss / exit | Tab or Shift+Tab / Esc / Ctrl+Q |
+| AgentBox navigation | J/K or arrows, Enter, R reply, N file, V views |
 
-![t3oxide 0.7 workspace with environment navigation, attached transcript, recent tool and composer](docs/screenshots/workspace-120x35.png)
+Delivered Command equivalents are available on macOS. The terminal or OS may intercept them; no terminal settings are changed. Enter in the composer inserts a newline. Form confirmation and explicit request submission have their own controls. The [complete command/key reference](docs/shortcuts.md) documents contexts, portable alternatives and the optional startup-only shortcut file.
 
-[Compact 60×16 layout](docs/screenshots/workspace-60x16.png) · [Wide 170×40 context layout](docs/screenshots/workspace-170x40.png)
+## Synthetic views
 
-The following **historical 0.5.1** captures use Ghostty and synthetic demo conversations. Crops omit window chrome and unused margins.
+These captures come from the actual `Model.View()` with generic fixture data. They demonstrate cell layout, not physical-terminal or installed-host acceptance.
 
-**Conversation browser** — browse projects and conversations while keeping the active conversation attached.
+![Developer workspace at 120 by 35 cells](docs/screenshots/workspace-120x35.png)
 
-![Conversation browser with a selected demo conversation and environment, New, Settings and Resume controls](docs/screenshots/browser.png)
+![AgentBox inbox at 120 by 35 cells](docs/screenshots/agentbox-120x35.png)
 
-**Reading and search** — Markdown, run/request status and highlighted matches on the current page.
-
-![Demo conversation with Markdown links and inline code, awaiting-input status and one highlighted page-search match](docs/screenshots/conversation-search.png)
-
-## Development and CI
-
-On an Apple Silicon Mac with Go 1.26.0+, Node 22.4+, Python 3 and Apple command-line developer tools:
+## Development
 
 ```sh
 bash scripts/check-go.sh
@@ -73,12 +65,6 @@ bash scripts/check-security.sh
 bash scripts/build-go.sh
 ```
 
-The Go check script covers formatting, tests, vet and race detection. The shared check script retains adapter, script, measurement and available Swift checks. CI publishes the primary `t3oxide-terminal-macos-arm64` artifact and separately checks/builds the legacy Swift app as `t3oxide-legacy-swift-macos-arm64`.
+The Go script checks formatting, tests, vet and race detection. The shared script checks the Node adapter, scripts, Python measurement tests and available Swift tools. No new application dependency is added in this pass. [Architecture](docs/architecture.md), [state and recovery](docs/state-recovery.md), [native remainder](NATIVE-REMAINDER.md), and [verification](docs/verification.md) separate portable evidence from native acceptance.
 
-See [architecture](docs/architecture.md), [Go implementation ownership](docs/go-terminal.md), [contributor instructions](AGENTS.md) and the [verification record](docs/verification.md) for pinned dependencies and recorded checks. The adapter targets T3 orchestration protocol 2; compatibility with future nightlies is not guaranteed. No RAM or battery savings are claimed without measurements.
-
-## Legacy Swift rollback
-
-The AppKit source remains in `mac/`. On an Apple Silicon Mac running macOS 14+ with Apple developer tools, build it with `bash scripts/build-mac.sh`. Outputs remain `dist/t3oxide.app` and `dist/t3oxide-macos-arm64.zip`; builds are ad-hoc signed and not notarized. See [legacy installation](NATIVE.md#legacy-swift-rollback).
-
-Swift retains `~/.config/t3oxide/drafts.json`; Go uses the separate `go-drafts.json` and never edits the Swift file. Preserve both state files and host `operations-v1/` recovery journals. Returning to Swift does not transfer new Go drafts or pending actions; review unresolved work before changing clients.
+Preserve `NOTICE`, `LICENSES/`, old releases and `operations-v1/`. Go uses `go-drafts.json`; Swift keeps its separate `drafts.json`. AgentBox behavior is independently authored after source research; no AgentBox GPL source, tests or assets are included. This snapshot has no top-level license grant; third-party notices do not establish a blanket license for t3oxide.

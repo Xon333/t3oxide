@@ -14,7 +14,7 @@ import (
 // JSON-escaped appearance keys while keeping settings reads and writes bounded.
 const maxSettingsBytes = 128 * 1024
 
-// Settings stores appearance only. T3 retains all conversation authority.
+// Settings stores presentation only. T3 retains all conversation authority.
 type Settings struct {
 	mu                sync.Mutex
 	path              string
@@ -23,12 +23,19 @@ type Settings struct {
 	Sidebar           bool
 	NavigationHidden  bool
 	LegacyEditorCtrlP bool
+	Mode              string
 	environmentThemes map[string]string
 	forcedTheme       string
+	shortcuts         *ShortcutConfig
 }
 
 func LoadSettings(path string) (*Settings, error) {
 	s := &Settings{path: path, Theme: "violet", Mouse: true}
+	var shortcutErr error
+	s.shortcuts, shortcutErr = LoadShortcuts(filepath.Join(filepath.Dir(path), "shortcuts.json"))
+	if shortcutErr != nil {
+		return nil, shortcutErr
+	}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -50,6 +57,7 @@ func LoadSettings(path string) (*Settings, error) {
 		Sidebar           bool
 		NavigationHidden  bool
 		LegacyEditorCtrlP bool
+		Mode              string
 		EnvironmentThemes map[string]string
 	}
 	saved.Theme, saved.Mouse = s.Theme, s.Mouse
@@ -58,6 +66,10 @@ func LoadSettings(path string) (*Settings, error) {
 	}
 	s.Theme, s.Mouse, s.Sidebar = saved.Theme, saved.Mouse, saved.Sidebar
 	s.LegacyEditorCtrlP = saved.LegacyEditorCtrlP
+	s.Mode = saved.Mode
+	if s.Mode != "" && s.Mode != "developer" && s.Mode != "agentbox" {
+		return nil, errors.New("terminal mode must be developer or agentbox")
+	}
 	s.NavigationHidden = saved.NavigationHidden
 	s.environmentThemes = saved.EnvironmentThemes
 	if !ValidTheme(s.Theme) {
@@ -78,6 +90,9 @@ func (s *Settings) save() error {
 		return nil
 	} // In-memory settings are useful for embedded/test programs.
 	saved := map[string]any{"theme": s.Theme, "mouse": s.Mouse, "sidebar": s.Sidebar, "navigationHidden": s.NavigationHidden}
+	if s.Mode == "agentbox" {
+		saved["mode"] = s.Mode
+	}
 	if s.LegacyEditorCtrlP {
 		saved["legacyEditorCtrlP"] = true
 	}

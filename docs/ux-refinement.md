@@ -1,3 +1,11 @@
+# Integrated refinement status — 0.8
+
+The 2026-10-29 implementation uses a unified flat recent list, stable project accents, compact activity/status, Info, native-default/project-only New and additive AgentBox. Earlier grouping and source-inheriting New proposals below are historical and superseded. Enter is composer newline, explicit Send is Ctrl+], and independent Ctrl+S Stop remains. The current authoritative guides are [Developer setup](../NATIVE-GO.md), [AgentBox](agentbox.md), [shortcuts](shortcuts.md), [native contracts](native-workflows.md), [recovery](state-recovery.md) and [verification](verification.md).
+
+The original accepted proposal is retained below for traceability; it is not evidence that an installed host supports new native capabilities.
+
+---
+
 # UX refinement — 0.7.1
 
 The existing Go/Bubble Tea client now uses a smaller set of visible controls, explicit browse/attachment labels, and reviews that preserve the exact source and local editing state. This is a client presentation and interaction change. T3, the host adapter, companion-v1, orchestration-v2, persisted state and the retained Swift client keep their existing owners and contracts.
@@ -59,9 +67,40 @@ The native worker applies the baseline patch to the real checkout, resolves conc
 
 ## Proposed startup and creation flow
 
-- Open directly into one workspace: list threads from both configured environments on the left and show an empty conversation pane on the right. Do not start with an environment picker.
-- Keep the established per-environment loading limits, budgets and filters. Show each thread's environment with a simple open-source icon compatible with the existing Bubble Tea interface, alongside an understandable environment label; avoid icon-specific tests.
-- Selecting a thread opens it in the right pane, as today.
-- The empty pane can also start a new thread. Use the available defaults and let the user choose environment, project and model when they want to change them, following the T3 creation flow.
-- Allow creation directly from a selected project, including its first thread, without requiring an existing source conversation. Offer the applicable workspace choice and valid provider/model defaults; preserve exact target validation, drafts and durable uncertain-operation recovery.
-- Keep the existing filters and unrelated features. This is a proposal; the current source-thread-based launch and startup behavior remain in place until implemented.
+Decisions confirmed on October 29, 2026. These are requirements for the next pass, not implemented behavior. The existing source-thread-based launch remains in place until replaced.
+
+| Decision | Selected behavior |
+| --- | --- |
+| 1a. Unified list | Open directly into one workspace with a single thread list ordered by recent activity on the left and an empty conversation pane on the right. Include all configured environments by default; do not start with an environment picker. |
+| 2a. Open explicitly | Arrows highlight without attaching. Enter or an explicit row click opens the selected thread in the right pane. |
+| 3b. Creation target | Ordinary New asks for the project. Preselect the configured native default environment and native new-thread model/options, with changes available before Create. Do not require reconfirming the environment or inherit the current thread's settings. |
+| 4a. New pane | New returns to the empty creation pane while preserving the previous thread's exact draft, attachment return target and reading position. |
+| 5a. Workspace | Use the target project's native default workspace policy, with an optional explicit workspace choice. Do not copy the source thread's worktree or implicitly request a new worktree. |
+| 6a. Compact layout | When two panes no longer fit, show one at a time. Ctrl+O reaches navigation; opening a thread returns to its conversation pane. |
+| 7a. Partial availability | Show threads from available environments while an unavailable environment has a compact error and explicit retry. Do not silently move a creation target to another environment. |
+| 8a. Project scope | Create a thread directly in an existing project, including its first thread. Creating a new project remains in T3. |
+
+### New-thread behavior
+
+The user's command examples conveyed intent, not required spellings or flags. Choose concise, discoverable names that fit the existing command catalog and verified native T3 behavior; retain compatible existing aliases where their meaning remains accurate. Use the same action names in menus, Commands, completion and documentation.
+
+- **New thread:** use the configured default environment, ask for the project, and initialize from native new-thread model/options and the target project's default workspace policy. Let the user change these choices before Create.
+- **New thread in the same project:** preselect only the current thread's project. Environment, model/options and workspace policy still come from the new-thread defaults, not the current thread. If that exact project is unavailable in the chosen default environment, show the project choice rather than silently substituting a project or changing environment.
+- Native defaults remain authoritative and configurable. Do not hard-code a personal host, provider, model or effort, and do not treat the last-used thread settings as the native new-thread defaults.
+- Preserve explicit Create, exact launch drafts, target validation and durable uncertain-operation recovery. An explicit retry keeps its original saved target and payload.
+
+### Optional shortcut file
+
+- Add an optional manually edited shortcut configuration file alongside the existing client configuration. No shortcut settings screen, key recorder or additional setup step; the shipped bindings work without the file.
+- Reuse the existing open-source Bubbles `key.Binding`, component keymaps and help model. Adapt a suitable maintained configuration pattern rather than introducing a parallel input router; preserve attribution for reused material.
+- Map stable action identifiers to keys in explicit contexts, with overrides layered over the shipped defaults. Keep editor, picker, reading and global ownership consistent so a remapped application command does not unexpectedly consume ordinary text or another context's editing keys.
+- Drive dispatch, help labels and command hints from the resolved bindings. Validate unknown actions, invalid key names and conflicting bindings in the same context, with actionable errors.
+- Load the file at startup and document a small example and how to restore defaults by removing the overrides. No watcher or live-editing UI is needed. This remains proposed functionality for the next pass.
+
+### Retained behavior and annotation handoff
+
+- Keep established per-environment loading limits, budgets and filters. Continue metadata-only browsing until a thread is explicitly opened; do not preload every transcript.
+- Identify each thread's environment with a simple existing open-source icon compatible with Bubble Tea and an understandable label. Preserve attribution; avoid icon-specific tests.
+- Keep unrelated features intact. The existing workspace, editor, request, Stop and recovery contracts remain requirements.
+- Screenshot annotations refine this agreed flow: number each marked area and describe the intended change or behavior beside that number. Mark unresolved choices with a question mark; unmarked areas are not redesign instructions. Pair before/after or consecutive screens when a transition matters.
+- Combine those annotations with this proposal for the GPT-6 Pro implementation brief, followed by native integration with T3 agents. No runtime or deployment change is authorized merely by recording the proposal.

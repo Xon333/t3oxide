@@ -111,17 +111,17 @@ func TestSlashCompletionAcceptsBeforeExecutionAndKeepsInvalidArguments(t *testin
 	if !m.completionVisible() || m.dialog != nil {
 		t.Fatal("slash completion did not preserve composer focus")
 	}
-	m.Update(keyPress(tea.KeyEnter))
+	m.Update(keyPress(tea.KeyTab))
 	if m.currentDraft() != "/help " || m.detail != "" {
 		t.Fatal("accepting partial completion executed it")
 	}
-	m.Update(keyPress(tea.KeyEnter))
+	m.Update(keyPress(']', tea.ModCtrl))
 	if m.detail == "" || m.currentDraft() != "" {
 		t.Fatal("exact command did not dispatch after explicit acceptance")
 	}
 	m.Update(keyPress(tea.KeyEscape))
 	m.Update(tea.PasteMsg{Content: "/mouse invalid"})
-	m.Update(keyPress(tea.KeyEnter))
+	m.Update(keyPress(']', tea.ModCtrl))
 	if m.currentDraft() != "/mouse invalid" || m.settingBusy || !strings.Contains(m.problem, "Use /mouse") && !strings.Contains(m.problem, "use /mouse") {
 		t.Fatal("invalid local arguments lost editable command")
 	}

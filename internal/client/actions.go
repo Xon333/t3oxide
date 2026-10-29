@@ -12,6 +12,20 @@ import (
 // Send submits exactly one human-authored message. The UI invokes it off its
 // event loop; T3 alone chooses delivery and owns the durable queue.
 func (a *Session) Send(ctx context.Context, message string) (err error) {
+	return a.sendWithDelivery(ctx, message, "")
+}
+
+// SendWithDelivery makes an explicit one-message queue/steer choice without
+// changing the session's selected delivery preference. It shares Send's exact
+// payload, override, request validation and durable operation lane.
+func (a *Session) SendWithDelivery(ctx context.Context, message, mode string) error {
+	if mode != "auto" && mode != "queue" && mode != "steer" {
+		return errors.New("delivery must be auto, queue or steer")
+	}
+	return a.sendWithDelivery(ctx, message, mode)
+}
+
+func (a *Session) sendWithDelivery(ctx context.Context, message, requestedMode string) (err error) {
 	defer func() { a.rememberError(err) }()
 	if strings.TrimSpace(message) == "" || len(message) > 64*1024 {
 		return errors.New("message must contain text and be at most 64 KiB")
@@ -22,6 +36,9 @@ func (a *Session) Send(ctx context.Context, message string) (err error) {
 	a.mu.Lock()
 	sessionCtx, thread, mode := a.ctx, a.thread, a.delivery
 	a.mu.Unlock()
+	if requestedMode != "" {
+		mode = requestedMode
+	}
 	if sessionCtx == nil || ctx == nil {
 		return errors.New("select a live conversation first")
 	}
@@ -181,6 +198,9 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 	}
 	if (op == "launch" && stringValue(result["threadId"]) == "") || (op != "launch" && numberValue(result["sequence"]) < 0) {
 		return nil, errors.New("unrecognized acknowledgement; operation remains saved for explicit retry")
+	}
+	if op == "thread-action" && (stringValue(result["threadId"]) != thread || stringValue(result["action"]) != stringValue(fields["action"])) {
+		return nil, errors.New("native inbox acknowledgement changed its exact thread/action; operation remains saved for explicit same-ID recovery")
 	}
 	message := ""
 	if op == "send" {

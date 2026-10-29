@@ -538,13 +538,13 @@ func TestFeaturesLaunchAcknowledgesActualAdapterReceiptAndRetainsSourceDraft(t *
 		t.Fatal(e)
 	}
 	launch := featureCommand(a, "new", "New disposable fixture")
-	p := featurePrompt(t, a)
+	p := nativeLaunchReview(t, a)
 	p.Respond(client.Answer{Action: "create", Launch: &client.LaunchInput{Title: p.Question.LaunchReview.Input.Title, Message: "first new message"}})
 	r := featureReply(t, launch)
 	if r.err != nil || r.result.Next == nil {
 		t.Fatalf("launch acknowledgment: %v", r.err)
 	}
-	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/thread-a") != "" || a.Draft() != "source composer" {
+	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/project-launch/project-a") != "" || a.Draft() != "source composer" {
 		t.Fatal("launch recovery record/draft mismatch")
 	}
 	raw, _ := json.Marshal(r.result.Next.Status())

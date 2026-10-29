@@ -8,13 +8,13 @@ Use a local checkout of this repository and the ordinary account that owns the T
 
 For an already configured host, preserve its credential and identity and follow [Updates and recovery](#updates-and-recovery). The credential setup below is for a new installation.
 
-Create a dedicated host-local credential using the **installed T3 CLI for that instance**, with `orchestration:read` and `orchestration:operate` scopes. CLI flags may vary by nightly; consult that installation's help. For versions supporting the following syntax, first set the Bash array `T3_CMD` to the installed executable and its instance-specific options:
+Create a dedicated host-local credential using the **installed T3 CLI for that instance**, with `orchestration:read`, `orchestration:operate` and `filesystem:read` scopes. The read scope lets native launch review inspect the project's `t3.json`, repository refs and changes. CLI flags may vary by nightly; consult that installation's help. For versions supporting the following syntax, first set the Bash array `T3_CMD` to the installed executable and its instance-specific options:
 
 ```bash
 umask 077
 mkdir -p "$HOME/.config/t3oxide"
 "${T3_CMD[@]}" auth session issue --token-only --label t3oxide --ttl 30d \
-  --scope orchestration:read --scope orchestration:operate \
+  --scope orchestration:read --scope orchestration:operate --scope filesystem:read \
   > "$HOME/.config/t3oxide/t3.token"
 chmod 600 "$HOME/.config/t3oxide/t3.token"
 ```
@@ -70,7 +70,7 @@ Switching environments or quitting the client ends only the owned helper connect
 
 Rerun the host installer from the desired source revision to update the adapter. With no flags, `node scripts/install-host.mjs` preserves the configured identity, token-file path and write setting. It selects a versioned release through the `current` symlink; restoring a previous compatible target rolls back the adapter without changing T3. Preserve an active or interrupted `.install-lock` until its installer has finished or its publication has been reviewed. Reconnect existing helpers to load updated modules. Rebuild and replace the Go executable when client source changes.
 
-Renew expired credentials through the same installed T3 CLI, retain the private token path, and reconnect. Reconnect does not automatically replay writes: retry saved uncertain operations explicitly.
+Renew expired credentials through the same installed T3 CLI, retain the private token path and original session subject, and reconnect. Existing credentials with only the two orchestration scopes can still browse conversations; native project-file, refs and change reads may fail with a missing `filesystem:read` scope. Preserve the existing credential until its same-subject replacement has been verified against the intended environment. Reconnect does not automatically replay writes: retry saved uncertain operations explicitly.
 
 Preserve `~/.config/t3oxide/go-drafts.json` and appearance settings in `terminal.json` on the client, any legacy `drafts.json`, and `operations-v1/` beside the host configuration. The first normal Go launch imports validated Swift drafts only when the Go state file is absent; it never edits the Swift file. The host journal contains original operation payloads and receipts, not tokens; it is recovery state, not disposable cache. Its 4,096-record limit fails closed for new operations rather than evicting recovery records.
 

@@ -21,7 +21,10 @@ import (
 type Manager struct {
 	Environments []config.Environment
 	State        *config.State
-	mu           sync.Mutex
+	// CreationProfile is an explicit CLI creation target, independent of the
+	// currently attached or highlighted conversation.
+	CreationProfile string
+	mu              sync.Mutex
 	// Serialize draft persistence and acknowledgment across attachments. The
 	// canonical draft remains in drafts so a retiring listener cannot restore
 	// text that a newer attachment changed or an acknowledgment accepted.
@@ -119,21 +122,23 @@ func (m *Manager) Close() error {
 }
 
 type Thread struct {
-	ID                string        `json:"id"`
-	Title             string        `json:"title"`
-	Project           string        `json:"project"`
-	ProjectID         string        `json:"projectId,omitempty"`
-	Status            string        `json:"status"`
-	Model             string        `json:"model"`
-	Lineage           *wire.Lineage `json:"lineage,omitempty"`
-	ParentTitle       string        `json:"parentTitle,omitempty"`
-	ChildCount        int           `json:"childCount,omitempty"`
-	Depth             int           `json:"depth,omitempty"`
-	Expanded          bool          `json:"expanded,omitempty"`
-	ContextOnly       bool          `json:"contextOnly,omitempty"`
-	WorkingChildCount int           `json:"workingChildCount,omitempty"`
-	KnownChildCount   int           `json:"knownChildCount,omitempty"`
-	LoadedChildCount  int           `json:"loadedChildCount,omitempty"`
+	UpdatedAt         string              `json:"updatedAt,omitempty"`
+	Inbox             *wire.InboxMetadata `json:"inbox,omitempty"`
+	ID                string              `json:"id"`
+	Title             string              `json:"title"`
+	Project           string              `json:"project"`
+	ProjectID         string              `json:"projectId,omitempty"`
+	Status            string              `json:"status"`
+	Model             string              `json:"model"`
+	Lineage           *wire.Lineage       `json:"lineage,omitempty"`
+	ParentTitle       string              `json:"parentTitle,omitempty"`
+	ChildCount        int                 `json:"childCount,omitempty"`
+	Depth             int                 `json:"depth,omitempty"`
+	Expanded          bool                `json:"expanded,omitempty"`
+	ContextOnly       bool                `json:"contextOnly,omitempty"`
+	WorkingChildCount int                 `json:"workingChildCount,omitempty"`
+	KnownChildCount   int                 `json:"knownChildCount,omitempty"`
+	LoadedChildCount  int                 `json:"loadedChildCount,omitempty"`
 }
 
 // Session is one attachment to a selected T3 environment and conversation.
@@ -293,25 +298,22 @@ func (a *Session) Events(parent context.Context) iter.Seq2[Event, error] {
 		needsBrowser := a.thread == ""
 		a.mu.Unlock()
 		if needsBrowser {
-			result, err := a.Browse(ctx, "")
-			if err != nil {
-				if ctx.Err() == nil {
-					a.notice(err.Error())
-				}
-				<-ctx.Done()
-				return
-			}
-			if result.Next == nil {
-				<-ctx.Done()
-				return
-			}
-			draft := result.Next.Draft()
+			// The workspace owns bounded metadata reads. An empty session has
+			// no subscription and never asks a modal environment/thread picker.
+			// Explicit Open creates a source-qualified lazy Target instead.
 			a.mu.Lock()
-			a.environment, a.thread = result.Next.environment, result.Next.thread
-			a.store.Select(a.thread)
-			a.draft = draft
-			a.restoreDraft = true
+			a.connectionState = "browse"
 			a.mu.Unlock()
+			for {
+				if !yield(a.renderEvent(), nil) {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-a.wake:
+				}
+			}
 		}
 		delay := time.Second
 		for ctx.Err() == nil {
@@ -610,7 +612,7 @@ func (a *Session) Status() Status {
 }
 
 func (a *Session) statusLocked(s *wire.Snapshot) Status {
-	contextLine := "Choose environment"
+	contextLine := ""
 	if a.environment != nil {
 		contextLine = a.environment.Label
 	}

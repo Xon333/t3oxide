@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 		{"empty-composer", "", "Ctrl+P", false, true, false},
 		{"nonempty-composer", "first\nsecond", "Ctrl+P", false, true, false},
 		{"reading-with-draft", "first\nsecond", "Ctrl+P", true, true, false},
-		{"legacy-nonempty-composer", "first\nsecond", "Shift+Tab→Ctrl+P", false, false, true},
+		{"legacy-nonempty-composer", "first\nsecond", "Ctrl+Space", false, false, true},
 		{"legacy-reading-with-draft", "first\nsecond", "Ctrl+P", true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,6 +33,9 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 				m.Update(keyPress(tea.KeyTab, tea.ModShift))
 			}
 			k := m.keyMap()
+			if runtime.GOOS == "darwin" {
+				tc.label = "Cmd+P*"
+			}
 			if k.Palette.Help().Key != tc.label || key.Matches(keyPress('p', tea.ModCtrl), k.Palette) != tc.opens {
 				t.Fatalf("palette help/dispatch disagree: %#v", k.Palette.Help())
 			}
@@ -47,7 +51,7 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 				m.Update(keyPress(tea.KeyTab, tea.ModShift))
 				m.Update(keyPress('p', tea.ModCtrl))
 				if m.dialog == nil || m.dialog.local != "palette" || m.currentDraft() != tc.draft {
-					t.Fatal("advertised Shift+Tab→Ctrl+P route changed the draft or failed to open commands")
+					t.Fatal("reading Ctrl+P fallback changed the draft or failed to open commands")
 				}
 			}
 		})

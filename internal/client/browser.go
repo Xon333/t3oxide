@@ -28,25 +28,14 @@ func (m *Manager) browserScope(fallback string) []string {
 	if len(m.profileScope) > 0 {
 		return append([]string(nil), m.profileScope...)
 	}
-	if m.State != nil {
-		prefs := m.State.BrowserPreferences()
-		valid := []string{}
-		for _, id := range prefs.ProfileIDs {
-			for _, env := range m.Environments {
-				if env.ID == id {
-					valid = append(valid, id)
-					break
-				}
-			}
-		}
-		if len(valid) > 0 {
-			return valid
-		}
+	// Browsing and creation are separate choices. In particular an explicit
+	// --env creation target or an old single-profile browser preference must
+	// not hide the other configured environments at startup.
+	ids := make([]string, 0, len(m.Environments))
+	for _, env := range m.Environments {
+		ids = append(ids, env.ID)
 	}
-	if fallback != "" {
-		return []string{fallback}
-	}
-	return nil
+	return ids
 }
 func (m *Manager) selectScope(ids []string) error {
 	offered := map[string]bool{}
@@ -472,6 +461,9 @@ func (a *Session) Browse(ctx context.Context, query string) (Result, error) {
 // Only explicit New/Settings requests acquire a source detail snapshot. Merely
 // moving the browser cursor never starts this helper or a watch.
 func (a *Session) withBrowserSource(ctx context.Context, profile, thread, action string) (Result, error) {
+	if action == "new" {
+		return a.NewConversation(ctx, "", false, false)
+	}
 	// The source may be a temporary attachment. Its eventual Target call saves
 	// that source's draft, so preserve the attached composer at this boundary
 	// instead of relying on the autosave timer or source connection latency.

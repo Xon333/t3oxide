@@ -38,27 +38,30 @@ func (m *Model) recordWorkspaceHits() {
 	}
 	x := m.mainOriginX()
 	inner := m.workspaceWidth()
-	m.addHit(x, m.transcriptTop(), m.contentWidth, m.bodyHeight, "transcript", "", 0)
-	stripY := m.transcriptTop() + m.bodyHeight
-	if item := m.recentActivity(); item != nil {
-		m.addHit(x, stripY, inner, 1, "activity", item.Key, 0)
-	}
-	composerY := m.transcriptTop() + m.bodyHeight + m.activityStripRows()
-	if m.feedbackVisible() {
-		composerY++
-	}
-	m.addHit(x, composerY, m.contentWidth, m.composer.Height()+2, "composer", "", 0)
-	buttonX := x
-	for _, a := range m.visibleToolbarActions(inner) {
-		w := ansi.StringWidth(a.label)
-		if buttonX-x+w > inner {
-			break
+	mainVisible := !(m.session != nil && m.status.ThreadID == "") && m.navigatorWidth() < m.width
+	if mainVisible {
+		m.addHit(x, m.transcriptTop(), m.contentWidth, m.bodyHeight, "transcript", "", 0)
+		stripY := m.transcriptTop() + m.bodyHeight + 1
+		if item := m.recentActivity(); item != nil {
+			m.addHit(x, stripY, inner, 1, "activity", item.Key, 0)
 		}
-		m.addHit(buttonX, 2, w, 1, "toolbar", a.action, 0)
-		buttonX += w + 2
+		composerY := m.transcriptTop() + m.bodyHeight + m.activityStripRows()
+		if m.feedbackVisible() {
+			composerY++
+		}
+		m.addHit(x, composerY, m.contentWidth, m.composer.Height()+2, "composer", "", 0)
+		buttonX := x
+		for _, a := range m.visibleToolbarActions(inner) {
+			w := ansi.StringWidth(a.label)
+			if buttonX-x+w > inner {
+				break
+			}
+			m.addHit(buttonX, 2, w, 1, "toolbar", a.action, 0)
+			buttonX += w + 2
+		}
+		// Model text itself opens the same staged settings review as Settings.
+		m.addHit(x, 1, max(1, inner/2), 1, "toolbar", "settings", 0)
 	}
-	// Model text itself opens the same staged settings review as Settings.
-	m.addHit(x, 1, max(1, inner/2), 1, "toolbar", "settings", 0)
 	if m.navigationVisible() {
 		w := m.navigatorWidth() - 2
 		serial := m.navigator.serial
@@ -73,12 +76,12 @@ func (m *Model) recordWorkspaceHits() {
 				continue
 			}
 			y := 4 + index - start
-			if y >= m.height-5 {
+			if y >= m.height-4 {
 				break
 			}
-			m.addHit(0, y, w, 1, "navigator-row", i.thread.ID, serial)
+			m.addHit(0, y, w, 1, "navigator-row", i.identity(), serial)
 			if i.thread.ChildCount > 0 {
-				m.addHit(0, y, 2, 1, "navigator-toggle", i.thread.ID, serial)
+				m.addHit(0, y, 2, 1, "navigator-toggle", i.identity(), serial)
 			}
 		}
 		row := m.height - 3
@@ -93,7 +96,7 @@ func (m *Model) recordWorkspaceHits() {
 			m.addHit(left, row, 4, 1, "navigator", "next", serial)
 		}
 	}
-	if m.contextVisible() {
+	if mainVisible && m.contextVisible() {
 		cx := x + m.contentWidth + 2
 		m.addHit(cx, m.transcriptTop(), 28, m.bodyHeight, "context-focus", "", 0)
 		if m.snapshot != nil && m.snapshot.Metadata.Activity != nil {
@@ -179,23 +182,20 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			m.navigator.focused = false
 			m.contextFocused = false
 			m.transcriptFocus = true
-			m.resizeNavigator()
-			return m.restoreFocus()
+			return m.resizeWorkspaceFocus()
 		case "composer":
 			m.activityFocused = false
 			m.navigator.focused = false
 			m.contextFocused = false
 			m.transcriptFocus = false
-			m.resizeNavigator()
-			return m.restoreFocus()
+			return m.resizeWorkspaceFocus()
 		case "context-focus":
 			m.activityFocused = false
 			m.navigator.focused = false
 			m.transcriptFocus = false
 			m.contextFocused = true
 			m.reviewContextSelection()
-			m.resizeNavigator()
-			return m.restoreFocus()
+			return m.resizeWorkspaceFocus()
 		case "activity":
 			return m.execute("activity", z.args)
 		case "navigator-focus":
@@ -207,11 +207,11 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 				return m.navigatorAction(z.args)
 			}
 		case "navigator-row", "navigator-toggle":
-			if z.serial != m.navigator.serial || m.navigator.loading {
+			if z.serial != m.navigator.serial {
 				return nil
 			}
 			for j, raw := range m.navigator.list.VisibleItems() {
-				if raw.(navigatorItem).thread.ID == z.args {
+				if raw.(navigatorItem).identity() == z.args {
 					m.navigator.list.Select(j)
 					m.navigator.selected = z.args
 					m.navigator.focused = true

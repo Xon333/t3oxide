@@ -152,7 +152,7 @@ func TestFeedbackDetailKeepsCompleteErrorsKnownTargetAndRedactsCredentials(t *te
 			t.Fatalf("detail exposed %q", secret)
 		}
 	}
-	if !strings.HasSuffix(ansi.Strip(m.feedbackView(60)), "Ctrl+L error") {
+	if !strings.HasSuffix(ansi.Strip(m.feedbackView(60)), m.actionBinding("info").Help().Key+" error") {
 		t.Fatal("compact feedback truncated the error expansion affordance")
 	}
 	if m.problem != full+"\nAuthorization: Bearer secret-bearer-value\nhttps://user:password@example.invalid/callback?token=secret-query-value&code=123\n{\"api_key\":\"secret-key-value\", \"password\":\"secret-password-value\"}" {

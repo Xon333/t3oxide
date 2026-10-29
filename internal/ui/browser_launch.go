@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +16,13 @@ import (
 // Browsing is local metadata work. Its cancellation never cancels a send which
 // is still waiting for a receipt, and Stop retains its existing independent lane.
 func (m *Model) executeBrowser(name, args string) tea.Cmd {
+	if name == "switch" || name == "threads" {
+		cmd, err := m.executeNavigatorCommand(name, args)
+		if err != nil {
+			m.problem = safeText(err.Error())
+		}
+		return cmd
+	}
 	var previous, promptDone <-chan struct{}
 	if m.browserBusy {
 		if m.cancelBrowser != nil {
@@ -56,6 +64,37 @@ func (m *Model) executeBrowser(name, args string) tea.Cmd {
 		result, err := session.Command(ctx, name, args)
 		return actionMsg{generation: generation, id: id, name: name, browser: true, result: result, err: err}
 	}
+}
+
+// The integrated navigator is admitted synchronously. It never opens a
+// conversation or takes the ordinary mutation lane until explicit activation.
+// Returning admission separately lets slash commands consume their own text
+// without waiting for an unrelated later conversation-open receipt.
+func (m *Model) executeNavigatorCommand(name, args string) (tea.Cmd, error) {
+	if m.session == nil {
+		return nil, fmt.Errorf("No session selected")
+	}
+	if m.dialog != nil && m.dialog.prompt != nil {
+		m.dialog.prompt.Respond(client.Answer{Cancelled: true})
+	}
+	m.dialog, m.browserDialog = nil, nil
+	m.detail, m.detailTitle, m.detailCopy = "", "", ""
+	m.browserPage, m.launchPage = false, false
+	m.navigationHidden = false
+	cmd := m.focusNavigator()
+	if name == "threads" {
+		if err := m.changeNavigatorPages("search", args); err != nil {
+			return nil, err
+		}
+		return tea.Batch(cmd, m.loadNavigator(m.navigator.profile, args, true)), nil
+	}
+	if args != "" {
+		m.navigator.list.SetFilterText(args)
+		m.navigator.list.SetFilterState(list.FilterApplied)
+		m.navigator.list.FilterInput.SetValue(args)
+	}
+	m.resize()
+	return cmd, nil
 }
 
 type browserState struct {
@@ -306,8 +345,11 @@ func actionLabel(action string) string {
 
 func (m *Model) browserKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	d, controls := m.dialog, m.visibleBrowserControls()
+	if key.Matches(msg, m.actionBinding("info")) || key.Matches(msg, m.actionBinding("dismiss")) {
+		return false, nil
+	}
 	switch msg.String() {
-	case "esc", "ctrl+l", "f2":
+	case "esc":
 		return false, nil
 	case "tab", "shift+tab":
 		if msg.String() == "tab" && d.actionFocus == 0 && d.list.FilterState() == list.Filtering && !d.resultsFocused {
@@ -491,6 +533,9 @@ func (m *Model) launchAction(action string) tea.Cmd {
 func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 	f := m.dialog.launch
 	actions := m.launchActions()
+	if key.Matches(msg, m.actionBinding("info")) {
+		return m.dispatch("info", "")
+	}
 	switch msg.String() {
 	case "ctrl+u":
 		if f.focus == 0 && f.preservedMessage != "" {
@@ -511,13 +556,6 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 			delta = -1
 		}
 		f.focus = (f.focus + delta + len(actions) + 2) % (len(actions) + 2)
-		return m.restoreFocus()
-	case "f2", "ctrl+l":
-		m.refreshLaunchDetails()
-		m.dialog.details = true
-		m.questionViewport.SetContent(m.dialog.detailText)
-		m.resize()
-		m.questionViewport.GotoTop()
 		return m.restoreFocus()
 	case "enter":
 		if f.focus >= 2 {
@@ -545,7 +583,7 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) launchActions() []string {
 	var actions []string
-	for _, action := range []string{"create", "cancel", "model", "effort", "tier"} {
+	for _, action := range []string{"create", "cancel", "model", "effort", "tier", "workspace", "defaults", "project", "environment"} {
 		if slices.Contains(m.dialog.launch.review.Actions, action) {
 			actions = append(actions, action)
 		}

@@ -97,6 +97,17 @@ func (m *Model) conversationDetailText() string {
 		}
 	}
 	parts = append(parts, m.authoritativeStatus(), m.connectionStatus())
+	if m.snapshot != nil && m.snapshot.Metadata.RuntimeDetails != nil {
+		runtime := m.snapshot.Metadata.RuntimeDetails
+		if runtime.RunModelSelection != nil {
+			parts = append(parts, "Requested run model: "+runtime.RunModelSelection.Summary())
+		}
+		if runtime.ProviderReportedSelection != nil {
+			parts = append(parts, "Provider reported model: "+runtime.ProviderReportedSelection.Summary())
+		} else {
+			parts = append(parts, "Provider reported model: unavailable")
+		}
+	}
 	if m.status.ThreadID != "" && !m.status.Writable {
 		parts = append(parts, "Read only: conversation mutations are unavailable.")
 	}
@@ -122,7 +133,7 @@ func (m *Model) conversationDetailText() string {
 // A disappearing pane must not keep the keyboard. This changes local focus
 // only; it never edits a draft, reattaches, or moves the reading anchor.
 func (m *Model) reconcileWorkspaceFocus() bool {
-	if m.browserPage || m.launchPage {
+	if m.browserPage || m.launchPage || m.mode == "agentbox" {
 		return false
 	}
 	changed := false
@@ -136,7 +147,7 @@ func (m *Model) reconcileWorkspaceFocus() bool {
 		m.transcriptFocus = true
 		changed = true
 	}
-	if m.activityFocused && m.recentActivity() == nil {
+	if m.activityFocused && m.recentActivity() == nil && !(m.pendingWorkspaceReturn != nil && m.snapshot == nil) {
 		m.activityFocused = false
 		m.activityFocusKey = ""
 		m.transcriptFocus = true

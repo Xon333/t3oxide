@@ -435,7 +435,7 @@ func TestFullChoiceDetailsAreReachableInNarrowPaneWithoutAnswering(t *testing.T)
 	label := strings.Repeat("long choice ", 12) + "EXACT LABEL END"
 	description := strings.Repeat("specific consequence\n", 20) + "COMPLETE DESCRIPTION END"
 	m.openPrompt(retiredPrompt(5, client.Question{Kind: client.ChooseOne, Title: "Permission", Prompt: "Review this operation", Choices: []client.Choice{{ID: "specific-allow", Label: label, Description: description}}}))
-	if !strings.Contains(ansi.Strip(m.View().Content), "Ctrl+L details") {
+	if !strings.Contains(ansi.Strip(m.View().Content), m.actionBinding("info").Help().Key+" Info") {
 		t.Fatalf("full choice details were not discoverable:\n%s", ansi.Strip(m.View().Content))
 	}
 	m.dialogKey(keyPress(tea.KeyF2))
@@ -642,12 +642,12 @@ func TestResponsiveViewsHaveBoundedUnicodeRowsAndNoRequiredSidebar(t *testing.T)
 		})
 	}
 	finishCommand(t, m, m.dispatch("sidebar", "on"))
-	if !strings.Contains(strings.ToLower(ansi.Strip(m.View().Content)), "writes enabled") {
+	if !strings.Contains(ansi.Strip(m.View().Content), "Activity") {
 		t.Fatal("optional wide context sidebar not rendered")
 	}
 	m.width = 44
 	m.resize()
-	if m.contentWidth != 42 || strings.Contains(ansi.Strip(m.View().Content), "writes enabled") {
+	if m.contentWidth != 42 || strings.Contains(ansi.Strip(m.View().Content), "Activity") {
 		t.Fatal("wide sidebar consumed narrow transcript space")
 	}
 }

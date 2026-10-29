@@ -34,6 +34,10 @@ func TestCapabilitiesOfflineDoesNotReadConfigOrCreateState(t *testing.T) {
 	if data["recovery"].(map[string]any)["automaticMutationReplay"] != false {
 		t.Fatal("recovery contract changed")
 	}
+	workflows := data["nativeWorkflows"].(map[string]any)
+	if workflows["priorityBacklogScheduler"] != false || workflows["defaultEnvironmentBridge"] != false || workflows["requiresAdapterFeature"] != "nativeWorkflows" {
+		t.Fatal("offline capability report invented unavailable native authority")
+	}
 	files, err := os.ReadDir(dir)
 	if err != nil || len(files) != 0 {
 		t.Fatalf("offline capabilities accessed files: %v %v", files, err)

@@ -185,11 +185,11 @@ func (m *Model) launchView(width, height int) string {
 	location := launchLocation(f.review.Location)
 	message := m.modalInput.View()
 	if f.preservedMessage != "" {
-		message = p.subtle().Render("Exact first message preserved · Ctrl+L review · Editor")
+		message = p.subtle().Render("Exact first message preserved · " + m.actionBinding("info").Help().Key + " Info · Editor")
 	}
 	title := m.launchTitle.View()
 	if f.preservedTitle != "" {
-		title = p.subtle().Render("Exact title preserved · Ctrl+L review")
+		title = p.subtle().Render("Exact title preserved · " + m.actionBinding("info").Help().Key + " Info")
 	}
 	var controls []string
 	for i, action := range m.launchActions() {

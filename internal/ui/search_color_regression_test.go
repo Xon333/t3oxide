@@ -44,9 +44,9 @@ func TestSearchColorPreservesStyledUnicodeThroughRouter(t *testing.T) {
 			beforeViewport := m.viewport
 			original := m.viewport.GetContent()
 
-			// Route the command through the real composer and Enter handler.
+			// Route the command through the real composer and explicit Send.
 			m.Update(tea.PasteMsg{Content: "/search mARKDOWN"})
-			m.Update(keyPress(tea.KeyEnter))
+			m.Update(keyPress(']', tea.ModCtrl))
 			if m.searchTerm != "mARKDOWN" || len(m.searchLines) != 2 {
 				t.Fatalf("search not routed: term=%q lines=%v", m.searchTerm, m.searchLines)
 			}
@@ -89,7 +89,7 @@ func TestSearchColorPreservesStyledUnicodeThroughRouter(t *testing.T) {
 			}
 			m.Update(keyPress(tea.KeyTab))
 			m.Update(tea.PasteMsg{Content: "/search absent"})
-			m.Update(keyPress(tea.KeyEnter))
+			m.Update(keyPress(']', tea.ModCtrl))
 			if m.searchIndex != -1 || m.viewport.StyleLineFunc != nil {
 				t.Error("no-match search did not clear the selected line style")
 			}

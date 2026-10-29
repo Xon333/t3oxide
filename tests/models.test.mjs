@@ -161,17 +161,25 @@ test('launch validation permits new-thread-only models but rejects stale options
 
 async function durableFixture(t) {
   const dir=await mkdtemp(join(tmpdir(),'t3oxide-models-'));t.after(()=>rm(dir,{recursive:true,force:true}));
-  const state={p:projection(),config:sourceCatalog(),calls:[],tags:[],reads:0,catalogReads:0,fail:false};
+  const state={p:projection(),created:new Map(),config:sourceCatalog(),calls:[],tags:[],reads:0,catalogReads:0,fail:false};
   const backend=()=>{
     const journal=new Journal(join(dir,'journal'),hash({environment:'env-a',subject:'fixture-models'}));
     const server=new T3({environmentId:'env-a',allowWrites:true},()=>{},{journal});
     server.descriptor=desc;server.connect=async()=>{};
-    server.bounded=async()=>{state.reads++;return {projection:structuredClone(state.p),snapshotSequence:12};};
+    server.bounded=async id=>{state.reads++;return {projection:structuredClone(state.created.get(id)??state.p),snapshotSequence:12};};
     server.rpc={close(){},call(tag,payload){
       if(tag==='server.getConfig'){state.catalogReads++;return {promise:Promise.resolve(structuredClone(state.config))};}
       state.calls.push(structuredClone(payload));
       state.tags.push(tag);
       if(payload.type==='thread.model-selection.set')state.p.thread.modelSelection=structuredClone(payload.modelSelection);
+      if(tag==='orchestration.launchThread') {
+        const created=projection();
+        created.thread={...created.thread,id:payload.threadId,projectId:payload.projectId,modelSelection:payload.modelSelection,runtimeMode:payload.runtimeMode,interactionMode:payload.interactionMode};
+        created.thread.worktreePath=payload.workspaceStrategy.type==='root'?null:payload.workspaceStrategy.worktreePath;
+        created.thread.branch=payload.workspaceStrategy.branch??null;
+        created.runs=[{id:'created-run',status:'running',userMessageId:payload.initialMessage.messageId}];
+        state.created.set(payload.threadId,created);
+      }
       return {promise:state.fail?Promise.reject(new Fault('disconnected','Lost ACK',true)):
         Promise.resolve(tag==='orchestration.launchThread'?{threadId:payload.threadId}:{sequence:13})};
     }};
@@ -241,7 +249,7 @@ test('fresh launch rejects missing model, stale options, changed account, and un
     await assert.rejects(backend().act('launch',launchAction));assert.deepEqual(state.calls,[]);
   });
 });
-test('uncertain launch restart retries the exact journalled payload without reading changed context or catalog',async t=>{
+test('uncertain legacy launch restart reconciles exact journalled native identity without replay or changed source catalog',async t=>{
   const {state,backend}=await durableFixture(t);let s=backend();state.fail=true;
   await assert.rejects(s.act('launch',launchAction),{uncertain:true});
   const prepared=s.journal.access(launchAction.id,hash({op:'launch',...launchAction}));
@@ -249,12 +257,12 @@ test('uncertain launch restart retries the exact journalled payload without read
   assert.deepEqual(prepared.payload,state.calls[0]);s.close();
   state.config.providers=[];state.p.thread={id:'thread-a',projectId:'different-project',worktreePath:'/fixture/changed',modelSelection:{instanceId:'other-account',model:'changed'}};
   state.fail=false;s=backend();await new Promise(resolve=>setImmediate(resolve));assert.equal(state.calls.length,1);
-  assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id});
-  assert.equal(state.reads,1);assert.equal(state.catalogReads,1);assert.deepEqual(state.calls[1],prepared.payload);
-  assert.deepEqual(s.journal.access(launchAction.id,hash({op:'launch',...launchAction})).result,{threadId:launchAction.id});
+  assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id,reconciled:true});
+  assert.equal(state.reads,2);assert.equal(state.catalogReads,1);assert.equal(state.calls.length,1);
+  assert.deepEqual(s.journal.access(launchAction.id,hash({op:'launch',...launchAction})).result,{threadId:launchAction.id,reconciled:true});
   await assert.rejects(s.act('launch',{...launchAction,modelSelection:current}),{code:'invalid_request'});
-  s.close();s=backend();assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id});
-  assert.equal(state.calls.length,2);assert.equal(state.reads,1);assert.equal(state.catalogReads,1);
+  s.close();s=backend();assert.deepEqual(await s.act('launch',launchAction),{threadId:launchAction.id,reconciled:true});
+  assert.equal(state.calls.length,1);assert.equal(state.reads,2);assert.equal(state.catalogReads,1);
 });
 test('read-only launch selection refuses all reads and writes',async t=>{
   const {state,backend}=await durableFixture(t),s=backend();s.config.allowWrites=false;

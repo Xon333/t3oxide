@@ -17,17 +17,12 @@ func TestWorkspaceToolbarCommandsReturnToInvokingPane(t *testing.T) {
 	m.restoreFocus()
 	draft, target, snapshot := m.currentDraft(), m.status.ThreadID, m.snapshot
 	m.View()
-	var button *hitZone
-	for i := range m.hitZones {
-		if z := &m.hitZones[i]; z.action == "toolbar" && z.args == "commands" {
-			button = z
-			break
+	for _, z := range m.hitZones {
+		if z.action == "toolbar" && (z.args == "commands" || z.args == "context") {
+			t.Fatal("removed decorative toolbar control retained an invisible click target")
 		}
 	}
-	if button == nil {
-		t.Fatal("visible Commands has no matching mouse target")
-	}
-	m.mouseClick(tea.MouseClickMsg{X: button.x, Y: button.y, Button: tea.MouseLeft})
+	m.handleKey(keyPress('p', tea.ModCtrl))
 	if m.dialog == nil || m.dialog.local != "palette" || m.composer.Focused() {
 		t.Fatal("toolbar failed to open Commands exclusively")
 	}
@@ -104,7 +99,7 @@ func TestWorkspaceContextSelectionScrollAndInspectionIdentity(t *testing.T) {
 		m.contextKey(keyPress(tea.KeyDown))
 	}
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "> Activity item 23") || m.contextFocusKey != "design/item-23" {
+	if !strings.Contains(view, "> + Activity item 23") || m.contextFocusKey != "design/item-23" {
 		t.Fatal("keyboard focus reached an invisible or different activity")
 	}
 	visibleHit := false

@@ -12,11 +12,12 @@ import (
 // Native bindings own both dispatch and help, following Bubbles/Huh and
 // LazyGit's contextual ownership. Editors keep their upstream keymaps.
 type appKeyMap struct {
-	Stop, Quit, Help, Palette, Threads, Environments key.Binding
-	Requests, Search, Sidebar, Model, Effort, Speed  key.Binding
-	Parent, Earlier, Latest, Copy, Detail, Focus     key.Binding
-	Clear, Edit, Recall, Literal, Dismiss, Send      key.Binding
-	Error                                            key.Binding
+	Stop, Quit, Help, Palette, Threads, Environments            key.Binding
+	Requests, Search, Sidebar, Model, Effort, Speed             key.Binding
+	Parent, Earlier, Latest, Copy, Detail, Focus                key.Binding
+	Clear, Edit, Recall, Literal, Dismiss, Send                 key.Binding
+	Error, Steer, New, NewSame, Settings, Refresh, Filter, Mode key.Binding
+	FocusBack, FocusNavigation, FocusComposer                   key.Binding
 }
 
 func bind(label, description string, keys ...string) key.Binding {
@@ -30,63 +31,26 @@ func optionKey(key string) string {
 	return "Alt+" + key
 }
 
-var applicationKeys = appKeyMap{
-	Stop: bind("Ctrl+S", "Stop/hold", "ctrl+s"), Quit: bind("Ctrl+Q", "exit", "ctrl+q"),
-	Help: bind("/help", "help", "f1"), Palette: bind("Ctrl+P", "commands", "ctrl+p", "ctrl+space", "ctrl+@", "f3"),
-	Threads: bind("Ctrl+O", "browser", "ctrl+o", "f6"), Environments: bind("Ctrl+E", "environments", "ctrl+e"),
-	Requests: bind("Ctrl+R", "requests", "ctrl+r"), Search: bind("Ctrl+F", "find", "ctrl+f"),
-	Sidebar: bind("Ctrl+B", "context", "ctrl+b"), Model: bind(optionKey("M"), "model", "alt+m"),
-	Effort: bind(optionKey("E"), "effort", "alt+e"), Speed: bind(optionKey("S"), "speed", "alt+s"),
-	Parent: bind(optionKey("↑"), "parent", "alt+up"), Earlier: bind(optionKey("←"), "earlier", "alt+left"),
-	Latest: bind(optionKey("→"), "latest", "alt+right"), Copy: bind("Ctrl+Y", "copy", "ctrl+y"),
-	Detail: bind("Ctrl+L", "details", "ctrl+l", "f2"), Focus: bind("Tab", "read/write", "tab"),
-	Clear: bind("Ctrl+X", "clear draft", "ctrl+x"), Edit: bind("/edit", "editor", "f4"),
-	Recall: bind("/recall", "prompts", "f5"), Literal: bind("Ctrl+Enter", "send text", "ctrl+enter"),
-	Dismiss: bind("Esc", "back", "esc"), Send: bind("Enter", "send", "enter"),
-	Error: bind("/error", "error", "f8"),
-}
-
 func (m *Model) keyMap() appKeyMap {
-	k := applicationKeys
-	legacy := m.settings != nil && m.settings.legacyEditorCtrlP()
+	k := appKeyMap{
+		Stop: m.actionBinding("stop"), Quit: m.actionBinding("quit"), Help: m.actionBinding("help"), Palette: m.actionBinding("palette"),
+		Threads: m.actionBinding("switch"), Environments: m.actionBinding("environments"), Requests: m.actionBinding("requests"), Search: m.actionBinding("search"),
+		Sidebar: m.actionBinding("sidebar"), Model: m.actionBinding("model"), Effort: m.actionBinding("effort"), Speed: m.actionBinding("speed"),
+		Parent: m.actionBinding("parent"), Earlier: m.actionBinding("earlier"), Latest: m.actionBinding("latest"), Copy: m.actionBinding("copy"),
+		Detail: m.actionBinding("info"), Focus: m.actionBinding("focus-next"), FocusBack: m.actionBinding("focus-previous"),
+		Clear: m.actionBinding("clear"), Edit: m.actionBinding("edit"), Recall: m.actionBinding("recall"), Literal: m.actionBinding("send-literal"),
+		Dismiss: m.actionBinding("dismiss"), Send: m.actionBinding("send"), Steer: m.actionBinding("steer"), Error: m.actionBinding("error"),
+		New: m.actionBinding("new"), NewSame: m.actionBinding("new-same"), Settings: m.actionBinding("settings"), Refresh: m.actionBinding("refresh"),
+		Filter: m.actionBinding("filter"), Mode: m.actionBinding("mode"), FocusNavigation: m.actionBinding("focus-navigation"), FocusComposer: m.actionBinding("focus-composer"),
+	}
 	normal := m.detail == "" && m.dialog == nil && !m.searching && !m.browserPage && !m.launchPage
-	reading := normal && m.transcriptFocus
-	k.Error.SetEnabled(m.problem != "" || m.streamProblem != "")
-	if m.searching || m.dialog != nil && m.dialog.prompt != nil {
-		k.Palette.SetHelp("Ctrl+P", "commands")
-	}
-	for _, b := range []*key.Binding{&k.Threads, &k.Requests, &k.Model, &k.Effort, &k.Speed, &k.Parent, &k.Focus, &k.Edit, &k.Clear, &k.Recall, &k.Literal, &k.Send} {
-		b.SetEnabled(normal)
-	}
-	for _, b := range []*key.Binding{&k.Environments, &k.Search, &k.Sidebar, &k.Earlier, &k.Latest} {
-		b.SetEnabled(reading)
-	}
-	for _, b := range []*key.Binding{&k.Model, &k.Effort, &k.Speed, &k.Parent} {
-		b.SetEnabled(reading)
-	}
-	if normal && (m.transcriptFocus || m.currentDraft() == "") {
-		k.Threads.SetKeys("ctrl+o", "f6", "ctrl+t")
-		k.Quit.SetKeys("ctrl+q", "ctrl+d")
-	}
-	if legacy && (m.searching || m.dialog != nil || normal && !m.transcriptFocus && m.currentDraft() != "") {
-		k.Palette.SetKeys("ctrl+space", "ctrl+@", "f3")
-		if normal {
-			k.Palette.SetHelp("Shift+Tab→Ctrl+P", "commands")
-		} else {
-			k.Palette.SetHelp("F3", "commands")
+	if !normal {
+		for _, b := range []*key.Binding{&k.Threads, &k.Requests, &k.Model, &k.Effort, &k.Speed, &k.Parent, &k.Focus, &k.FocusBack, &k.Edit, &k.Clear, &k.Recall, &k.Literal, &k.Send, &k.Steer, &k.New, &k.NewSame, &k.Settings, &k.Refresh, &k.Filter, &k.FocusNavigation, &k.FocusComposer} {
+			b.SetEnabled(false)
 		}
 	}
-	if reading {
-		k.Focus.SetHelp("Tab", "focus")
-		k.Help.SetKeys("f1", "?")
-		k.Help.SetHelp("?", "help")
-		k.Search.SetKeys("ctrl+f", "/")
-		k.Search.SetHelp("/", "find in page")
-	}
-	k.Edit.SetEnabled(normal && !m.transcriptFocus)
-	k.Clear.SetEnabled(normal && !m.transcriptFocus && m.currentDraft() != "")
-	k.Literal.SetEnabled(normal && !m.transcriptFocus)
-	k.Send.SetEnabled(normal && !m.transcriptFocus)
+	k.Error.SetEnabled(k.Error.Enabled() && (m.problem != "" || m.streamProblem != ""))
+	k.Clear.SetEnabled(k.Clear.Enabled() && m.currentDraft() != "")
 	return k
 }
 
@@ -100,7 +64,7 @@ func (h contextHelp) FullHelp() [][]key.Binding { return h.full }
 
 func (m *Model) helpMap() contextHelp {
 	k := m.keyMap()
-	global := []key.Binding{k.Help, k.Palette, k.Stop, k.Quit, k.Error}
+	global := []key.Binding{k.Help, k.Palette, k.Stop, k.Quit, k.Mode, k.Error}
 	var active []key.Binding
 	switch {
 	case m.detail != "":
@@ -108,7 +72,7 @@ func (m *Model) helpMap() contextHelp {
 	case m.dialog != nil:
 		active = []key.Binding{bind("Enter", "select", "enter"), k.Detail, k.Dismiss}
 		if m.dialog.details {
-			active = []key.Binding{bind("Ctrl+L", "back", "ctrl+l", "f2"), k.Dismiss, m.questionViewport.KeyMap.Up, m.questionViewport.KeyMap.Down}
+			active = []key.Binding{k.Detail, k.Dismiss, m.questionViewport.KeyMap.Up, m.questionViewport.KeyMap.Down}
 		} else if m.dialog.kind == client.EnterText {
 			active = []key.Binding{bind("Enter", "answer", "enter"), m.modalInput.KeyMap.InsertNewline, k.Detail, k.Dismiss}
 		} else if m.dialog.kind == client.ChooseMany {
@@ -118,14 +82,24 @@ func (m *Model) helpMap() contextHelp {
 				active = []key.Binding{bind("Enter", "toggle", "enter"), bind("Tab", "continue", "tab"), k.Detail, k.Dismiss}
 			}
 		}
+		if m.dialog.requestForm != nil && !m.dialog.details {
+			active = append(active, m.actionBinding("request-submit"))
+		}
+		if !m.dialog.details {
+			active = append(active, m.actionBinding("browser.search"), m.actionBinding("browser.filter"))
+		}
 	case m.searching:
 		active = []key.Binding{bind("Enter", "find", "enter"), k.Dismiss}
+	case m.agentboxOwnsKeys():
+		active = []key.Binding{m.actionBinding("agentbox.open"), m.actionBinding("agentbox.reply"), m.actionBinding("agentbox.file"), m.actionBinding("agentbox.diff"), m.actionBinding("agentbox.inbox")}
+	case m.mode == "agentbox" && m.agentbox.reply:
+		active = []key.Binding{k.Send, k.Steer, m.composer.KeyMap.InsertNewline}
 	case m.navigator.focused && m.navigationVisible():
-		active = []key.Binding{bind("Enter", "open", "enter"), bind("Tab", "focus", "tab"), bind("Ctrl+F", "search all", "ctrl+f")}
+		active = []key.Binding{bind("Enter", "open", "enter"), k.Focus, k.Search, m.actionBinding("navigator.more")}
 	case m.activityFocused:
-		active = []key.Binding{bind("Enter", "inspect", "enter"), bind("a", "activity", "a"), bind("Tab", "focus", "tab")}
+		active = []key.Binding{bind("Enter", "inspect", "enter"), bind("a", "activity", "a"), k.Focus}
 	case m.contextFocused && m.contextVisible():
-		active = []key.Binding{bind("Enter", "inspect", "enter"), bind("Tab", "focus", "tab")}
+		active = []key.Binding{bind("Enter", "inspect", "enter"), k.Focus}
 	case m.transcriptFocus:
 		active = []key.Binding{k.Focus, k.Search, k.Earlier, k.Latest, k.Copy}
 	default:
@@ -156,7 +130,9 @@ func (m *Model) helpMap() contextHelp {
 			short = append(short, k.Requests)
 		}
 		short = append(short, k.Palette)
-		if m.activityFocused || m.navigator.focused && m.navigationVisible() || m.contextFocused && m.contextVisible() {
+		if m.mode == "agentbox" {
+			short = append(short, active...)
+		} else if m.activityFocused || m.navigator.focused && m.navigationVisible() || m.contextFocused && m.contextVisible() {
 			short = append(short, active...)
 		} else if m.transcriptFocus {
 			short = append(short, k.Search, k.Help, k.Focus, k.Earlier, k.Latest, k.Copy)
@@ -168,7 +144,7 @@ func (m *Model) helpMap() contextHelp {
 	}
 	full := [][]key.Binding{global, active}
 	if m.detail == "" && m.dialog == nil && !m.searching {
-		full = append(full, []key.Binding{k.Threads, k.Environments, k.Requests, k.Model, k.Effort, k.Speed, k.Parent, k.Sidebar, k.Edit, k.Clear, k.Recall, k.Literal})
+		full = append(full, []key.Binding{k.Threads, k.Environments, k.Requests, k.Model, k.Effort, k.Speed, k.Parent, k.Sidebar, k.Edit, k.Clear, k.Recall, k.Literal, k.Steer, k.New, k.NewSame, k.Settings, k.Mode})
 		if !m.transcriptFocus {
 			e := m.composer.KeyMap
 			full = append(full, []key.Binding{e.LineStart, e.LineEnd, e.CharacterBackward, e.CharacterForward, e.WordBackward, e.WordForward, e.LinePrevious, e.LineNext, e.DeleteBeforeCursor, e.DeleteAfterCursor, e.DeleteCharacterForward, e.Paste, e.TransposeCharacterBackward})
@@ -195,9 +171,11 @@ func (m *Model) helpText() string {
 		}
 		parts = append(parts, line+"  "+spec.title)
 	}
-	parts = append(parts, "RECOVERY\nCtrl+C dismisses locally and keeps the draft. Ctrl+X clears it into /recall prompt history. Local exit leaves T3 running. Stop holds the reviewed turn's queue; retries reuse the saved operation ID.\n\nPORTABLE CONTROLS\nCtrl+P opens Commands without changing draft text. /new, /settings, /edit, /recall, /error and /details are also available. Ctrl+G selects all in the editor. /keyboard legacy restores editor Ctrl+P; Shift+Tab then Ctrl+P opens Commands, including from slash completion. /keyboard modern restores the default.")
-	if runtime.GOOS == "darwin" {
-		parts = append(parts, "⌥ is Option. Chords depend on terminal mapping; the Ghostty launcher uses left Option as Alt. Slash commands remain available regardless of terminal key mapping.")
-	}
+	composer := func(id string) string { return m.actionBindingFor(id, "composer").Help().Key }
+	parts = append(parts,
+		"RECOVERY\nCtrl+C dismisses locally and keeps the draft. "+composer("clear")+" clears it into /recall prompt history. Local exit leaves T3 running. Ctrl+S Stop has an independent lane; retries preserve the saved operation ID.",
+		"COMPOSER\nEnter inserts a newline. "+composer("send")+" sends or executes a recognized single-line command. "+composer("send-literal")+" sends literal text, including a slash command. "+composer("steer")+" explicitly steers without changing the selected delivery preference. Request Submit remains a separate explicit form action.",
+		"CONTROLS\n"+composer("palette")+" opens Commands from the composer. /keyboard legacy retains previous-line Ctrl+P editing; /keyboard modern restores its Commands shortcut. Ctrl+G selects all inside editors. /info (also /details), /new, /new-same, /review, /mode, /shortcuts and /help remain discoverable in Commands.",
+		"TERMINAL KEYS\nCommand/Super aliases marked * work only when delivered by the terminal. Ctrl+I stays Tab and Ctrl+Backspace stays deletion. No terminal or OS settings are changed. /shortcuts shows every resolved manual-file binding; docs/shortcuts.md lists the portable defaults.")
 	return strings.Join(parts, "\n\n")
 }

@@ -192,13 +192,27 @@ func (r *tuiProgram) waitEmptyComposer() {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		view := r.views.text()
-		if strings.Contains(view, "Ctrl+P commands") {
+		if strings.Contains(view, "commands") {
+			inComposer := false
 			for _, line := range strings.Split(view, "\n") {
-				row := strings.TrimSpace(line)
-				row = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(row, "│"), "│"))
-				if row == "›" {
+				if strings.Contains(line, "╭─") && (strings.Contains(line, "Message") || strings.Contains(line, "Next send") || strings.Contains(line, "Reply ·")) {
+					inComposer = true
+					continue
+				}
+				if !inComposer {
+					continue
+				}
+				// The final bordered field is the actual composer. The
+				// unified navigator may occupy columns before its frame.
+				right := strings.LastIndex(line, "│")
+				if right < 0 {
+					break
+				}
+				left := strings.LastIndex(line[:right], "│")
+				if left >= 0 && strings.TrimSpace(line[left+len("│"):right]) == "›" {
 					return
 				}
+				break
 			}
 		}
 		time.Sleep(15 * time.Millisecond)
@@ -216,13 +230,13 @@ func TestBubbleTeaProgramDrivesActualAppComposerThemeResizeAndQuit(t *testing.T)
 	r, settingsPath := startAppTUI(t, a)
 	r.waitText("Alpha")
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "running") })
-	r.send("Message through the actual composer\r")
+	r.send("Message through the actual composer\x1d")
 	f.waitMessage(t, "Message through the actual composer")
 	r.waitText("Response after Message")
 	if state.Pending("env-a", false) != nil {
 		t.Fatal("composer success did not acknowledge operation")
 	}
-	r.send("/theme cyan\r")
+	r.send("/theme cyan\x1d")
 	deadline := time.Now().Add(5 * time.Second)
 	changed := false
 	for time.Now().Before(deadline) {
@@ -254,7 +268,7 @@ func TestBubbleTeaProgramDrivesActualAppComposerThemeResizeAndQuit(t *testing.T)
 	}
 	r.program.Send(tea.WindowSizeMsg{Width: 160, Height: 42})
 	// Ctrl+U clears this unsent buffer; it is not a remote stop.
-	r.send("\x15/quit\r")
+	r.send("\x15/quit\x1d")
 	select {
 	case <-r.done:
 		if r.err != nil {
@@ -302,9 +316,9 @@ func TestBubbleTeaTerminalThemeStartsInheritedAndReleasesFixedColors(t *testing.
 		}
 		t.Fatal("native renderer did not apply/reset terminal colors")
 	}
-	r.send("/theme cyan\r")
+	r.send("/theme cyan\x1d")
 	awaitOutput(func(raw string) bool { return strings.Contains(raw, "\x1b]10;") && strings.Contains(raw, "\x1b]11;") })
-	r.send("/theme terminal\r")
+	r.send("/theme terminal\x1d")
 	awaitOutput(func(raw string) bool {
 		return strings.LastIndex(raw, "\x1b]110") > strings.LastIndex(raw, "\x1b]10;") && strings.LastIndex(raw, "\x1b]111") > strings.LastIndex(raw, "\x1b]11;")
 	})
@@ -312,7 +326,7 @@ func TestBubbleTeaTerminalThemeStartsInheritedAndReleasesFixedColors(t *testing.
 	if err != nil || !strings.Contains(string(data), `"theme": "terminal"`) {
 		t.Fatalf("terminal theme did not persist: %s, %v", data, err)
 	}
-	r.send("/quit\r")
+	r.send("/quit\x1d")
 	select {
 	case <-r.done:
 		if r.err != nil {
@@ -361,8 +375,8 @@ func TestBubbleTeaProgramThreadSwitchHistoryReconnectAndSearch(t *testing.T) {
 	}
 	r, _ := startAppTUI(t, a)
 	r.waitText("Initial Markdown for Alpha")
-	r.send("/switch Beta\r")
-	r.modalReady("Conversations")
+	r.send("/switch Beta\x1d")
+	waitNavigatorQuery(t, r, "Beta")
 	r.send("\r")
 	r.waitText("Initial Markdown for Beta")
 	f.update("thread-a", "A retired conversation must not render here", 0)
@@ -371,12 +385,12 @@ func TestBubbleTeaProgramThreadSwitchHistoryReconnectAndSearch(t *testing.T) {
 	if strings.Contains(r.views.history(), "A retired conversation must not render here") {
 		t.Fatal("old conversation update crossed a UI attachment generation")
 	}
-	r.send("/earlier\r")
+	r.send("/earlier\x1d")
 	r.waitText("Earlier page for thread-b")
 	f.update("thread-b", "Beta changed while reading an earlier page", 0)
-	r.send("/latest\r")
+	r.send("/latest\x1d")
 	r.waitText("Beta changed while reading an earlier page")
-	r.send("/search Beta changed\r")
+	r.send("/search Beta changed\x1d")
 	r.waitText("Find 1/1 matching lines")
 	r.send("Unsent β draft after search")
 	deadline := time.Now().Add(3 * time.Second)
@@ -421,7 +435,7 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	r, _ := startAppTUI(t, a)
 	r.waitText("Alpha")
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "awaiting input (2)") })
-	r.send("/requests\r")
+	r.send("/requests\x1d")
 	r.modalReady("Pending T3 requests")
 	r.send("\r")
 	r.modalReady("Once")
@@ -434,7 +448,7 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	// The host projection can arrive before the program consumes actionDone.
 	// Wait for its empty composer before typing another slash command.
 	r.waitEmptyComposer()
-	r.send("/requests\r")
+	r.send("/requests\x1d")
 	r.modalReady("Choice")
 	r.send("Continue\t")
 	r.waitText("[Next]")
@@ -471,7 +485,7 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 		t.Fatal("question acknowledgement did not settle")
 	}
 	r.waitEmptyComposer()
-	r.send("/quit\r")
+	r.send("/quit\x1d")
 	select {
 	case <-r.done:
 		if r.err != nil {

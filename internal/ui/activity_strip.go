@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"path"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/wire"
 )
@@ -29,7 +31,7 @@ func (m *Model) recentActivity() *wire.ActivityItem {
 
 func (m *Model) activityStripRows() int {
 	if m.recentActivity() != nil {
-		return 1
+		return 2 // a quiet separating row, then the compact activity itself
 	}
 	return 0
 }
@@ -39,24 +41,7 @@ func (m *Model) activityStripView(width int) string {
 	if item == nil {
 		return ""
 	}
-	kind := strings.ReplaceAll(item.Kind, "_", " ")
-	switch item.Kind {
-	case "command_execution":
-		kind = "Command"
-	case "file_change":
-		kind = "Files"
-	case "dynamic_tool":
-		kind = "Tool"
-	case "subagent":
-		kind = "Subagent"
-	case "web_search":
-		kind = "Web search"
-	case "file_search":
-		kind = "File search"
-	case "todo_list":
-		kind = "Tasks"
-	}
-	text := "Activity · " + kind + " · " + item.Status + "  " + activityLabel(*item)
+	text := navigatorStatus(item.Status) + " " + activityLabel(*item)
 	if item.Truncated {
 		text += " …"
 	}
@@ -76,14 +61,20 @@ func (m *Model) focusActivity() tea.Cmd {
 	if item := m.recentActivity(); item != nil {
 		m.activityFocusKey = item.Key
 	}
-	m.resizeNavigator()
-	return m.restoreFocus()
+	return m.resizeWorkspaceFocus()
 }
 
 func (m *Model) activityKey(msg tea.KeyPressMsg) tea.Cmd {
+	k := m.keyMap()
+	switch {
+	case key.Matches(msg, k.Focus), key.Matches(msg, k.FocusBack):
+		return m.cycleWorkspace(key.Matches(msg, k.Focus))
+	case key.Matches(msg, k.Threads):
+		return m.focusNavigator()
+	case key.Matches(msg, k.Search):
+		return m.beginSearch()
+	}
 	switch msg.String() {
-	case "tab", "shift+tab":
-		return m.cycleWorkspace(msg.String() == "tab")
 	case "esc":
 		m.activityFocused = false
 		m.transcriptFocus = true
@@ -97,13 +88,6 @@ func (m *Model) activityKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.execute("activity", item.Key)
 	case "a":
 		return m.execute("activity", "")
-	case "ctrl+o":
-		if m.navigationVisible() {
-			return m.focusNavigator()
-		}
-		return m.execute("switch", "")
-	case "ctrl+r":
-		return m.execute("requests", "")
 	}
 	return nil
 }
@@ -111,15 +95,32 @@ func (m *Model) activityKey(msg tea.KeyPressMsg) tea.Cmd {
 func activityLabel(item wire.ActivityItem) string {
 	summary, _, _ := strings.Cut(safeText(item.Summary), "\n")
 	title := safeText(item.Title)
-	if summary == "" {
-		return title
+	if item.Kind == "command_execution" || strings.EqualFold(title, "command") {
+		// This is display-only lexical shortening, deliberately not a shell
+		// parser. Quotes, variables and command strings are never evaluated.
+		fields := strings.Fields(summary)
+		if len(fields) > 0 && !strings.ContainsAny(fields[0], "=\"'`$;") {
+			return path.Base(fields[0])
+		}
+		return "Command"
 	}
-	switch strings.ToLower(title) {
-	case "command", "file change", "file search", "web search", "subagent", "tasks", "tool":
-		return summary
+	if strings.EqualFold(title, "tool") || title == "" {
+		title = summary
 	}
-	if title == summary {
-		return title
+	if head, _, found := strings.Cut(title, " · "); found {
+		title = head
 	}
-	return title + " · " + summary
+	if item.Kind == "dynamic_tool" {
+		if fields := strings.Fields(title); len(fields) > 0 {
+			title = fields[0]
+		}
+		if strings.HasPrefix(title, "mcp__") {
+			parts := strings.Split(title, "__")
+			title = parts[len(parts)-1]
+		}
+	}
+	if title == "" {
+		title = strings.ReplaceAll(item.Kind, "_", " ")
+	}
+	return title
 }

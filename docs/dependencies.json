@@ -5,7 +5,7 @@
     "sha": "91ef2df0c51cf60fc9bacaa85970a173a6f76a0f",
     "url": "https://github.com/Xon333/t3oxide/commit/91ef2df0c51cf60fc9bacaa85970a173a6f76a0f"
   },
-  "go_minimum": "1.26.0",
+  "go_minimum": "1.26.10",
   "dependencies": [
     {
       "name": "bubbletea",
@@ -89,5 +89,12 @@
     "node": "v24.19.0",
     "dependency_change": "No Go module versions or Node dependencies changed; t3term MIT attribution added.",
     "builds": "Linux/amd64 and Darwin/arm64 cross-build; Darwin has Go linker-generated ad-hoc signature, not macOS-verified. Native checks remain separate."
+  },
+  "integrated_2026_10_29": {
+    "go_toolchain": "go1.26.10 linux/amd64",
+    "reason": "Minimum patched toolchain raised after maintained scanner found reachable GO-2026-6218, GO-2026-6088 and GO-2026-4601 under go1.26.0. Final scanner results recorded separately.",
+    "application_modules": "No dependency module version or go.sum changes.",
+    "upstream_source_target": "783581d461dc72cdd8f78fc8abb4ad536dfc4547",
+    "installed_compatibility": "Pending; source research and fixtures do not verify installed hosts."
   }
 }

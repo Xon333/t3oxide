@@ -33,14 +33,19 @@ func TestWorkspaceProgramRailAndToolClickPreserveAttachmentUntilOpen(t *testing.
 	r, _ := startAppTUI(t, session)
 	r.waitText("Initial Markdown for Alpha")
 	r.program.Send(tea.WindowSizeMsg{Width: 120, Height: 35})
-	r.waitText("Fixture ▾")
+	waitWorkspaceFrame(t, r, func(view string) bool {
+		lines := strings.Split(view, "\n")
+		return len(lines) == 35 && ansi.StringWidth(lines[0]) == 120
+	}, "120×35 workspace geometry")
+	r.waitText("All environments ▾")
 	r.waitText("Beta")
-	r.waitText("go test ./...")
+	r.waitText("> go")
 	if f.requestCounts()["rpc:orchestration.getTurnItem"] != 0 {
 		t.Fatal("visible activity fetched its output before inspection")
 	}
-	clickWorkspaceText(t, r, "go test ./...")
+	clickWorkspaceText(t, r, "> go")
 	r.waitText("workspace fixture test output")
+	r.waitText("go test ./...")
 	if f.requestCounts()["rpc:orchestration.getTurnItem"] != 1 {
 		t.Fatal("one source-bound click did not produce one lazy detail read")
 	}
@@ -49,7 +54,7 @@ func TestWorkspaceProgramRailAndToolClickPreserveAttachmentUntilOpen(t *testing.
 	}
 	r.send("\x1b")
 	waitWorkspaceFrame(t, r, func(view string) bool {
-		return strings.Contains(view, "go test ./...") && !strings.Contains(view, "workspace fixture test output")
+		return strings.Contains(view, "> go") && !strings.Contains(view, "workspace fixture test output")
 	}, "activity inspector dismissal")
 	r.send("\x10")
 	r.modalReady("Commands")
@@ -57,10 +62,7 @@ func TestWorkspaceProgramRailAndToolClickPreserveAttachmentUntilOpen(t *testing.
 	r.waitText("Earlier page for thread-a")
 	before := f.requestCounts()
 	r.send("\x0fBeta")
-	waitWorkspaceFrame(t, r, func(view string) bool {
-		lines := strings.Split(view, "\n")
-		return len(lines) > 3 && strings.HasPrefix(lines[3], "Beta")
-	}, "focused navigation query")
+	waitNavigatorQuery(t, r, "Beta")
 	if !strings.Contains(r.views.text(), "Earlier page for thread-a") || !session.Status().Historical || session.Status().ThreadID != "thread-a" || session.Draft() != draft {
 		t.Fatal("filtering navigation replaced historical attachment or exact draft")
 	}
@@ -84,6 +86,19 @@ func TestWorkspaceProgramRailAndToolClickPreserveAttachmentUntilOpen(t *testing.
 		t.Fatal("browsing and tool inspection dispatched a mutation")
 	}
 	quitIntuitiveProgram(t, r)
+}
+
+func waitNavigatorQuery(t *testing.T, r *tuiProgram, query string) {
+	t.Helper()
+	waitWorkspaceFrame(t, r, func(view string) bool {
+		for _, line := range strings.Split(view, "\n") {
+			left, _, _ := strings.Cut(line, "│")
+			if strings.TrimSpace(left) == query {
+				return true
+			}
+		}
+		return false
+	}, "focused navigation query "+query)
 }
 
 func clickWorkspaceText(t *testing.T, r *tuiProgram, text string) {

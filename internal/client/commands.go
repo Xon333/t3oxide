@@ -32,7 +32,9 @@ func CommandCatalog() []CommandSpec {
 		{Name: "delivery", Description: "Set T3 delivery: auto, queue, or steer"},
 		{Name: "stop", Description: "Stop reviewed active turn with queue hold (Ctrl+S)"},
 		{Name: "requests", Description: "Review exact pending T3 approvals and questions"},
-		{Name: "new", Description: "New conversation using this existing workspace"},
+		{Name: "new", Description: "New conversation using native defaults in an existing project"},
+		{Name: "new-same", Description: "New conversation carrying only the current project"},
+		{Name: "retry-launch", Description: "Reconcile an uncertain native launch using its original identity"},
 		{Name: "pending", Description: "Inspect saved operation IDs and original intent"},
 		{Name: "retry", Description: "Explicit same-ID retry; /retry stop for Stop lane"},
 		{Name: "resolve", Description: "Review and clear a local retry record; optional stop"},
@@ -171,7 +173,11 @@ func (a *Session) invoke(ctx context.Context, name, args string) (Result, error)
 		result.DetailTitle, result.Detail = "Full T3", *env.WebURL
 		return result, nil
 	case "new":
-		return a.newConversation(ctx, args)
+		return a.NewConversation(ctx, args, false, false)
+	case "new-same":
+		return a.NewConversation(ctx, args, true, false)
+	case "retry-launch":
+		return a.RetryLaunch(ctx)
 	default:
 		return result, fmt.Errorf("unsupported command /%s", name)
 	}

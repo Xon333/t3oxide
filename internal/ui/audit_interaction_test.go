@@ -30,6 +30,12 @@ func TestAuditInteractionCommandSearchAndBoundVariants(t *testing.T) {
 	if ranks := commandFilter("keys", targets); len(ranks) == 0 || items[ranks[0].Index].(choiceItem).command != "help" {
 		t.Fatal("help alias not indexed")
 	}
+	for title, command := range map[string]string{"Conversations": "switch", "New conversation": "new", "Info": "info", "Model": "model", "File multiple tasks": "file-many"} {
+		ranks := commandFilter(title, targets)
+		if len(ranks) == 0 || items[ranks[0].Index].(choiceItem).command != command {
+			t.Fatalf("visible title %q was outranked by another command's description", title)
+		}
+	}
 	for _, query := range []string{"copy draft", "retry stop", "resolve stop"} {
 		ranks := commandFilter(query, targets)
 		if len(ranks) == 0 {
@@ -447,10 +453,10 @@ func TestAuditInteractionFormDetailsUsesFocusedSource(t *testing.T) {
 	}
 	m.handleKey(keyPress('l', tea.ModCtrl))
 	m.openPalette()
-	m.dialog.list.SetFilterText("details")
-	m.dialog.filterQuery = "details"
+	m.dialog.list.SetFilterText("info")
+	m.dialog.filterQuery = "info"
 	m.chooseDialog()
 	if !m.dialog.details || !strings.Contains(m.dialog.detailText, "source-thread") {
-		t.Fatal("palette Details differs from Ctrl+L")
+		t.Fatal("palette Info differs from Ctrl+L")
 	}
 }

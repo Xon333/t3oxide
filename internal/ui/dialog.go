@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/client"
@@ -44,6 +45,12 @@ func (i choiceItem) FilterValue() string {
 	aliases := ""
 	if i.command == "help" {
 		aliases = " keys"
+	}
+	if i.command != "" {
+		// Internal search fields keep exact command/title matches ahead of
+		// incidental description matches. The native delegate renders the
+		// separate Title and Description methods, never this search value.
+		return safeText(strings.TrimSpace(i.command+" "+i.args+aliases)) + "\t" + safeText(i.title) + "\t" + safeText(i.description)
 	}
 	return safeText(i.command + " " + i.args + aliases + " " + i.title + " " + i.description)
 }
@@ -151,7 +158,7 @@ func (m *Model) openPrompt(p *client.Prompt) {
 			m.modalInput.Placeholder = "Your answer"
 		}
 		if d.preservedInitial != "" {
-			m.modalInput.Placeholder = "Original answer preserved · Ctrl+L reviews it"
+			m.modalInput.Placeholder = "Original answer preserved · " + m.actionBinding("info").Help().Key + " Info"
 		}
 	} else {
 		items := make([]list.Item, 0, len(q.Choices))
@@ -187,6 +194,10 @@ func (m *Model) openPrompt(p *client.Prompt) {
 }
 
 func (m *Model) cancelDialog() tea.Cmd {
+	if err := m.storeTextDraft(); err != nil {
+		m.problem = "Draft save: " + safeText(err.Error())
+		return nil
+	}
 	if m.dialog != nil && m.dialog.formSource != nil {
 		return m.restoreSettingsForm()
 	}
@@ -248,11 +259,15 @@ func (m *Model) chooseDialog() tea.Cmd {
 	}
 	if d.kind == client.EnterText {
 		if d.preservedInitial != "" {
-			m.problem = "Original answer preserved · Ctrl+L review · Ctrl+Y copy · Ctrl+U replace"
+			m.problem = "Original answer preserved · " + m.actionBinding("info").Help().Key + " Info · " + m.actionBinding("copy").Help().Key + " copy · Ctrl+U replace"
 			return nil
 		}
 		if len(m.modalInput.Value()) > 64*1024 {
 			m.problem = "Answer exceeds 64 KiB"
+			return nil
+		}
+		if err := m.storeTextDraft(); err != nil {
+			m.problem = "Draft save: " + safeText(err.Error())
 			return nil
 		}
 		answer := client.Answer{Text: m.modalInput.Value()}
@@ -328,7 +343,7 @@ func (m *Model) chooseDialog() tea.Cmd {
 		m.restorePaletteSource()
 		return m.dispatch(selected.command, selected.args)
 	}
-	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && !strings.HasPrefix(d.local, "navigator-") && d.local != "context" && selected.command != "" {
+	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && !strings.HasPrefix(d.local, "navigator-") && !strings.HasPrefix(d.local, "inbox-") && d.local != "context" && selected.command != "" {
 		m.pushLocalSurface(d)
 	}
 	m.dialog = nil
@@ -378,7 +393,7 @@ func (m *Model) openPalette() tea.Cmd {
 	d.serial = m.dialogSerial
 	d.paletteSource = source
 	if m.detail != "" || m.searching {
-		d.paletteReturn = &paletteReturn{generation: m.generation, searching: m.searching, detail: m.detail, title: m.detailTitle, copy: m.detailCopy, viewport: m.detailViewport}
+		d.paletteReturn = &paletteReturn{generation: m.generation, searching: m.searching, detail: m.detail, title: m.detailTitle, copy: m.detailCopy, viewport: m.detailViewport, isActivity: m.detailIsActivity, detailGeneration: m.detailGeneration}
 	}
 	if m.navigator.focused && m.navigator.profile != m.status.ProfileID && m.status.ThreadID != "" {
 		d.title = "Commands · " + m.attachedTargetStatus()
@@ -389,6 +404,7 @@ func (m *Model) openPalette() tea.Cmd {
 	d.list.SetFilterState(list.Filtering)
 	m.dialog = d
 	m.detail, m.detailTitle, m.detailCopy = "", "", ""
+	m.detailIsActivity, m.detailGeneration = false, 0
 	m.searching = false
 	m.composer.Blur()
 	m.questionViewport.SetContent(d.description)
@@ -423,6 +439,15 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.dialog == nil {
 		return nil
 	}
+	if key.Matches(msg, m.actionBinding("info")) {
+		return m.dispatch("info", "")
+	}
+	if key.Matches(msg, m.actionBinding("dismiss")) {
+		if m.dialog.details {
+			return m.dispatch("info", "")
+		}
+		return m.cancelDialog()
+	}
 	if m.dialog.settingsForm != nil && !m.dialog.details {
 		return m.modelSettingsKey(msg)
 	}
@@ -434,7 +459,7 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.dialog.details {
 		switch msg.String() {
-		case "esc", "f2", "ctrl+l", "enter":
+		case "esc", "enter":
 			m.dialog.details = false
 			m.questionViewport.SetContent(safeText(m.dialog.description))
 			m.resize()
@@ -455,8 +480,11 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany && msg.String() == "ctrl+f" {
+	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany && key.Matches(msg, m.actionBinding("browser.search")) {
 		return m.browserAction("search")
+	}
+	if m.dialog.prompt != nil && m.dialog.prompt.Question.Navigation && key.Matches(msg, m.actionBinding("browser.search")) {
+		return m.navigationAction("search")
 	}
 	if m.dialog.surface == client.SurfaceBrowser && m.dialog.kind != client.ChooseMany {
 		if handled, cmd := m.browserKey(msg); handled {
@@ -464,6 +492,9 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	if m.dialog.prompt != nil && m.dialog.prompt.Question.Navigation && (m.dialog.resultsFocused || m.dialog.list.FilterState() != list.Filtering) {
+		if key.Matches(msg, m.actionBinding("browser.filter")) {
+			return m.navigationAction("filter")
+		}
 		action := ""
 		switch msg.String() {
 		case "space", " ":
@@ -472,10 +503,6 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 			action = "expand"
 		case "left":
 			action = "collapse"
-		case "f6":
-			action = "filter"
-		case "ctrl+f":
-			action = "search"
 		case "alt+up":
 			action = "parent"
 		}
@@ -507,12 +534,6 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.refreshDialogDetails()
 			return m.restoreFocus()
 		}
-	case "f2", "ctrl+l":
-		m.dialog.details = true
-		m.questionViewport.SetContent(m.dialog.detailText)
-		m.resize()
-		m.questionViewport.GotoTop()
-		return m.restoreFocus()
 	case "esc":
 		return m.cancelDialog()
 	case "ctrl+up":
@@ -646,7 +667,7 @@ func (m *Model) updateDialogFilter(message tea.Msg) tea.Cmd {
 
 // The compact list may elide an option at narrow widths. Keep the complete
 // question and selected label/description in a Bubbles viewport, available with
-// F2 at every size, before any correlated answer is submitted.
+// Info at every size, before any correlated answer is submitted.
 func (m *Model) refreshDialogDetails() {
 	if m.dialog == nil {
 		return
@@ -710,6 +731,7 @@ func (m *Model) refreshDialogDetails() {
 }
 
 func (m *Model) openDetail(title, text string) {
+	m.detailIsActivity = false
 	m.detailTitle = safeText(title)
 	m.detail = safeText(text)
 	m.detailCopy = redactFeedback(text)

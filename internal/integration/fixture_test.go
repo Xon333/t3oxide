@@ -56,6 +56,9 @@ type fixture struct {
 	nextLaunchAck   *fixtureAckHold
 	activityItems   map[string]object
 	activityHistory map[string][]any
+	nativeContract  bool
+	projects        []any
+	shellHold       <-chan struct{}
 }
 
 type fixtureAckHold struct {
@@ -102,6 +105,7 @@ func newEnvironmentFixture(t *testing.T, environmentID, profileID, label string)
 	f := &fixture{t: t, environmentID: environmentID, sequence: 10, threads: map[string]object{
 		"thread-a": projection("thread-a", "Alpha"), "thread-b": projection("thread-b", "Beta")},
 		sockets: map[*fixtureSocket]struct{}{}, receipts: map[string]object{}, commands: map[string]object{}, dropAck: map[string]bool{}, catalog: fixtureCatalog(), requests: map[string]int{}}
+	f.enableNativeContract()
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
@@ -162,18 +166,33 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, object{"ticket": "fixture-ticket"})
 		return
 	}
+	if r.URL.Path == "/api/orchestration/shell" {
+		f.mu.Lock()
+		hold := f.shellHold
+		f.mu.Unlock()
+		if hold != nil {
+			select {
+			case <-hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if r.URL.Path == "/api/orchestration/shell" {
 		threads := []any{}
 		for _, p := range f.threads {
 			item := clone(p["thread"].(object))
+			if f.nativeContract {
+				item = nativeFixtureShellThread(p)
+			}
 			if _, ok := item["status"]; !ok {
 				item["status"] = "running"
 			}
 			threads = append(threads, item)
 		}
-		jsonResponse(w, object{"threads": threads, "projects": []any{object{"id": "project-a", "title": "Fixture project"}}})
+		jsonResponse(w, object{"threads": threads, "projects": clone(f.projects)})
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -346,6 +365,9 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 	f.mu.Lock()
 	f.requests["rpc:"+tag]++
 	f.mu.Unlock()
+	if f.nativeContract && f.nativeRPC(s, frame) {
+		return
+	}
 	if frame["tag"] == "server.getConfig" {
 		f.mu.Lock()
 		f.catalogReads++
@@ -405,11 +427,8 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 		f.effects++
 		f.sequence++
 		if frame["tag"] == "orchestration.launchThread" {
-			f.threads[id] = projection(id, payload["title"].(string))
-			if selection := payload["modelSelection"]; selection != nil {
-				f.threads[id]["thread"].(object)["modelSelection"] = clone(selection)
-			}
-			receipt = object{"threadId": id}
+			thread := f.nativeLaunch(payload)
+			receipt = object{"threadId": thread}
 		} else {
 			thread, _ := payload["threadId"].(string)
 			p := f.threads[thread]
@@ -447,7 +466,12 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 					}
 				}
 			default:
-				f.violations = append(f.violations, fmt.Sprintf("unexpected command: %v", payload["type"]))
+				if !f.nativeThreadAction(p, payload) {
+					f.violations = append(f.violations, fmt.Sprintf("unexpected command: %v", payload["type"]))
+				}
+			}
+			if f.nativeContract {
+				p["thread"].(object)["updatedAt"] = f.nativeTimestamp()
 			}
 			receipt = object{"sequence": f.sequence}
 		}
@@ -672,7 +696,7 @@ func fixtureCatalog() object {
 		object{"id": "serviceTier", "label": "Service tier", "type": "select", "currentValue": "default", "options": []any{
 			object{"id": "default", "label": "Standard", "isDefault": true}, object{"id": "fast", "label": "Fast"}}},
 	}
-	return object{"providers": []any{object{
+	return object{"settings": object{"defaultModelSelection": object{"instanceId": "fixture-provider", "model": "fixture-model"}, "defaultRuntimeMode": "approval-required", "defaultThreadEnvMode": "local"}, "providers": []any{object{
 		"instanceId": "fixture-provider", "name": "Fixture provider", "status": "ready", "auth": object{"status": "authenticated"},
 		"models": []any{
 			object{"slug": "fixture-model", "name": "Fixture Model", "isDefault": true, "capabilities": object{"optionDescriptors": options}},

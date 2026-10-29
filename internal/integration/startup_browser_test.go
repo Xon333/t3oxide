@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/Xon333/t3oxide/internal/client"
 )
 
 func TestBubbleTeaStartupBrowserOpensSelectedConversationAndKeepsLaterBrowseIndependent(t *testing.T) {
@@ -21,49 +20,46 @@ func TestBubbleTeaStartupBrowserOpensSelectedConversationAndKeepsLaterBrowseInde
 		t.Fatal(err)
 	}
 	r, _ := startAppTUI(t, session)
-	r.modalReady("Conversations")
+	r.waitText("Alpha")
+	r.waitText("Beta")
 	if counts := f.requestCounts(); counts["rpc:orchestration.subscribeThread"] != 0 {
 		t.Fatal("startup subscribed before an explicit open")
 	}
-	r.send("Beta")
-	r.waitText("Filter: Beta")
-	r.send("\r")
-	awaitStatus(t, session, func(s client.Status) bool {
-		return s.ThreadID == "thread-b" && s.Connected
-	})
-	r.waitText("Initial Markdown for Beta")
-	r.waitText("╭─ > Message")
-	if view := r.views.text(); strings.Contains(view, "Loading…") || strings.Contains(view, "Conversations") {
-		t.Fatalf("startup retained the browser after opening the selected thread:\n%s", view)
+	if view := r.views.text(); strings.Contains(view, "Initial Markdown") || strings.Contains(view, "Message") || strings.Contains(view, "╭─ Conversations") {
+		t.Fatalf("startup is not the metadata list and initially empty conversation: %s", view)
 	}
-	if session.Draft() != draft {
-		t.Fatalf("startup draft changed: %q", session.Draft())
+	r.send("Beta")
+	r.waitText("Beta")
+	r.send("\r")
+	r.waitText("Initial Markdown for Beta")
+	r.waitText("second line")
+	if view := r.views.text(); strings.Contains(view, "Loading…") || !strings.Contains(view, "Conversations") {
+		t.Fatalf("explicit open did not retain the unified list: %s", view)
+	}
+	if state.Draft("env-a", "thread-b") != draft || session.Status().ThreadID != "" {
+		t.Fatal("lazy explicit open changed the exact draft or retargeted the startup session")
 	}
 
-	// Live updates must not dismiss an intentionally reopened browser.
+	// Metadata focus is independent of the same live conversation. Events
+	// continue on the right without forcing focus or opening another thread.
 	r.send("\x0f")
-	r.modalReady("Conversations")
+	r.waitText("› Conversations")
 	const pushed = "Live update while explicitly browsing"
 	f.update("thread-b", pushed, 0)
-	f.mu.Lock()
-	run := f.threads["thread-b"]["runs"].([]any)[0].(object)
-	run["status"] = "completed"
-	completed := clone(run)
-	f.mu.Unlock()
-	f.broadcast("thread-b", "run.updated", completed, 0)
-	awaitStatus(t, session, func(s client.Status) bool { return s.RunState == "completed" })
-	r.waitText("completed")
-	if view := r.views.text(); !strings.Contains(view, "Conversations") || strings.Contains(view, pushed) {
-		t.Fatalf("live event replaced the explicit browser:\n%s", view)
-	}
-	r.send("\x1b")
 	r.waitText(pushed)
+	if view := r.views.text(); !strings.Contains(view, "› Conversations") {
+		t.Fatalf("live update stole metadata focus: %s", view)
+	}
+	r.send("\x0f")
 	r.waitText("╭─ > Message")
-	if session.Draft() != draft {
-		t.Fatal("Resume changed the selected thread draft")
+	if state.Draft("env-a", "thread-b") != draft {
+		t.Fatal("metadata focus changed the selected thread draft")
 	}
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
 		t.Fatal("browsing/opening mutated the fixture")
+	}
+	if counts := f.requestCounts(); counts["rpc:orchestration.subscribeThread"] != 1 || counts["/api/orchestration/threads/thread-a/bounded"] != 0 {
+		t.Fatalf("metadata focus created extra detail reads: %+v", counts)
 	}
 	r.send("\x11")
 	select {
@@ -86,7 +82,9 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 	}
 	r, _ := startAppTUI(t, session)
 	r.waitText("Initial Markdown for Alpha")
-	r.send("/new\r")
+	r.send("/new\x1d")
+	r.modalReady("Project")
+	r.send("\r")
 	r.waitText("First message")
 	const message = "Exact first message before settings"
 	r.program.Send(tea.PasteMsg{Content: message})
@@ -99,7 +97,7 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 	r.waitText("First message")
 	r.waitText(message)
 	r.send(strings.Repeat("\t", 5)) // Title, Create, Cancel, Model, Effort.
-	for _, control := range []string{"Effort", "Tier", "Editor"} {
+	for _, control := range []string{"Effort", "Tier", "Workspace", "Defaults", "Project", "Environment", "Editor"} {
 		r.waitText("[" + control + "]")
 		if control != "Editor" {
 			r.send("\t")
@@ -114,7 +112,7 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 	}
 	r.send("\r") // Explicit Cancel, never Create.
 	r.waitText("Initial Markdown for Alpha")
-	if state.Draft("env-a", "\x00new/thread-a") != message || session.Draft() != "" {
+	if state.Draft("env-a", "\x00new/project-launch/project-a") != message || session.Draft() != "" {
 		t.Fatal("review cancellation crossed launch/source draft slots")
 	}
 	r.send("\x11")

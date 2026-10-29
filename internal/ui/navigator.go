@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -29,6 +30,10 @@ type navigatorState struct {
 	loadedAt                 time.Time
 	selected                 string
 	review                   *navigatorReview
+	pages                    map[string]client.NavigatorPage
+	pending                  map[string]bool
+	failures                 map[string]string
+	query                    string
 }
 
 // A local menu reviews a particular metadata page and target. A later list
@@ -43,15 +48,19 @@ type navigatorReview struct {
 type navigatorMsg struct {
 	generation, serial uint64
 	page               client.NavigatorPage
+	profile            string
 	err                error
 }
 
-type navigatorItem struct{ thread client.Thread }
+type navigatorItem struct {
+	thread                      client.Thread
+	profile, environment, label string
+}
 
 func (i navigatorItem) Title() string       { return i.thread.Title }
 func (i navigatorItem) Description() string { return i.thread.Status }
 func (i navigatorItem) FilterValue() string {
-	return i.thread.Title + " " + i.thread.Project + " " + i.thread.ID
+	return i.thread.Title + " " + i.thread.Project + " " + i.thread.ID + " " + i.label + " " + i.profile
 }
 
 type navigatorDelegate struct {
@@ -86,51 +95,78 @@ func (d navigatorDelegate) Render(w io.Writer, model list.Model, index int, raw 
 	if row.Depth > 0 {
 		prefix = strings.Repeat(" ", min(row.Depth, 6)) + "↳ "
 	}
-	if row.ID == d.attached {
+	attached := i.identity() == d.attached || i.profile == "" && row.ID == d.attached
+	if attached {
 		prefix = "• " + strings.TrimLeft(prefix, " ")
 	}
 	status := navigatorStatus(row.Status)
 	if row.Lineage.Type() == "fork" {
 		status = "fork · " + status
 	}
-	left := fitLine(prefix+safeText(row.Title), max(1, model.Width()-ansi.StringWidth(status)-2))
+	mark := "[" + environmentMark(i.label, i.profile) + "]"
+	left := fitLine(prefix+mark+" "+safeText(row.Title), max(1, model.Width()-ansi.StringWidth(status)-2))
 	text := edgeLine(left, status, model.Width())
 	style := p.plain()
 	if index == model.Index() && d.focused {
 		style = p.selection()
+		text = ">" + strings.TrimPrefix(text, " ")
 	}
-	if row.ID == d.attached {
+	if attached {
 		style = style.Bold(true)
 	}
-	fmt.Fprint(w, style.Render(fitLine(text, model.Width())))
+	// A short filled identity marker coexists with the selected row's own
+	// background. Its bracket/letter remains meaningful without color.
+	color := projectAccent(i.environment, row.ProjectID, d.theme)
+	if i.environment == "" {
+		color = projectAccent(i.profile, row.ProjectID, d.theme)
+	}
+	markerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.bg)).Background(lipgloss.Color(color)).Bold(true)
+	if p.name == "terminal" {
+		markerStyle = p.plain().Reverse(true)
+	}
+	text = fitLine(text, model.Width())
+	rendered := style.Render(text)
+	if before, after, found := strings.Cut(text, mark); found {
+		rendered = style.Render(before) + markerStyle.Render(mark) + style.Render(after)
+	}
+	fmt.Fprint(w, rendered)
 }
 
 func navigatorStatus(value string) string {
 	switch value {
 	case "running", "active", "responding":
-		return "running"
+		return ">"
 	case "waiting", "waiting_for_input", "awaiting_input", "waiting_for_approval":
-		return "waiting"
-	case "completed", "idle":
-		return value
+		return "?"
+	case "completed":
+		return "+"
+	case "idle":
+		return "-"
 	case "failed", "error":
-		return "failed"
-	case "interrupted", "stopped":
-		return "stopped"
+		return "!"
+	case "blocked":
+		return "#"
+	case "interrupted", "stopped", "cancelled", "canceled":
+		return "x"
+	case "queued", "pending":
+		return "~"
 	case "":
-		return "unknown"
+		return "."
 	default:
 		return fitLine(safeText(value), 10)
 	}
 }
 
 func (m *Model) navigationVisible() bool {
-	return !m.navigationHidden && m.width >= 104 && !m.browserPage && !m.launchPage
+	return (m.session != nil || m.navigator.loaded) && m.mode != "agentbox" && (!m.navigationHidden || m.navigator.focused || m.startupBrowser) && (m.width >= 80 || m.navigator.focused || m.status.ThreadID == "") && !m.browserPage && !m.launchPage
 }
 
 func (m *Model) navigatorWidth() int {
 	if !m.navigationVisible() {
 		return 0
+	}
+	if m.width < 80 {
+		return m.width
 	}
 	// Ported from t3term tui/mod.rs::sidebar_width with a larger minimum
 	// conversation width appropriate to t3oxide's source-bound controls.
@@ -154,85 +190,16 @@ func (m *Model) initNavigator() {
 }
 
 func (m *Model) loadNavigator(profile, query string, force bool) tea.Cmd {
-	if m.session == nil || !m.navigationVisible() || m.status.ThreadID == "" {
-		return nil
-	}
-	if !force && !m.status.Connected {
-		return nil
-	}
-	profiles := m.session.NavigatorProfiles()
-	if profile == "" {
-		profile = m.navigator.profile
-	}
-	if profile == "" {
-		profile = m.status.ProfileID
-	}
-	if profile == "" && len(profiles) > 0 {
-		profile = profiles[0].ID
-	}
-	if profile == "" {
-		return nil
-	}
-	if !force && m.navigator.loaded && m.navigator.profile == profile {
-		return nil
-	}
-	if m.navigator.loading && !force {
-		return nil
-	}
-	if m.navigator.cancel != nil {
-		m.navigator.cancel()
-	}
-	m.navigator.serial++
-	serial, generation, session := m.navigator.serial, m.generation, m.session
-	ctx, cancel := context.WithCancel(m.sessionCtx)
-	m.navigator.cancel = cancel
-	m.navigator.loading, m.navigator.profile, m.navigator.error = true, profile, ""
-	return func() tea.Msg {
-		defer cancel()
-		page, err := session.NavigatorRead(ctx, profile, query)
-		return navigatorMsg{generation: generation, serial: serial, page: page, err: err}
-	}
+	return m.unifiedNavigatorLoad(profile, query, force)
 }
 
 func (m *Model) navigatorLoaded(msg navigatorMsg) tea.Cmd {
-	if msg.generation != m.generation || msg.serial != m.navigator.serial {
-		return nil
-	}
-	m.navigator.loading = false
-	m.layoutDirty = true
-	if msg.err != nil {
-		m.navigator.error = safeText(msg.err.Error())
-		return nil
-	}
-	identity := ""
-	if m.navigator.loaded && m.navigator.page.ProfileID == msg.page.ProfileID {
-		if item, ok := m.navigator.list.SelectedItem().(navigatorItem); ok {
-			identity = item.thread.ID
-		}
-	}
-	m.navigator.page, m.navigator.profile = msg.page, msg.page.ProfileID
-	m.navigator.loaded, m.navigator.loadedAt = true, time.Now()
-	items := make([]list.Item, 0, len(msg.page.Page.Threads))
-	for _, row := range msg.page.Page.Threads {
-		items = append(items, navigatorItem{thread: row})
-	}
-	m.navigator.list.SetItems(items)
-	m.navigator.list.SetFilterText("")
-	m.navigator.list.ResetFilter()
-	m.navigator.list.FilterInput.SetValue(msg.page.Query)
-	for i, row := range msg.page.Page.Threads {
-		if row.ID == identity {
-			m.navigator.list.Select(i)
-			break
-		}
-	}
-	m.resizeNavigator()
-	return nil
+	return m.unifiedNavigatorLoaded(msg)
 }
 
 func (m *Model) resizeNavigator() {
 	w := max(1, m.navigatorWidth()-2)
-	m.navigator.list.SetSize(w, max(1, m.height-9))
+	m.navigator.list.SetSize(w, max(1, m.height-8))
 	m.navigator.list.FilterInput.SetWidth(w)
 	p := colors(m.navigatorTheme())
 	styles := textinput.DefaultStyles(true)
@@ -244,8 +211,8 @@ func (m *Model) resizeNavigator() {
 	styles.Cursor.Blink = false
 	m.navigator.list.FilterInput.SetStyles(styles)
 	attached := ""
-	if m.navigator.profile == m.status.ProfileID {
-		attached = m.status.ThreadID
+	if m.status.ThreadID != "" {
+		attached = m.status.ProfileID + "\x00" + m.status.ThreadID
 	}
 	m.navigator.list.SetDelegate(navigatorDelegate{theme: m.navigatorTheme(), focused: m.navigator.focused, attached: attached})
 }
@@ -266,23 +233,25 @@ func (m *Model) navigatorAction(action string) tea.Cmd {
 		return nil
 	}
 	n := &m.navigator
-	row, selected := m.navigatorSelected()
+	page, row, selected := m.navigatorSource()
 	switch action {
 	case "open":
-		if !selected || n.loading || n.error != "" || n.page.ProfileID != n.profile {
+		if !selected || !m.navigatorPageLive(page) {
 			return nil
 		}
-		return m.navigatorTarget(n.page, row.ID, action)
-	case "new", "settings":
-		if !selected || n.loading || n.error != "" || n.page.ProfileID != n.profile {
+		return m.navigatorTarget(page, row.ID, action)
+	case "new":
+		return m.execute("new", "")
+	case "new-same", "settings":
+		if !selected || !m.navigatorPageLive(page) {
 			return nil
 		}
-		return m.navigatorTarget(n.page, row.ID, action)
+		return m.navigatorTarget(page, row.ID, action)
 	case "refresh":
 		return m.loadNavigator(n.profile, n.page.Query, true)
 	case "environment":
 		profiles := m.session.NavigatorProfiles()
-		items := make([]list.Item, 0, len(profiles))
+		items := []list.Item{choiceItem{id: allProfiles, title: "All environments", command: "navigator-profile", args: allProfiles}}
 		for _, p := range profiles {
 			items = append(items, choiceItem{id: p.ID, title: p.Label, command: "navigator-profile", args: p.ID})
 		}
@@ -292,16 +261,25 @@ func (m *Model) navigatorAction(action string) tea.Cmd {
 		return m.openNavigatorActions()
 	case "search":
 		query := n.list.FilterInput.Value()
-		if err := m.session.NavigatorChange(n.page, "search", query); err != nil {
+		if err := m.changeNavigatorPages("search", query); err != nil {
 			n.error = safeText(err.Error())
 			return nil
 		}
 		return m.loadNavigator(n.profile, query, true)
 	default:
-		if !n.loaded || n.loading {
+		if !n.loaded {
 			return nil
 		}
-		if err := m.session.NavigatorChange(n.page, action, row.ID); err != nil {
+		var err error
+		if action == "toggle" || action == "expand" || action == "collapse" {
+			if !selected {
+				return nil
+			}
+			err = m.session.NavigatorChange(page, action, row.ID)
+		} else {
+			err = m.changeNavigatorPages(action, row.ID)
+		}
+		if err != nil {
 			n.error = safeText(err.Error())
 			return nil
 		}
@@ -327,13 +305,15 @@ func (m *Model) reviewedNavigatorAction(token string) tea.Cmd {
 	id, action, found := strings.Cut(strings.TrimPrefix(token, "review:"), ":")
 	serial, err := strconv.ParseUint(id, 10, 64)
 	r := m.navigator.review
-	if !found || err != nil || r == nil || r.serial != serial || r.generation != m.generation || r.pageSerial != m.navigator.serial || r.page.ProfileID != m.navigator.profile || !m.navigator.loaded || m.navigator.loading || m.navigator.error != "" {
+	if !found || err != nil || r == nil || r.serial != serial || r.generation != m.generation || r.pageSerial != m.navigator.serial || !m.navigatorPageLive(r.page) {
 		m.notice = "Conversation list changed · open More again"
 		return nil
 	}
 	m.navigator.review = nil
 	switch action {
-	case "open", "new", "settings":
+	case "new":
+		return m.execute("new", "")
+	case "open", "new-same", "settings":
 		if !r.selected {
 			m.notice = "Select a conversation first"
 			return nil
@@ -352,7 +332,7 @@ func (m *Model) reviewedNavigatorAction(token string) tea.Cmd {
 			m.navigator.error = safeText(err.Error())
 			return nil
 		}
-		return m.loadNavigator(r.page.ProfileID, r.page.Query, true)
+		return m.loadNavigator(m.navigator.profile, m.navigator.query, true)
 	}
 	// Navigation itself remains under its existing exact page/cursor owner.
 	return m.navigatorAction(action)
@@ -360,23 +340,23 @@ func (m *Model) reviewedNavigatorAction(token string) tea.Cmd {
 
 func (m *Model) openNavigatorDetail() tea.Cmd {
 	n := &m.navigator
-	row, ok := m.navigatorSelected()
-	if !ok || !n.loaded || n.loading || n.page.ProfileID != n.profile {
+	page, row, ok := m.navigatorSource()
+	if !ok || !n.loaded || !m.navigatorPageLive(page) {
 		m.notice = "Select a loaded conversation to inspect"
 		return nil
 	}
-	m.showNavigatorDetail(n.page, row)
+	m.showNavigatorDetail(page, row)
 	return nil
 }
 
 func (m *Model) showNavigatorDetail(page client.NavigatorPage, row client.Thread) {
-	lines := []string{"Browse: " + page.Label, "Conversation: " + row.Title, "Status: " + navigatorStatus(row.Status)}
+	lines := []string{"Environment: " + page.Label, "Conversation: " + row.Title, "Status: " + row.Status}
 	if page.ProfileID == m.status.ProfileID && row.ID == m.status.ThreadID {
 		lines = append(lines, "Attached conversation")
 	} else {
 		lines = append(lines, "Metadata only · Enter in the list opens this conversation")
 	}
-	for _, field := range []struct{ name, value string }{{"Project", row.Project}, {"Model", row.Model}, {"Parent", row.ParentTitle}, {"Observed", page.Page.ObservedAt}, {"Profile ID", page.ProfileID}, {"Conversation ID", row.ID}, {"Project ID", row.ProjectID}} {
+	for _, field := range []struct{ name, value string }{{"Project", row.Project}, {"Model", row.Model}, {"Parent", row.ParentTitle}, {"Observed", page.Page.ObservedAt}, {"Updated", row.UpdatedAt}, {"Profile ID", page.ProfileID}, {"Environment ID", page.EnvironmentID}, {"Conversation ID", row.ID}, {"Project ID", row.ProjectID}} {
 		if field.value != "" {
 			lines = append(lines, field.name+": "+field.value)
 		}
@@ -385,7 +365,7 @@ func (m *Model) showNavigatorDetail(page client.NavigatorPage, row client.Thread
 	if row.ChildCount > 0 {
 		lines = append(lines, fmt.Sprintf("Children: %d", row.ChildCount))
 	}
-	m.openDetail("Conversation details", strings.Join(lines, "\n"))
+	m.openDetail("Info", strings.Join(lines, "\n"))
 }
 
 func (m *Model) navigatorRun(name string, run func(context.Context) (client.Result, error)) tea.Cmd {
@@ -429,23 +409,21 @@ func (m *Model) navigatorRun(name string, run func(context.Context) (client.Resu
 }
 
 func (m *Model) openNavigatorActions() tea.Cmd {
-	row, selected := m.navigatorSelected()
+	page, row, selected := m.navigatorSource()
 	unavailable := ""
 	switch {
 	case !selected:
 		unavailable = "Select a loaded conversation first"
-	case m.navigator.loading:
+	case selected && !m.navigatorPageLive(page):
 		unavailable = "Wait for conversations to finish loading"
-	case m.navigator.error != "":
-		unavailable = "Refresh conversations before using this source"
-	case !m.navigator.loaded || m.navigator.page.ProfileID != m.navigator.profile:
+	case !m.navigator.loaded:
 		unavailable = "Load this environment's conversation list first"
 	}
 	items := []list.Item{
 		choiceItem{title: "Open", command: "navigator-action", args: "open"},
-		choiceItem{title: "New in selected workspace", command: "navigator-action", args: "new"},
+		choiceItem{title: "New in same project", command: "navigator-action", args: "new-same"},
 		choiceItem{title: "Selected conversation settings", command: "navigator-action", args: "settings"},
-		choiceItem{title: "Conversation details", command: "navigator-action", args: "details"},
+		choiceItem{title: "Info", command: "navigator-action", args: "details"},
 		choiceItem{title: "Search conversations", description: "Search titles and projects on this environment", command: "navigator-action", args: "search"},
 		choiceItem{title: "Refresh", command: "navigator-action", args: "refresh"},
 	}
@@ -471,10 +449,13 @@ func (m *Model) openNavigatorActions() tea.Cmd {
 		items = append(items, choiceItem{title: "Previous page", command: "navigator-action", args: "previous"})
 	}
 	m.openLocal("More · Conversations", "navigator-actions", items)
-	m.navigator.review = &navigatorReview{serial: m.dialog.serial, pageSerial: m.navigator.serial, generation: m.generation, page: m.navigator.page, thread: row, selected: selected}
+	if !selected {
+		page = m.navigator.page
+	}
+	m.navigator.review = &navigatorReview{serial: m.dialog.serial, pageSerial: m.navigator.serial, generation: m.generation, page: page, thread: row, selected: selected}
 	for i, raw := range m.dialog.list.Items() {
 		item := raw.(choiceItem)
-		if unavailable != "" && (item.args == "open" || item.args == "new" || item.args == "settings" || item.args == "details") {
+		if unavailable != "" && (item.args == "open" || item.args == "new-same" || item.args == "settings" || item.args == "details") {
 			item.disabled = true
 			item.description = unavailable
 		}
@@ -499,32 +480,29 @@ func (m *Model) focusNavigator() tea.Cmd {
 	m.contextFocused = false
 	m.transcriptFocus = false
 	m.searching = false
-	m.resizeNavigator()
 	cmd := m.loadNavigator("", "", false)
-	return tea.Batch(m.restoreFocus(), cmd)
+	return tea.Batch(m.resizeWorkspaceFocus(), cmd)
 }
 
 func (m *Model) navigatorKey(msg tea.KeyPressMsg) tea.Cmd {
 	n := &m.navigator
-	switch msg.String() {
-	case "esc", "ctrl+o":
+	k := m.keyMap()
+	switch {
+	case key.Matches(msg, k.Threads), key.Matches(msg, k.Dismiss):
 		n.focused = false
-		m.resizeNavigator()
-		return m.restoreFocus()
-	case "tab", "shift+tab":
-		return m.cycleWorkspace(msg.String() == "tab")
+		return m.resizeWorkspaceFocus()
+	case key.Matches(msg, k.Focus), key.Matches(msg, k.FocusBack):
+		return m.cycleWorkspace(key.Matches(msg, k.Focus))
+	case key.Matches(msg, k.Search):
+		return m.navigatorAction("search")
+	case key.Matches(msg, k.Environments):
+		return m.navigatorAction("environment")
+	case key.Matches(msg, m.actionBinding("navigator.more")):
+		return m.navigatorAction("actions")
+	}
+	switch msg.String() {
 	case "enter":
 		return m.navigatorAction("open")
-	case "ctrl+f":
-		return m.navigatorAction("search")
-	case "ctrl+r":
-		return m.execute("requests", "")
-	case "f5":
-		return m.navigatorAction("refresh")
-	case "ctrl+e":
-		return m.navigatorAction("environment")
-	case "f6":
-		return m.navigatorAction("actions")
 	case "left":
 		if n.list.FilterInput.Value() == "" {
 			return m.navigatorAction("collapse")
@@ -594,51 +572,32 @@ func (m *Model) navigatorView(width, height int) string {
 	if label == "" {
 		label = "Environments"
 	}
+	if n.profile == allProfiles {
+		label = "All environments"
+	}
 	heading := "Conversations"
 	if n.focused {
 		heading = "› " + heading
 	}
-	parts := []string{p.active().Render(heading), p.plain().Bold(true).Render(fitLine("Browse: "+label+" ▾", w)), p.plain().Render("New  More"), ansi.Truncate(n.list.FilterInput.View(), w, "")}
+	parts := []string{p.active().Render(heading), p.plain().Bold(true).Render(fitLine(label+" ▾", w)), p.plain().Render("New  More"), ansi.Truncate(n.list.FilterInput.View(), w, "")}
 	rows := n.list.View()
-	if n.loading {
+	if n.loading && !n.loaded {
 		rows = p.subtle().Render("Loading…")
-	} else if n.error != "" {
+	} else if n.error != "" && !n.loaded {
 		rows = p.plain().Foreground(lipgloss.Color(p.error)).Render(ansi.Hardwrap(n.error, w, true))
 	} else if len(n.list.VisibleItems()) == 0 {
 		text := "No conversations"
 		if n.list.FilterInput.Value() != "" {
-			text = "No loaded matches\nCtrl+F Search conversations"
+			text = "No loaded matches\n" + m.actionBinding("search").Help().Key + " Search conversations"
 			if n.page.Query == n.list.FilterInput.Value() {
 				text = "No host matches"
 			}
 		}
 		rows = p.subtle().Render(text)
 	}
-	parts = append(parts, padBlock(rows, w, max(1, height-9)))
-	scope := n.page.Navigation.Lifecycle
-	if scope == "" {
-		scope = "active"
-	}
-	if kind := n.page.Navigation.Filter; kind != "" && kind != "all" {
-		scope += " · " + kind
-	}
-	count := fmt.Sprintf("%d shown", len(n.list.VisibleItems()))
-	if len(n.list.VisibleItems()) != len(n.list.Items()) {
-		count = fmt.Sprintf("%d/%d shown", len(n.list.VisibleItems()), len(n.list.Items()))
-	}
-	scope = count + " · " + scope
-	page := "Snapshot"
-	if n.page.Page.ObservedAt != "" {
-		value := n.page.Page.ObservedAt
-		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
-			value = parsed.Format("15:04:05")
-		}
-		page += " " + value
-	}
-	if n.page.Page.More {
-		page += " · more"
-	}
-	parts = append(parts, p.subtle().Render(fitLine(scope, w)), p.subtle().Render(fitLine(page, w)))
+	parts = append(parts, padBlock(rows, w, max(1, height-8)))
+	health := m.navigatorHealth()
+	parts = append(parts, p.subtle().Render(fitLine(health, w)))
 	controls := "Refresh"
 	if n.page.Page.Cursor > 0 {
 		controls = "Prev  " + controls
@@ -646,14 +605,10 @@ func (m *Model) navigatorView(width, height int) string {
 	if n.page.Page.NextCursor != nil {
 		controls += "  Next"
 	}
-	hint := "Ctrl+O focus · F6 More"
-	if n.focused {
-		hint = "Enter open · F2 details"
-		if n.list.FilterInput.Value() != "" {
-			hint = "Ctrl+F Search conversations"
-		}
-	}
-	parts = append(parts, p.plain().Render(fitLine(controls, w)), p.subtle().Render(fitLine(hint, w)))
+	parts = append(parts, p.plain().Render(fitLine(controls, w)))
+	info, help := m.actionBinding("info").Help().Key, m.actionBinding("help").Help().Key
+	parts = append(parts, p.subtle().Render(fitLine(info+" Info  "+help+" Help", w)))
+	parts = append(parts, p.subtle().Render(fitLine(m.actionBinding("sidebar").Help().Key+" Activity", w)))
 	border := p.muted
 	if n.focused {
 		border = p.accent

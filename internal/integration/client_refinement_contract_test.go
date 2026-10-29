@@ -33,6 +33,29 @@ func offeredThreadID(t *testing.T, p *client.Prompt, thread string) string {
 	t.Fatalf("thread %s was not offered: %+v", thread, p.Question.Choices)
 	return ""
 }
+
+// Native New deliberately chooses an existing project before showing its
+// reviewed form. A selected/attached thread is never used as a settings source.
+func nativeLaunchReview(t *testing.T, a *client.Session) *client.Prompt {
+	t.Helper()
+	p := featurePrompt(t, a)
+	if p.Question.Title != "Project" {
+		t.Fatalf("New did not offer the native project list: %+v", p.Question)
+	}
+	found := false
+	for _, choice := range p.Question.Choices {
+		found = found || choice.ID == "project-a"
+	}
+	if !found {
+		t.Fatalf("existing project with zero or more threads was not offered: %+v", p.Question)
+	}
+	p.Respond(client.Answer{ChoiceIDs: []string{"project-a"}})
+	p = featurePrompt(t, a)
+	if p.Question.Surface != client.SurfaceLaunch {
+		t.Fatalf("native defaults did not produce the launch form: %+v", p.Question)
+	}
+	return p
+}
 func TestRefinementBrowserMultiEnvironmentIdentityLazyReadsAndResume(t *testing.T) {
 	first := newFixture(t)
 	second := newEnvironmentFixture(t, "env-b", "second", "Fixture")
@@ -56,7 +79,7 @@ func TestRefinementBrowserMultiEnvironmentIdentityLazyReadsAndResume(t *testing.
 	}
 	browse := featureCommand(a, "threads", "")
 	p := featurePrompt(t, a)
-	if p.Question.Surface != client.SurfaceBrowser || len(p.Question.BrowserPage.ProfileIDs) != 1 || len(p.Question.BrowserPage.Profiles) != 2 {
+	if p.Question.Surface != client.SurfaceBrowser || len(p.Question.BrowserPage.ProfileIDs) != 2 || len(p.Question.BrowserPage.Profiles) != 2 {
 		t.Fatalf("missing real scope %+v", p.Question)
 	}
 	oldID := offeredThreadID(t, p, "thread-a")
@@ -120,8 +143,8 @@ func TestRefinementLaunchReviewLocalSettingsExactBytesAndSingleReceipt(t *testin
 	f.catalog["providers"].([]any)[0].(object)["requiresNewThreadForModelChange"] = true
 	f.mu.Unlock()
 	launch := featureCommand(a, "new", "")
-	p := featurePrompt(t, a)
-	if p.Question.Surface != client.SurfaceLaunch || p.Question.LaunchReview.Input.Title != "New conversation" || p.Question.LaunchReview.Location.Workspace != "/fixture/existing-worktree" {
+	p := nativeLaunchReview(t, a)
+	if p.Question.Surface != client.SurfaceLaunch || p.Question.LaunchReview.Input.Title != "New conversation" || p.Question.LaunchReview.Location.Workspace != "/fixture/project-root" {
 		t.Fatalf("missing compact exact review: %+v", p.Question)
 	}
 	input := client.LaunchInput{Title: "  Human title  ", Message: "  first message\n\nexact  "}
@@ -166,7 +189,7 @@ func TestRefinementLaunchReviewLocalSettingsExactBytesAndSingleReceipt(t *testin
 	if !reflect.DeepEqual(source, current) || a.Draft() != " exact source composer\n" || !reflect.DeepEqual(state.Override("env-a", "thread-a"), override) {
 		t.Fatal("launch changed source settings/draft/override")
 	}
-	if payload == nil || payload["title"] != input.Title || payload["initialMessage"].(object)["text"] != input.Message || payload["workspaceStrategy"].(object)["worktreePath"] != "/fixture/existing-worktree" {
+	if payload == nil || payload["title"] != input.Title || payload["initialMessage"].(object)["text"] != input.Message || payload["workspaceStrategy"].(object)["type"] != "root" || payload["workspaceStrategy"].(object)["worktreePath"] != nil {
 		t.Fatalf("wrong launch payload: %+v", payload)
 	}
 	selection := payload["modelSelection"].(object)
@@ -176,7 +199,7 @@ func TestRefinementLaunchReviewLocalSettingsExactBytesAndSingleReceipt(t *testin
 	if e, d := f.counts(); e != 1 || d != 1 {
 		t.Fatalf("launch effects %d dispatches %d", e, d)
 	}
-	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/thread-a") != "" {
+	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/project-launch/project-a") != "" {
 		t.Fatal("exact launch receipt did not clear its own journal/draft")
 	}
 }
@@ -186,7 +209,7 @@ func TestRefinementLaunchCancelRetainsSeparateDraftAndRejectsUnofferedAction(t *
 	_ = a.SetDraft("source")
 	input := client.LaunchInput{Title: "title", Message: " exact first\nmessage "}
 	launch := featureCommand(a, "new", "")
-	p := featurePrompt(t, a)
+	p := nativeLaunchReview(t, a)
 	p.Respond(client.Answer{Action: "model", Launch: &input})
 	p = featurePrompt(t, a)
 	p.Respond(client.Answer{Cancelled: true})
@@ -199,11 +222,11 @@ func TestRefinementLaunchCancelRetainsSeparateDraftAndRejectsUnofferedAction(t *
 	if r.err != nil || r.result.Next != nil {
 		t.Fatal(r.err)
 	}
-	if state.Draft("env-a", "\x00new/thread-a") != input.Message || a.Draft() != "source" {
+	if state.Draft("env-a", "\x00new/project-launch/project-a") != input.Message || a.Draft() != "source" {
 		t.Fatal("cancel draft slots crossed")
 	}
 	launch = featureCommand(a, "new", "")
-	p = featurePrompt(t, a)
+	p = nativeLaunchReview(t, a)
 	if p.Question.LaunchReview.Input.Message != input.Message {
 		t.Fatal("reopen lost first message")
 	}
@@ -224,9 +247,15 @@ func TestRefinementStartupListsMetadataThenOpensOnlyExactOfferedThread(t *testin
 		t.Fatal(err)
 	}
 	stream := streamSession(t, a)
-	p := featurePrompt(t, a)
-	if p.Question.Surface != client.SurfaceBrowser {
-		t.Fatal("startup did not use browser")
+	stream.until(t, func(e client.Event) bool { return e.Status.ConnectionState == "browse" })
+	select {
+	case p := <-a.Prompts():
+		t.Fatalf("metadata startup opened an unsolicited prompt: %+v", p.Question)
+	default:
+	}
+	page, err := a.NavigatorRead(context.Background(), f.profile.ID, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	counts := f.requestCounts()
 	if counts["rpc:orchestration.subscribeThread"] != 0 || counts["/api/orchestration/threads/thread-a/bounded"] != 0 {
@@ -238,8 +267,18 @@ func TestRefinementStartupListsMetadataThenOpensOnlyExactOfferedThread(t *testin
 	if sockets != 0 {
 		t.Fatal("startup metadata helper was not closed")
 	}
-	p.Respond(client.Answer{ChoiceIDs: []string{offeredThreadID(t, p, "thread-b")}})
-	stream.until(t, func(e client.Event) bool {
+	if _, err := a.NavigatorOpen(page, "not-offered"); err == nil {
+		t.Fatal("unoffered metadata target accepted")
+	}
+	next, err := a.NavigatorOpen(page, "thread-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Status().ThreadID != "" || f.requestCounts()["rpc:orchestration.subscribeThread"] != 0 {
+		t.Fatal("lazy target changed startup attachment before explicit listen")
+	}
+	selected := streamSession(t, next)
+	selected.until(t, func(e client.Event) bool {
 		return e.Status.ThreadID == "thread-b" && e.Snapshot != nil && e.Snapshot.Metadata.Live
 	})
 	counts = f.requestCounts()
@@ -300,7 +339,7 @@ func TestRefinementLaunchRejectsFreshlyRemovedCatalogSelection(t *testing.T) {
 	f := newFixture(t)
 	_, state, a, _ := startFeatureSession(t, f, "thread-a")
 	launch := featureCommand(a, "new", "")
-	p := featurePrompt(t, a)
+	p := nativeLaunchReview(t, a)
 	input := client.LaunchInput{Title: "title", Message: "preserve me"}
 	p.Respond(client.Answer{Action: "model", Launch: &input})
 	p = featurePrompt(t, a)
@@ -325,11 +364,11 @@ func TestRefinementLaunchRejectsFreshlyRemovedCatalogSelection(t *testing.T) {
 	if e, d := f.counts(); e != 0 || d != 0 || state.Pending("env-a", false) != nil {
 		t.Fatal("local stale validation created operation")
 	}
-	if state.Draft("env-a", "\x00new/thread-a") != input.Message {
+	if state.Draft("env-a", "\x00new/project-launch/project-a") != input.Message {
 		t.Fatal("stale selection lost launch draft")
 	}
 }
-func TestRefinementBrowserNewUsesSelectedNonactiveSourceWorkspace(t *testing.T) {
+func TestRefinementBrowserNewResolvesNativeDefaultsWithoutSelectedSourceWorkspace(t *testing.T) {
 	f := newFixture(t)
 	f.mu.Lock()
 	f.threads["thread-b"]["thread"].(object)["worktreePath"] = "/fixture/selected-checkout"
@@ -340,11 +379,11 @@ func TestRefinementBrowserNewUsesSelectedNonactiveSourceWorkspace(t *testing.T) 
 	browse := featureCommand(a, "threads", "")
 	p := featurePrompt(t, a)
 	p.Respond(client.Answer{Action: "new", ChoiceIDs: []string{offeredThreadID(t, p, "thread-b")}})
-	p = featurePrompt(t, a)
-	if p.Question.Surface != client.SurfaceLaunch || p.Question.LaunchReview.Location.ThreadID != "thread-b" || p.Question.LaunchReview.Location.Workspace != "/fixture/selected-checkout" {
-		t.Fatalf("new used arbitrary source: %+v", p.Question)
+	p = nativeLaunchReview(t, a)
+	if p.Question.LaunchReview.Location.ThreadID != "" || p.Question.LaunchReview.Location.Workspace != "/fixture/project-root" {
+		t.Fatalf("New inherited an arbitrary source: %+v", p.Question)
 	}
-	input := client.LaunchInput{Title: "new in selected checkout", Message: "first message"}
+	input := client.LaunchInput{Title: "new with native project defaults", Message: "first message"}
 	p.Respond(client.Answer{Action: "create", Launch: &input})
 	r := featureReply(t, browse)
 	if r.err != nil || r.result.Next == nil {
@@ -359,8 +398,8 @@ func TestRefinementBrowserNewUsesSelectedNonactiveSourceWorkspace(t *testing.T) 
 		}
 	}
 	f.mu.Unlock()
-	if payload == nil || payload["workspaceStrategy"].(object)["worktreePath"] != "/fixture/selected-checkout" || payload["workspaceStrategy"].(object)["branch"] != "selected-branch" {
-		t.Fatalf("wrong source binding %+v", payload)
+	if payload == nil || payload["workspaceStrategy"].(object)["type"] != "root" || payload["workspaceStrategy"].(object)["branch"] != nil || payload["projectId"] != "project-a" {
+		t.Fatalf("wrong native project binding %+v", payload)
 	}
 	if a.Status().ThreadID != "thread-a" || a.Draft() != "active composer unchanged" || state.Draft("env-a", "thread-a") != "active composer unchanged" {
 		t.Fatal("new preparation detached or changed active draft")
@@ -500,7 +539,7 @@ func TestRefinementUncertainLaunchRetainsExactSelectionAndSameIDRetry(t *testing
 	started, release := f.holdNextLaunchAck()
 	defer release()
 	launch := featureCommand(a, "new", "")
-	p := featurePrompt(t, a)
+	p := nativeLaunchReview(t, a)
 	input := client.LaunchInput{Title: "  exact launch title  ", Message: " first message\n"}
 	p.Respond(client.Answer{Action: "model", Launch: &input})
 	p = featurePrompt(t, a)
@@ -530,7 +569,7 @@ func TestRefinementUncertainLaunchRetainsExactSelectionAndSameIDRetry(t *testing
 	stream.until(t, func(e client.Event) bool {
 		return e.Status.Connected && e.Status.ConnectionState == "connected" && e.Snapshot != nil && e.Snapshot.Metadata.Live
 	})
-	if !reflect.DeepEqual(original, state.Pending("env-a", false)) || a.Draft() != "source remains exact" || state.Draft("env-a", "\x00new/thread-a") != input.Message {
+	if !reflect.DeepEqual(original, state.Pending("env-a", false)) || a.Draft() != "source remains exact" || state.Draft("env-a", "\x00new/project-launch/project-a") != input.Message {
 		t.Fatal("uncertain launch changed identity/drafts")
 	}
 	if e, d := f.counts(); e != 1 || d != 1 {
@@ -544,10 +583,11 @@ func TestRefinementUncertainLaunchRetainsExactSelectionAndSameIDRetry(t *testing
 	f.threads["thread-a"]["thread"].(object)["worktreePath"] = "/fixture/changed-after-uncertainty"
 	catalogReads := f.catalogReads
 	f.mu.Unlock()
-	reply, err := a.Retry(context.Background(), false)
-	if err != nil || reply["threadId"] != id {
+	reply, err := a.RetryLaunch(context.Background())
+	if err != nil || reply.Next == nil || reply.Next.Status().ThreadID != original["newThreadId"] {
 		t.Fatalf("same-ID launch retry failed %+v %v", reply, err)
 	}
+	defer reply.Next.Close()
 	f.mu.Lock()
 	retried := clone(f.commands[id])
 	readsAfter := f.catalogReads
@@ -555,22 +595,24 @@ func TestRefinementUncertainLaunchRetainsExactSelectionAndSameIDRetry(t *testing
 	if !reflect.DeepEqual(payload, retried) || catalogReads != readsAfter {
 		t.Fatal("retry rebuilt payload or reread catalog")
 	}
-	if e, d := f.counts(); e != 1 || d != 2 {
-		t.Fatalf("retry duplicated launch effect %d/%d", e, d)
+	if e, d := f.counts(); e != 1 || d != 1 {
+		t.Fatalf("reconciliation redispatched a launch %d/%d", e, d)
 	}
-	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/thread-a") != "" || a.Draft() != "source remains exact" {
+	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/project-launch/project-a") != "" || a.Draft() != "source remains exact" {
 		t.Fatal("acknowledged retry cleared wrong state")
 	}
 }
 
-func TestRefinementUneditedLaunchInheritsRetainedLegacySourceOptions(t *testing.T) {
+func TestRefinementUneditedLaunchKeepsNativeDefaultOptionsWithoutSourceCarry(t *testing.T) {
 	f := newFixture(t)
 	f.mu.Lock()
 	f.threads["thread-a"]["thread"].(object)["modelSelection"] = object{"instanceId": "fixture-provider", "model": "fixture-model", "options": []any{object{"id": "fastMode", "value": true}, object{"id": "legacyOpaque", "value": "retained"}}}
+	nativeDefault := object{"instanceId": "fixture-provider", "model": "fixture-model", "options": []any{object{"id": "nativeOpaque", "value": "retain-native-default"}, object{"id": "reasoningEffort", "value": "medium"}}}
+	f.catalog["settings"].(object)["defaultModelSelection"] = nativeDefault
 	f.mu.Unlock()
 	_, _, a, _ := startFeatureSession(t, f, "thread-a")
 	launch := featureCommand(a, "new", "")
-	p := featurePrompt(t, a)
+	p := nativeLaunchReview(t, a)
 	p.Respond(client.Answer{Action: "create", Launch: &client.LaunchInput{Title: "Inherited", Message: "first"}})
 	r := featureReply(t, launch)
 	if r.err != nil || r.result.Next == nil {
@@ -585,8 +627,8 @@ func TestRefinementUneditedLaunchInheritsRetainedLegacySourceOptions(t *testing.
 		}
 	}
 	f.mu.Unlock()
-	if payload == nil || len(payload["modelSelection"].(object)["options"].([]any)) != 2 {
-		t.Fatal("inherited launch lost source options")
+	if payload == nil || !reflect.DeepEqual(payload["modelSelection"], clone(nativeDefault)) {
+		t.Fatalf("native defaults were lost or source options carried: %+v", payload)
 	}
 }
 
@@ -620,6 +662,8 @@ func TestRefinementLiveLaunchTypingCtrlQPersistsThroughStateReopen(t *testing.T)
 	program.send("\t\x10")
 	program.modalReady("Commands")
 	program.send("new\r")
+	program.modalReady("Project")
+	program.send("\r")
 	program.modalReady("First message")
 	message := "  unsent launch\nsecond line  "
 	program.send(message)
@@ -645,7 +689,7 @@ func TestRefinementLiveLaunchTypingCtrlQPersistsThroughStateReopen(t *testing.T)
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if got := reopened.Draft("env-a", "\x00new/thread-a"); got != message {
+	if got := reopened.Draft("env-a", "\x00new/project-launch/project-a"); got != message {
 		t.Fatalf("live launch draft lost on quit/reopen: %q", got)
 	}
 	if got := reopened.Draft("env-a", "thread-a"); got != source {

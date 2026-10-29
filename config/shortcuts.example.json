@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "bindings": {
+    "global": {
+      "info": ["alt+i", "cmd+i"]
+    },
+    "composer": {
+      "send": ["ctrl+alt+]", "cmd+enter"]
+    }
+  }
+}

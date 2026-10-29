@@ -17,27 +17,36 @@ type paletteReturn struct {
 	searching           bool
 	detail, title, copy string
 	viewport            viewport.Model
+	isActivity          bool
+	detailGeneration    uint64
 }
 
 func commandFilter(term string, targets []string) []list.Rank {
 	term = strings.TrimPrefix(strings.TrimSpace(term), "/")
 	ranks := list.DefaultFilter(term, targets)
 	query := strings.ToLower(strings.TrimSpace(term))
-	exact := func(index int) bool {
-		words := strings.Fields(strings.ToLower(targets[index]))
+	priority := func(index int) int {
+		identity, remainder, structured := strings.Cut(strings.ToLower(targets[index]), "\t")
+		words := strings.Fields(identity)
 		if len(words) == 0 {
-			return false
+			return 3
 		}
-		return words[0] == query || words[0] == "help" && query == "keys" || strings.HasPrefix(strings.ToLower(targets[index]), query+" ")
+		if words[0] == query || words[0] == "help" && query == "keys" || strings.TrimSpace(identity) == query || strings.HasPrefix(identity, query+" ") {
+			return 0
+		}
+		if structured {
+			title, _, _ := strings.Cut(remainder, "\t")
+			if title == query {
+				return 1
+			}
+			if strings.HasPrefix(title, query+" ") {
+				return 2
+			}
+		}
+		return 3
 	}
 	slices.SortStableFunc(ranks, func(a, b list.Rank) int {
-		if exact(a.Index) && !exact(b.Index) {
-			return -1
-		}
-		if !exact(a.Index) && exact(b.Index) {
-			return 1
-		}
-		return 0
+		return priority(a.Index) - priority(b.Index)
 	})
 	return ranks
 }
@@ -57,10 +66,12 @@ func (m *Model) restorePaletteSource() tea.Cmd {
 		}
 	}
 	m.dialog = source
+	m.detailIsActivity, m.detailGeneration = false, 0
 	if retained != nil && retained.generation == m.generation {
 		m.searching = retained.searching
 		m.detail, m.detailTitle, m.detailCopy = retained.detail, retained.title, retained.copy
 		m.detailViewport = retained.viewport
+		m.detailIsActivity, m.detailGeneration = retained.isActivity, retained.detailGeneration
 	}
 	m.resize()
 	return m.restoreFocus()

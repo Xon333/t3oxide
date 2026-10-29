@@ -25,7 +25,7 @@ func TestModelPickerUsesExistingListAndSelectsCurrentChoice(t *testing.T) {
 	}
 }
 func TestNavigationShortcutsUseCorrelatedDialogAndPreserveComposer(t *testing.T) {
-	for _, k := range []tea.KeyPressMsg{keyPress(' '), keyPress(tea.KeyRight), keyPress(tea.KeyLeft), keyPress(tea.KeyF6), keyPress('f', tea.ModCtrl), keyPress(tea.KeyUp, tea.ModAlt)} {
+	for _, k := range []tea.KeyPressMsg{keyPress(' '), keyPress(tea.KeyRight), keyPress(tea.KeyLeft), keyPress(tea.KeyF6), keyPress('f', tea.ModCtrl, tea.ModAlt), keyPress(tea.KeyUp, tea.ModAlt)} {
 		m := testModel(t)
 		m.composer.SetValue("draft")
 		m.openPrompt(retiredPrompt(101, client.Question{Kind: client.ChooseOne, Navigation: true, Title: "Threads · all", Choices: []client.Choice{{ID: "root", Label: "▸ MAIN Root", Description: "2 subagents"}}}))
@@ -87,7 +87,8 @@ func TestUnavailableModelActionsAreDisabledInPalette(t *testing.T) {
 		t.Fatal("disabled action executed")
 	}
 	m.dialog = nil
-	m.status = client.Status{ModelControls: true, ModelCatalog: true, ThreadNavigation: true, RuntimeDetails: true, ParentAvailable: true, Requests: 1, ActiveRunID: "run", Activity: true, PendingAction: true, PendingStop: true}
+	m.status = client.Status{Writable: true, ModelControls: true, ModelCatalog: true, ThreadNavigation: true, RuntimeDetails: true, ParentAvailable: true, Requests: 1, ActiveRunID: "run", Activity: true, PendingAction: true, PendingStop: true}
+	m.composer.SetValue("a sendable draft")
 	m.snapshot = &wire.Snapshot{Metadata: wire.Metadata{HasMore: true}}
 	m.openPalette()
 	for _, raw := range m.dialog.list.Items() {

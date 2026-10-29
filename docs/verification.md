@@ -1,6 +1,78 @@
 # Verification
 
+## Native integration, 2026-10-29
+
+The 0.8 return was applied to its exact working-tree baseline. All 261 returned source files matched the final manifest's bytes and modes before native corrections. The accepted pre-existing documentation edit was retained.
+
+Read-only checks against the running M1 server `0.1.5-nightly.20261029.3867` verified environment identity, authenticated project enumeration, the registered source project, native configuration/model catalog, root and isolated-worktree launch defaults, and native diff-preview reads. These checks created no thread, worktree, provider run or mutation journal. They do not establish live launch, approval, visibility, Stop or recovery acceptance.
+
+The existing two-scope credential permits metadata reads but native project-file reads require `filesystem:read`. Same-subject temporary credentials limited to `orchestration:read` and `filesystem:read` verified the new read contracts and were revoked after use. The installed credential was then renewed with only that additional scope, preserving its subject, recovery identity, expiration ceiling and original credential for rollback. [Installation](../NATIVE.md) documents the scope and renewal. A live missing-file failure exposed the need for native `projects.readFile`'s `allowMissing: true`; the adapter now requests it and accepts `exists: false`. A regression verifies absent-file defaults, isolated-worktree resolution and continued rejection of authorization, transport and unsupported-method failures. All 14 native fixture tests pass.
+
+The canonical capability helper reviewed all four enrolled Personal records. Their existing open/quit/Stop explanations remain accurate; only source fingerprints changed, and the final capability check reports no affected records. Knowledge synchronization and client publication retain separate receipts.
+
+On Go `1.27.2` darwin/arm64 and Node `24.21.0`, the final `scripts/check-go.sh` passed formatting, all six package suites, vet and the complete race run. Integration passed in 57.739 seconds normally and 85.536 seconds under race detection. The full shared check passed 195 Node tests, Swift model typecheck, App parse, compiled model and macOS transport tests, and five Python tests; after the native optional-file regression, all 196 Node tests passed again. The dependency verification and tidy-diff passed. The pinned security scan reported zero reachable vulnerabilities, with nine imported-package and ten required-module advisories outside detected call paths.
+
+Focused review found a Changes read that remained loading after switching conversations. Session changes now retire its loading state and serial; a regression verifies that a fresh review opens while the previous response cannot clear or replace it. The actual-program composer regression now checks the invalid-command validation text across platforms instead of assuming a Control-only hint on macOS. Both fixes are included in the final complete Go run.
+
+The native build passed ARM64 Mach-O inspection, strict ad-hoc signature verification, version/help and offline capabilities without creating the supplied absent configuration/state paths. Executable SHA-256: `dc97f6b6c2ded4407f7a3c8a0b2583582f808c3b54cf00af7248af6b7891714a`. The M1 executable and versioned adapter were updated, with installed doctor/capability reads passing. The previous executable, adapter and credential remain available; configuration semantics, state inventory, drafts, lock, sidecars and host journals were preserved. No T3 service or provider setting changed.
+
+Physical terminal delivery and disposable live mutation cases remain untested. No OMV adapter update or compatibility claim follows these M1 checks. M4 client publication remains gated on the owner's explicit answer.
+
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
+
+## Integrated Developer + AgentBox, 2026-10-29
+
+Version **0.8.0-bubbletea** extends the supplied **222-file working-tree snapshot** at `9ff7dd39ffdf4330fac896f0205e8f63c792b5ad`, including its accepted uncommitted UX proposal. It was not replaced by upstream HEAD and the informational baseline patch was not reapplied. The original private notes and thirteen annotated images were reviewed but remain outside this public source tree. The packet verifier passed all 252 entries, including 222 source files, three original notes and thirteen images.
+
+### Portable production checks
+
+The final production implementation was checked on Linux x86-64 with **Go 1.26.10**, **Node 24.22.1**, **Python 3.12.14** and Git 2.51.1. No installed native T3 execution host, macOS GUI or physical terminal was used.
+
+| Command | Actual result and boundary |
+| --- | --- |
+| `bash scripts/check-go.sh` | Passed the complete six-package test run, `go vet ./...`, and complete race run. The final frozen-source run took 145.15 seconds; integration package 55.934 seconds normal and 86.406 seconds under race (`checks/final-go-3.log` in the return package). |
+| `bash scripts/check.sh` | Passed 195 Node tests, all adapter/script syntax checks, shell parse and five Python measurement tests. `swiftc` was absent; the script's conditional Swift paths did not execute and remain native pending. |
+| `bash scripts/build-go.sh` | Passed full pinned production Linux amd64 build and Darwin ARM64 cross-build (`GOOS=darwin GOARCH=arm64`). No restricted-core substitute was used. |
+| `bash scripts/check-security.sh` | Pinned `govulncheck@v1.9.0` found **zero reachable vulnerabilities** with Go 1.26.10. It also reported nine vulnerabilities in imported packages and nine in required modules that this code does not appear to call; this is not a blanket claim of vulnerability-free dependencies. |
+| `go mod verify`; `go mod tidy -diff` | Passed; no application dependency versions or `go.sum` changes. |
+| Executable `--version`, `--help`, offline `capabilities --json` | Passed with deliberately nonexistent config/state paths remaining absent. Offline capabilities declare modes/extension boundaries and do not claim an installed native scheduler or default-environment bridge. |
+| `python3 VERIFY-PACKET.py` | Passed again after implementation; input packet remained intact. |
+| `bash scripts/check-capabilities.sh` | **Pending native helper:** exit 2, `capability-records is unavailable; reconcile the affected records on the canonical knowledge host.` No capability knowledge record was updated here. |
+
+The initial Go 1.26.0 scan reported reachable standard-library advisories GO-2026-6218, GO-2026-6088 and GO-2026-4601. The minimum toolchain was raised to Go **1.26.10**, verified against the official archive checksum. Existing Charm module pins and other runtime dependency versions were retained. This is a real toolchain security fix, not a scanner suppression.
+
+Maintained scripts were not weakened. Earlier environmental failures (direct execution of supplied non-executable scripts, initial missing toolchain, restricted loopback/subprocess execution), intermediate outdated expectations, and the first integrated resynchronization-readiness failure remain recorded separately in the return package. Approved disposable local fixture checks subsequently ran successfully. One added reconnect test initially sent during native synchronization; the production guard correctly retained the draft. The view now exposes that synchronization state and the test waits for authoritative native resynchronization. Request-retirement test readiness likewise waits for the newly rendered source before sending another key.
+
+### Changed-contract evidence
+
+Tests use actual Go client/session/program paths, the actual Node adapter and deliberately small local native-contract HTTP/WebSocket fixtures. They cover all-environment metadata-only startup, explicit source-qualified mouse/Enter open, duplicate IDs and partial/offline hosts; native project/default resolution, first-thread and project-only New, exact form restoration; byte/event decoding, editor ownership and distinct Send/Literal/Steer/request Submit; AgentBox single/batch isolated filing and explicit shared root, focused inbox/reply/formal review/changes/settle/snooze, same-session mode return and reconnect; stale requests, mismatched ACKs, helper restart, conservative lost-launch reconciliation, rank CAS/undo and independent Stop while an ordinary acknowledgement is held.
+
+The final focused AgentBox race run includes 27 top-level tests and four size subtests across config, client, UI and integration. Native fixture projections are explicitly synthetic; no result is described as a live-host or physical-key test. Existing native work remains backend-owned after UI exit, while an unsubmitted filing list is only a durable human draft and does not dispatch later.
+
+Twelve actual `Model.View()` cases cover Developer workspace, empty-conversation startup and AgentBox at 60×16, 80×24, 120×35 and wide sizes (170×40 or 180×45). Their ANSI/text captures are rendered offscreen to PNG using one fixed monospace font. Public README images contain only generic synthetic content. Cell bounds, real filled/reverse selection and hit targets are tested; the compact full-width navigator return reflows the conversation. These captures are not macOS terminal screenshots or font-size-per-component claims.
+
+| Portable executable | SHA-256 |
+| --- | --- |
+| Linux amd64 | `adecc34f171a366607e234f4a6c4039545a2eeac73e2ba19cedb3291cd6c8441` |
+| Darwin ARM64 cross-build | `c7b575d3f26868c5594f498aa7a8ab07179bff2de9da362fda362734e96e3de6` |
+
+The return package contains exact command logs, build metadata, source hashes/modes, a binary-safe patch against the supplied working tree and fresh-baseline reconstruction equality. Executable hashes identify the portable builds; they do not establish macOS signature validation, installed layout or deployment acceptance.
+
+### Local resource evidence
+
+Fifteen finite Linux captures used three independent three-second runs per case, the actual compiled baseline/current TUI and Node adapter, and a synthetic 500-root/eight-project metadata fixture. Mean root RSS was 25.31 MiB for baseline Developer startup, 25.01 MiB for integrated Developer startup, 26.17 MiB for integrated AgentBox, 46.73 MiB for the separately held baseline Node adapter and 46.92 MiB for the separately held current adapter. PSS, ranges, commands and unaltered collector samples are in the return package's `checks/resources/REPORT.md` and raw files.
+
+These figures describe short idle metadata states with different baseline/current startup presentations. They establish no performance improvement, energy saving, native capacity or streaming latency. TUI helpers had exited before sampled idle states; short-lived helper cost is not zero or captured by that idle number. No coarse `ps` CPU increment was observed, which is not zero CPU cost. The synthetic fixture/collector were excluded; no real T3/provider backend, SSH host or macOS footprint was measured. All 80 production build inputs matched the final implementation.
+
+### Installed/native gates
+
+The inspected upstream target is `v0.1.4-nightly.20261029.3853` at `783581d461dc72cdd8f78fc8abb4ad536dfc4547`; the inherited native source anchor is `0e7346ccd9427c06161e222319e718e6bd70887f`. Neither establishes the current installed version on any host. Native workflow extension 1 is additive to companion v1/orchestration v2; unsupported installed methods return precise errors.
+
+The native desktop's preferred default environment/project has no verified supported bridge. New honors explicit `--env`, a unique `defaultForNew`, a sole configured environment, or asks. A generic durable priority-based future-launch queue/capacity API is also absent from the verified contracts; no client scheduler is substituted. Native visibility commands lack atomic expected-revision exclusion, so fresh preflight protects known stale state but cannot exclude a different writer racing after that read. Structured outcomes/artifact indexes remain missing unless reported by native T3.
+
+Native acceptance must test actual project/default/worktree/request/queue/steer/review contracts, exact recovery and physical Command/control delivery, perform affected macOS Swift checks, and run the canonical capability helper. [Native remainder](../NATIVE-REMAINDER.md) and the return package give focused host-specific steps. No private-host connection, installation, service restart, push/merge or publication occurred. A later M4 publication still requires accepted M1 integration, current explicit owner authorization, exact signed manifests, preservation/rollback and atomic publication.
+
+---
 
 ## UX refinement, 2026-10-27
 

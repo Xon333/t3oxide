@@ -356,6 +356,9 @@ func TestRefinementPendingSurfaceCannotEditHiddenComposer(t *testing.T) {
 func TestRefinementBrowserAdmissionPreservesPendingSend(t *testing.T) {
 	m := testModel(t)
 	m.session = &client.Session{}
+	m.status = client.Status{ThreadID: "attached-source", Writable: true}
+	m.navigator.focused = false
+	m.restoreFocus()
 	m.actionBusy = true
 	m.actionName = "send"
 	m.actionID = 8
@@ -363,16 +366,20 @@ func TestRefinementBrowserAdmissionPreservesPendingSend(t *testing.T) {
 	m.cancelAction = func() { canceled = true }
 	m.composer.SetValue("next human draft")
 	_, cmd := m.Update(keyPress('o', tea.ModCtrl))
-	if cmd == nil || canceled || !m.browserBusy || !m.actionBusy || m.actionID != 8 || !m.browserPage {
-		t.Fatal("opening browser canceled or replaced pending send")
+	if canceled || !m.navigator.focused || !m.actionBusy || m.actionID != 8 || m.browserPage {
+		t.Fatalf("opening unified navigator changed pending source: cmd=%t canceled=%t focused=%t busy=%t action=%d browser=%t", cmd != nil, canceled, m.navigator.focused, m.actionBusy, m.actionID, m.browserPage)
+	}
+	m.Update(keyPress('x'))
+	if m.currentDraft() != "next human draft" {
+		t.Fatal("navigator query edited the hidden composer")
 	}
 	m.Update(actionMsg{generation: m.generation, id: 8, name: "send"})
-	if !m.browserPage || !m.browserBusy || m.actionBusy || m.composer.Focused() {
-		t.Fatal("send receipt changed active browser or focused hidden draft")
+	if !m.navigator.focused || m.actionBusy || m.composer.Focused() || canceled {
+		t.Fatal("send receipt changed active navigator or focused hidden draft")
 	}
-	m.Update(actionMsg{generation: m.generation, id: m.browserID, browser: true, name: "switch"})
-	if m.browserPage || !m.composer.Focused() || m.currentDraft() != "next human draft" {
-		t.Fatal("browser completion failed to resume exact draft")
+	m.Update(keyPress('o', tea.ModCtrl))
+	if m.navigator.focused || !m.composer.Focused() || m.currentDraft() != "next human draft" {
+		t.Fatal("leaving navigator failed to resume exact draft")
 	}
 }
 

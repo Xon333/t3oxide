@@ -163,6 +163,10 @@ func launchActions(c *ModelCatalog, selection *config.ModelSelection, enabled bo
 	return actions
 }
 func (a *Session) pickLaunchSelection(ctx context.Context, c *ModelCatalog, base config.ModelSelection, action string) (config.ModelSelection, error) {
+	return a.pickLaunchSelectionWithDefaults(ctx, c, base, action, false)
+}
+
+func (a *Session) pickLaunchSelectionWithDefaults(ctx context.Context, c *ModelCatalog, base config.ModelSelection, action string, nativeDefaults bool) (config.ModelSelection, error) {
 	if action == "model" {
 		choices := []Choice{}
 		for _, m := range c.Models {
@@ -229,6 +233,11 @@ func (a *Session) pickLaunchSelection(ctx context.Context, c *ModelCatalog, base
 	next := base.WithOption(d.ID, value)
 	if d.ID == "serviceTier" && model.descriptor("fastMode") == nil {
 		next = next.WithOption("fastMode", nil)
+	}
+	if nativeDefaults {
+		copy := *c
+		copy.RequiresNewThreadForModelChange = false
+		return next, copy.validate(next)
 	}
 	return next, c.validateLaunch(next)
 }

@@ -23,10 +23,10 @@ func navigatorFixture(t *testing.T, width, height int) *Model {
 	m.status = client.Status{ProfileID: "build-host", EnvironmentID: "build-id", ThreadID: "design", ProfileIDs: []string{"build-host", "linux-host"}, ModelName: "Provider model · high", RunState: "running", ConnectionState: "connected", Connected: true, Writable: true, Activity: true, ActiveRunID: "run-1", Location: client.Location{Environment: "Build host", Title: "Terminal redesign", Workspace: "/work/t3oxide", ThreadID: "design"}}
 	parent, sub := "design", "subagent"
 	m.navigatorLoaded(navigatorMsg{generation: m.generation, serial: m.navigator.serial, page: client.NavigatorPage{ProfileID: "linux-host", Label: "Linux host", Tree: true, Navigation: client.NavigationState{Filter: "all", Lifecycle: "active", Expanded: map[string]bool{}}, Page: client.ThreadPage{ObservedAt: "2026-10-24T12:00:00Z", More: true, Limit: 24, NextCursor: new(24), Threads: []client.Thread{
-		{ID: "fleet", Title: "Runtime ownership", Status: "waiting", Project: "Fleet", ChildCount: 2, Lineage: &wire.Lineage{}},
-		{ID: "design", Title: "Terminal redesign", Status: "running", Project: "Terminal", Lineage: &wire.Lineage{}},
-		{ID: "child", Title: "Protocol review", Status: "running", Depth: 1, Lineage: &wire.Lineage{RelationshipToParent: &sub, ParentThreadID: &parent}},
-		{ID: "docs", Title: "Documentation", Status: "idle", Project: "Fleet", Lineage: &wire.Lineage{}},
+		{ID: "fleet", UpdatedAt: "2026-10-24T12:04:00Z", ProjectID: "fleet", Title: "Runtime ownership", Status: "waiting", Project: "Fleet", ChildCount: 2, Lineage: &wire.Lineage{}},
+		{ID: "design", UpdatedAt: "2026-10-24T12:03:00Z", ProjectID: "terminal", Title: "Terminal redesign", Status: "running", Project: "Terminal", Lineage: &wire.Lineage{}},
+		{ID: "child", UpdatedAt: "2026-10-24T12:02:00Z", ProjectID: "terminal", Title: "Protocol review", Status: "running", Depth: 1, Lineage: &wire.Lineage{RelationshipToParent: &sub, ParentThreadID: &parent}},
+		{ID: "docs", UpdatedAt: "2026-10-24T12:01:00Z", ProjectID: "fleet", Title: "Documentation", Status: "idle", Project: "Fleet", Lineage: &wire.Lineage{}},
 	}}}})
 	m.snapshot = &wire.Snapshot{Revision: 1, Metadata: wire.Metadata{ThreadID: "design", Title: "Terminal redesign", Live: true, HasMore: true, Activity: &wire.ActivityPage{Scope: "page", Items: []wire.ActivityItem{{Key: "design/tool-1", ItemID: "tool-1", SourceThreadID: "design", Kind: "command_execution", Title: "go test ./...", Status: "completed"}, {Key: "design/tool-2", ItemID: "tool-2", SourceThreadID: "design", Kind: "file_change", Title: "Update navigation", Status: "running"}}, Total: 2}}, Items: []wire.Row{
 		{Key: "design/human", Kind: "user_message", Text: "Keep the attached conversation visible while I browse another environment."},
@@ -58,18 +58,18 @@ func TestNavigatorWorkspaceResponsiveActualViews(t *testing.T) {
 					t.Fatalf("width %d != %d: %q", ansi.StringWidth(row), size.w, row)
 				}
 			}
-			for _, want := range []string{"Build host", "Terminal redesign", "Commands", "Settings", "Stop"} {
+			for _, want := range []string{"Build host", "Terminal redesign", "Stop"} {
 				if !strings.Contains(plain, want) {
 					t.Fatalf("missing %q\n%s", want, plain)
 				}
 			}
-			if size.w >= 104 && !strings.Contains(plain, "Linux host") {
+			if size.w >= 80 && !strings.Contains(plain, "Linux host") {
 				t.Fatal("bounded navigation missing")
 			}
-			if size.w < 104 && strings.Contains(plain, "Runtime ownership") {
+			if size.w < 80 && strings.Contains(plain, "Runtime ownership") {
 				t.Fatal("narrow layout squeezed in sidebar")
 			}
-			if size.w >= 170 && !strings.Contains(plain, "go test ./...") {
+			if size.w >= 170 && !strings.Contains(plain, "+ Command") {
 				t.Fatal("context omits real activity")
 			}
 			if dir := os.Getenv("T3OXIDE_UI_PREVIEW_DIR"); dir != "" {
@@ -95,9 +95,10 @@ func TestNavigatorFocusFilteringAndClicksKeepAttachedDraftAndReading(t *testing.
 	m.follow = false
 	draft, snapshot, offset := m.currentDraft(), m.snapshot, m.viewport.YOffset()
 	finishCommand(t, m, m.focusNavigator())
-	m.Update(keyPress('d'))
-	m.Update(keyPress('o'))
-	if m.navigator.list.FilterInput.Value() != "do" || len(m.navigator.list.VisibleItems()) != 1 {
+	for _, r := range "documentation" {
+		m.Update(keyPress(r))
+	}
+	if m.navigator.list.FilterInput.Value() != "documentation" || len(m.navigator.list.VisibleItems()) != 1 {
 		t.Fatal("native synchronous navigator filter failed")
 	}
 	m.Update(keyPress(tea.KeyTab))
@@ -131,7 +132,7 @@ func TestNavigatorRejectsStaleLoadsAndMouseGeometry(t *testing.T) {
 		t.Fatal("retired attachment replaced metadata")
 	}
 	m.View()
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
 	m.Update(tea.MouseClickMsg{X: 2, Y: 2, Button: tea.MouseLeft})
 	if m.dialog != nil || m.actionBusy {
 		t.Fatal("resize reused an old sidebar button")
@@ -219,7 +220,7 @@ func TestNavigationPreferenceIsAdditiveAndPreservesAppearance(t *testing.T) {
 	}
 }
 
-func TestNavigatorInitialLoadWaitsForAttachedHandshake(t *testing.T) {
+func TestNavigatorMetadataLoadDoesNotWaitForAttachedHandshake(t *testing.T) {
 	state, err := config.OpenState(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -235,15 +236,15 @@ func TestNavigatorInitialLoadWaitsForAttachedHandshake(t *testing.T) {
 	m.width = 120
 	m.height = 35
 	m.status = client.Status{ThreadID: "thread", ProfileID: "host", Connected: false}
-	if m.loadNavigator("", "", false) != nil || m.navigator.loading {
-		t.Fatal("connecting attachment spawned a temporary metadata helper")
+	if m.loadNavigator("", "", false) == nil || !m.navigator.loading || !m.navigator.pending["host"] || m.status.ThreadID != "thread" {
+		t.Fatal("metadata browsing must remain independent of a connecting attachment")
 	}
 }
 
 func TestVisibleActivityStripHasExactTargetAndCannotSendOnReplacement(t *testing.T) {
 	m := navigatorFixture(t, 120, 35)
 	plain := ansi.Strip(m.View().Content)
-	if !strings.Contains(plain, "Files · running  Update navigation") {
+	if !strings.Contains(plain, "> Update navigation") {
 		t.Fatal("ordinary workspace hides source-owned work")
 	}
 	item := m.recentActivity()
@@ -275,8 +276,8 @@ func TestActivityStripUsesActualCommandSummary(t *testing.T) {
 	m := navigatorFixture(t, 120, 35)
 	m.snapshot.Metadata.Activity.Items = []wire.ActivityItem{{Key: "design/command", SourceThreadID: "design", ItemID: "command", Kind: "command_execution", Title: "Command", Summary: "go test ./...\nnot another label", Status: "running"}}
 	strip := ansi.Strip(m.activityStripView(80))
-	if strip != "Activity · Command · running  go test ./..." {
-		t.Fatalf("tool title concealed actual work: %q", strip)
+	if strip != "> go" {
+		t.Fatalf("compact executable label differs: %q", strip)
 	}
 }
 
@@ -286,7 +287,7 @@ func TestContextResizeReleasesHiddenFocus(t *testing.T) {
 	m.contextFocused = true
 	m.resize()
 	m.restoreFocus()
-	_, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
 	finishCommand(t, m, cmd)
 	if m.contextFocused || m.navigationVisible() || !m.transcriptFocus {
 		t.Fatal("narrow layout trapped keyboard in a hidden pane")

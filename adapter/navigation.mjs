@@ -1,6 +1,7 @@
 // Bounded thread navigation, derived only from T3's authoritative lineage.
 import { clip, identifier, LIMIT, requireThat } from './core.mjs';
 import { lineage } from './models.mjs';
+import { inboxMetadata } from './native.mjs';
 
 export function threadType(thread) {
   const l = lineage(thread.lineage);
@@ -119,6 +120,8 @@ export function threadList(shell, query = '', options = {}) {
   for (const {t, depth} of page) {
     const l = lineage(t.lineage), parent = all.get(l?.parentThreadId);
     const row = { id: t.id, title: clip(t.title,512).text,
+      ...(typeof t.updatedAt==='string' ? {updatedAt:clip(t.updatedAt,64).text} : {}),
+      ...(inboxMetadata(t) ? {inbox:inboxMetadata(t)} : {}),
       ...(t.projectId == null ? {} : { projectId: identifier(t.projectId, 'project id') }),
       project: clip(projects.get(t.projectId) ?? '',256).text,
       status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text,

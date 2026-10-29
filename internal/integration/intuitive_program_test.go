@@ -31,36 +31,31 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r, _ := startAppTUI(t, session)
 	r.waitText("Initial Markdown for Alpha")
 	r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-	// Exercise the full Browser explicitly at every width. Ctrl+O focuses the
-	// integrated rail on wide terminals; its program coverage is separate.
+	// Select the exact visible palette title, then use the integrated metadata
+	// navigator at every width without changing the detailed attachment.
 	r.send("\x10")
 	r.modalReady("Commands")
 	r.send("Conversations\r")
-	r.waitText("t3oxide  Conversations")
-	r.waitText("Filter: Type to filter")
+	waitNavigatorQuery(t, r, "Filter loaded")
 	r.send("Beta")
-	r.waitText("Filter: Beta")
+	waitNavigatorQuery(t, r, "Beta")
 	before := f.requestCounts()
-	// Shift+Tab reaches the last visible control from the query without
-	// depending on the profile count or the separate Results focus stop.
-	r.send("\x1b[Z")
-	r.waitText("[More]")
-	r.send("\r")
-	r.waitText("Refresh")
-	r.send("Help\r")
-	r.waitText("Ctrl+Y") // The local Help detail, rather than its menu row.
-	if view := r.views.text(); strings.Count(view, "╭") != 1 {
-		t.Fatalf("More Help rendered duplicate or missing full-page panels:\n%s", view)
+	r.send("\x1ba") // Alt+A opens the current source-bound More menu.
+	r.modalReady("More · Conversations")
+	r.send("Refresh")
+	r.waitText("Filter: Refresh")
+	r.send("\x00") // Commands may inspect Help while retaining this menu.
+	r.modalReady("Commands")
+	r.send("help\r")
+	r.waitText("Keyboard and commands")
+	if view := r.views.text(); strings.Count(view, "Keyboard and commands") != 1 || strings.Count(view, "Ctrl+Y copy") != 1 {
+		t.Fatalf("Help acquired duplicate or missing local detail controls:\n%s", view)
 	}
 	r.send("\x1b")
-	r.waitText("Filter: Help")
-	r.send("\x1b")
-	r.waitText("Filter: Beta")
-	r.waitText("[More]")
+	r.modalReady("More · Conversations")
+	r.waitText("Filter: Refresh")
 	r.send("\r")
-	r.waitText("Refresh")
-	r.send("Refresh\r")
-	r.waitText("Filter: Beta")
+	waitNavigatorQuery(t, r, "Beta")
 	if session.Draft() != draft || session.Status().ThreadID != "thread-a" {
 		t.Fatal("More changed the active conversation or its exact draft")
 	}
@@ -70,7 +65,7 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
 		t.Fatal("More/Help/Refresh dispatched a mutation")
 	}
-	r.send("\x1b")
+	r.send("\x0f")
 	r.waitText("Initial Markdown for Alpha")
 	if session.Draft() != draft {
 		t.Fatal("Resume changed the exact source draft")
@@ -97,6 +92,8 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 	r.send("\t\x10") // Reading focus makes Ctrl+P a command action.
 	r.modalReady("Commands")
 	r.send("New conversation\r")
+	r.modalReady("Project")
+	r.send("\r")
 	r.waitText("First message")
 	const message = "  first message\nsecond line  "
 	const title = "Literal /model title"
@@ -119,7 +116,7 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 	}
 	current := clone(f.threads["thread-a"]["thread"])
 	f.mu.Unlock()
-	if payload == nil || payload["title"] != title || payload["initialMessage"].(object)["text"] != message || payload["workspaceStrategy"].(object)["worktreePath"] != "/fixture/existing-worktree" {
+	if payload == nil || payload["title"] != title || payload["initialMessage"].(object)["text"] != message || !reflect.DeepEqual(payload["workspaceStrategy"], object{"type": "root"}) || payload["projectId"] != "project-a" {
 		t.Fatalf("Create changed the exact payload/source binding: %+v", payload)
 	}
 	if !reflect.DeepEqual(source, current) || state.Draft("env-a", "thread-a") != sourceDraft {
@@ -128,7 +125,7 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 	if effects, dispatches := f.counts(); effects != 1 || dispatches != 1 {
 		t.Fatalf("Create produced %d effects/%d dispatches", effects, dispatches)
 	}
-	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/thread-a") != "" {
+	if state.Pending("env-a", false) != nil || state.Draft("env-a", "\x00new/project-launch/project-a") != "" {
 		t.Fatal("launch acknowledgment retained its own pending action/draft")
 	}
 	quitIntuitiveProgram(t, r)
@@ -148,7 +145,7 @@ func TestIntuitiveHistoryKeepsVerifiedRequestsVisibleAndReviewable(t *testing.T)
 			r.waitText("Initial Markdown for Alpha")
 			r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 			r.waitText("Awaiting input (2)")
-			r.send("/earlier\r")
+			r.send("/earlier\x1d")
 			r.waitText("Earlier page for thread-a")
 			r.waitText("Awaiting input (2)")
 			r.waitText("Ctrl+R requests")

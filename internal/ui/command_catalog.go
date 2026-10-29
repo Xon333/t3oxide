@@ -20,7 +20,21 @@ type commandSpec struct {
 func (m *Model) commandCatalog() []commandSpec {
 	k := m.keyMap()
 	rows := []commandSpec{
+		{"model", "Model", "[next] [model]", "", k.Model},
+		{"effort", "Effort", "[next] [value]", "", k.Effort},
+		{"new", "New conversation", "[title]", "Native defaults · choose an existing project", k.New},
+		{"new-same", "New in same project", "[title]", "Carries only project; uses native launch defaults", k.NewSame},
+		{"review", "Review", "", "Requests or actual changes for the current task", m.actionBinding("agentbox.diff")},
 		{"switch", "Conversations", "[words]", "", k.Threads},
+		{"mode", "Mode", "[developer|agentbox]", "Same T3 conversations and drafts", k.Mode},
+		{"inbox", "Inbox", "[needs-you|working|queued|later|done|all]", "Native task state and local review disposition", m.actionBinding("agentbox.inbox")},
+		{"file", "File work", "", "Review a native task launch", m.actionBinding("agentbox.file")},
+		{"file-many", "File multiple tasks", "", "One task per line; review each native launch", key.Binding{}},
+		{"send", "Send", "", "Send the current draft using selected delivery", k.Send},
+		{"steer", "Steer", "", "Explicit one-message steering; same conversation", k.Steer},
+		{"send-literal", "Send literal text", "", "Preserve leading slash and exact draft bytes", k.Literal},
+		{"settings", "Settings", "", "Model, effort, tier and appearance", k.Settings},
+		{"info", "Info", "", "Exact source, state and receipts", k.Detail},
 		{"search", "Find in current page", "[text]", "", k.Search},
 		{"earlier", "Earlier history", "", "Pauses live detail", k.Earlier},
 		{"latest", "Latest", "", "Resumes live detail", k.Latest},
@@ -32,14 +46,10 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"clear", "Clear draft", "", "Recoverable in prompt history", k.Clear},
 		{"env", "Environments", "", "", k.Environments},
 		{"threads", "Search conversations", "[words]", "Host titles and projects, including unloaded rows", key.Binding{}},
-		{"new", "New conversation", "[title]", "Uses the current workspace", key.Binding{}},
-		{"settings", "Settings", "", "Model, effort, tier and appearance", key.Binding{}},
-		{"details", "Details", "", "", k.Detail},
 		{"stop", "Stop + hold queue", "", "Reviewed active turn", k.Stop},
-		{"filter", "Conversation types", "[all|main|subagents|forks]", "", key.Binding{}},
+		{"filter", "Conversation types", "[all|main|subagents|forks]", "", k.Filter},
+		{"refresh", "Refresh conversations", "", "Refresh bounded metadata", k.Refresh},
 		{"parent", "Parent conversation", "", "", k.Parent},
-		{"model", "Thread model", "[next] [model]", "", k.Model},
-		{"effort", "Reasoning effort", "[next] [value]", "", k.Effort},
 		{"speed", "Speed", "[next] [value]", "", k.Speed},
 		{"presets", "Model presets", "[next] [save|remove|apply] [name]", "", key.Binding{}},
 		{"override", "Next-message override", "[model|effort|speed|presets|clear]", "T3 may adopt the dispatched selection", key.Binding{}},
@@ -58,6 +68,7 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"reconnect", "Reconnect", "", "Never replays writes", key.Binding{}},
 		{"web", "Show T3 address", "", "Configured address for this environment", key.Binding{}},
 		{"keyboard", "Keyboard shortcuts", "modern|legacy", "Modern Ctrl+P Commands; legacy editor Ctrl+P", key.Binding{}},
+		{"shortcuts", "Shortcut file", "", "Resolved keys and optional manual configuration", key.Binding{}},
 		{"quit", "Exit", "", "Detaches locally", k.Quit},
 	}
 	// Reuse semantic task descriptions from the client contract, including
@@ -88,6 +99,9 @@ func (m *Model) commandSpec(name string) (commandSpec, bool) {
 	if name == "keys" {
 		name = "help"
 	}
+	if name == "details" {
+		name = "info"
+	}
 	for _, row := range m.commandCatalog() {
 		if row.name == name {
 			return row, true
@@ -98,6 +112,16 @@ func (m *Model) commandSpec(name string) (commandSpec, bool) {
 
 func (m *Model) commandUnavailable(name string) string {
 	switch name {
+	case "send", "send-literal", "steer":
+		if m.dialog != nil || m.detail != "" || m.searching || m.browserPage || m.launchPage {
+			return "Unavailable: return to the ordinary composer; request Submit is separate"
+		}
+		if !m.status.Writable {
+			return "Unavailable: open a connected writable conversation"
+		}
+		if strings.TrimSpace(m.currentDraft()) == "" {
+			return "Unavailable: the composer is empty"
+		}
 	case "requests":
 		if m.status.Requests == 0 {
 			return "Unavailable: no offered questions or approvals for the attached conversation"
@@ -147,9 +171,11 @@ func (m *Model) paletteItems() []list.Item {
 			}
 			continue
 		}
-		if spec.name == "copy" || spec.name == "retry" || spec.name == "resolve" || spec.name == "keyboard" {
+		if spec.name == "copy" || spec.name == "retry" || spec.name == "resolve" || spec.name == "keyboard" || spec.name == "mode" {
 			variants := []struct{ args, label string }{}
 			switch spec.name {
+			case "mode":
+				variants = []struct{ args, label string }{{"developer", "Developer"}, {"agentbox", "AgentBox"}}
 			case "keyboard":
 				variants = []struct{ args, label string }{{"modern", "Ctrl+P Commands (default)"}, {"legacy", "Editor Ctrl+P"}}
 			case "copy":
@@ -200,8 +226,12 @@ func (m *Model) validateCommand(name, args string) error {
 	}
 	valid := true
 	switch name {
-	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details", "context":
+	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details", "info", "context", "shortcuts", "review", "file", "file-many", "send", "send-literal", "steer", "refresh":
 		valid = args == ""
+	case "mode":
+		valid = args == "" || args == "developer" || args == "agentbox"
+	case "inbox":
+		valid = args == "" || args == "needs-you" || args == "working" || args == "queued" || args == "later" || args == "done" || args == "all"
 	case "keyboard":
 		valid = args == "modern" || args == "legacy"
 	case "theme":
@@ -218,7 +248,7 @@ func (m *Model) validateCommand(name, args string) error {
 		valid = args == "" || args == "all" || args == "main" || args == "subagents" || args == "forks"
 	case "override":
 		valid = args == "" || args == "model" || args == "effort" || args == "speed" || args == "presets" || args == "clear"
-	case "new":
+	case "new", "new-same":
 		valid = len(args) <= 512
 	}
 	if !valid {

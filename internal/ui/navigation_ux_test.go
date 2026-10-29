@@ -88,9 +88,10 @@ func TestNavigationReviewRejectsRetiredPageAndAttachment(t *testing.T) {
 			case "attachment":
 				m.generation++
 			case "loading":
+				m.navigator.pending = map[string]bool{"linux-host": true}
 				m.navigator.loading = true
 			case "failure":
-				m.navigator.error = "unavailable"
+				m.navigator.failures["linux-host"] = "unavailable"
 			case "replacement-menu":
 				m.openNavigatorActions()
 			}
@@ -129,8 +130,8 @@ func TestNavigationDetailsPreserveDraftAnchorAndExactMetadataTarget(t *testing.T
 		t.Fatal("metadata inspection changed attachment, draft, focus, or reading anchor")
 	}
 	m.Update(keyPress('l', tea.ModCtrl))
-	if !strings.Contains(m.detail, "Conversation ID: design") || !strings.Contains(m.detail, "Browse: Linux host") || m.currentDraft() != draft {
-		t.Fatal("portable Details shortcut did not inspect the current browse target")
+	if !strings.Contains(m.detail, "Conversation ID: design") || !strings.Contains(m.detail, "Environment: Linux host") || m.currentDraft() != draft {
+		t.Fatal("portable Info shortcut did not inspect the current browse target")
 	}
 }
 
@@ -165,7 +166,7 @@ func TestNavigationNoMatchesCannotActOnHiddenSelectedSource(t *testing.T) {
 		item := raw.(choiceItem)
 		_, action, _ := strings.Cut(strings.TrimPrefix(item.args, "review:"), ":")
 		switch action {
-		case "open", "new", "settings", "details":
+		case "open", "new-same", "settings", "details":
 			if !item.disabled || !strings.Contains(item.description, "Select") {
 				t.Fatalf("hidden source action %q lacks disabled explanation", action)
 			}

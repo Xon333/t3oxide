@@ -4,9 +4,10 @@ import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
 import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
-import { FEATURES, catalog, launchCommand, modelCommand, modelView } from './models.mjs';
+import { FEATURES, catalog, launchCommand, modelCommand, modelView, sameSelection } from './models.mjs';
 import { threadList } from './navigation.mjs';
 import { ACTIVITY_KINDS, ACTIVITY_LIMIT, activityDetail, activityItem, activityPage, trimActivity } from './activity.mjs';
+import { projectPage, resolveDefaults, launchProjectCommand, launchWorkspaceMatches, threadActionCommand, nativeRevision, reviewResult, effectiveProjectSetting, projectFileDefaults } from './native.mjs';
 
 // Coalesce useful frames without delaying every edit by a third of a second.
 // Structural reads have a separate sustained-rate ceiling: a burst can reveal
@@ -83,6 +84,7 @@ export class T3 {
     return { protocol: 1, adapterRevision: SOURCE, environmentId: d.environmentId,
       serverVersion: d.serverVersion, orchestrationProtocol: d.orchestrationProtocolVersion,
       features: { ...FEATURES, modelSelection: d.capabilities?.serverResolvedCommandContext === true,
+        nativeWorkflows: d.capabilities?.serverResolvedCommandContext === true,
         launchModelSelection: d.capabilities?.serverResolvedCommandContext === true,
         messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },
       writesEnabled: this.config.allowWrites === true && d.capabilities?.serverResolvedCommandContext === true };
@@ -148,6 +150,64 @@ export class T3 {
     await this.connect();
     const p = targetThread(await this.bounded(identifier(threadId)), threadId);
     return this.modelCatalog(p);
+  }
+  async projects(a = {}) {
+    if (!this.descriptor) await this.probe();
+    return projectPage(await this.http('/api/orchestration/shell'), a);
+  }
+  async launchDefaults(a) {
+    identifier(a.projectId, 'project');
+    await this.connect();
+    requireThat(this.descriptor?.capabilities?.serverResolvedCommandContext === true,
+      'Native launch defaults are unavailable on this host.', 'unsupported');
+    const shell = await this.http('/api/orchestration/shell');
+    const config = await this.rpc.call('server.getConfig', {}).promise;
+    if (!config.settings) config.settings = await this.rpc.call('server.getSettings', {}).promise;
+    const project = shell.projects?.find(p=>p.id===a.projectId && !p.deletedAt);
+    requireThat(project, 'Selected project is unavailable.', 'stale');
+    const mode=effectiveProjectSetting(config.settings,project,'defaultThreadEnvMode');
+    let projectFile=null;
+    if (mode == null) {
+      try {
+        const file=await this.rpc.call('projects.readFile', {cwd:project.workspaceRoot,relativePath:'t3.json',allowMissing:true}).promise;
+        if (file.exists !== false && !file.truncated) projectFile=projectFileDefaults(file.contents);
+      } catch (error) {
+        // Native treats a missing/invalid project file as absent. Authentication,
+        // transport and unknown method failures must not silently pick root.
+        if (!['not_found','ENOENT'].includes(error.code) && !/not found|no such file|ENOENT/iu.test(error.message ?? '')) throw error;
+      }
+    }
+    const defaults=resolveDefaults(shell,config,a.projectId,projectFile,a.isolated===true);
+    requireThat(a.workspaceMode === undefined || ['local','worktree'].includes(a.workspaceMode), 'Invalid explicit workspace mode.');
+    if (a.workspaceMode) defaults.workspaceMode=a.workspaceMode;
+    defaults.workspaceStrategy={type:'root'};
+    if (defaults.workspaceMode==='worktree') {
+      const refs=await this.rpc.call('vcs.listRefs',{cwd:defaults.workspaceRoot,limit:200,refKind:'local'}).promise;
+      requireThat(refs?.isRepo===true && Array.isArray(refs.refs), 'Native isolated worktree needs a Git repository.', 'unsupported');
+      const base=refs.refs.find(r=>r.isDefault===true && r.isRemote!==true) ?? refs.refs.find(r=>r.current===true && r.isRemote!==true);
+      requireThat(base && typeof base.name==='string' && base.name.length>0,
+        'Native worktree base is unavailable; choose it in T3.', 'unavailable');
+      defaults.workspaceStrategy={type:'worktree',baseRef:base.name};
+    }
+    defaults.revision=hash(defaults);
+    return defaults;
+  }
+  async reviewThread(a) {
+    identifier(a.threadId,'review thread');
+    await this.connect();
+    const shell=await this.http('/api/orchestration/shell');
+    const thread=shell.threads?.find(t=>t.id===a.threadId && !t.deletedAt && !t.archivedAt);
+    requireThat(thread,'Native review thread is unavailable.','unavailable');
+    requireThat(!a.revision || a.revision===nativeRevision(thread),'Thread changed; open its current review.','stale');
+    const project=shell.projects?.find(p=>p.id===thread.projectId && !p.deletedAt);
+    const cwd=thread.worktreePath ?? project?.workspaceRoot;
+    requireThat(typeof cwd==='string' && cwd.startsWith('/') && Buffer.byteLength(cwd)<=4096 && !/[\x00-\x1f\x7f]/u.test(cwd),
+      'Native review workspace is unavailable.','unsupported');
+    const result=await this.rpc.call('review.getDiffPreview',{cwd}).promise;
+    const fresh=await this.http('/api/orchestration/shell');
+    const current=fresh.threads?.find(t=>t.id===thread.id);
+    requireThat(current && nativeRevision(current)===nativeRevision(thread), 'Thread changed during review; reopen it.', 'stale');
+    return reviewResult(thread,project,result);
   }
   async activity(threadId, cursor) {
     identifier(threadId, 'activity thread');
@@ -455,11 +515,20 @@ export class T3 {
         if (!receipt.payload) {
           // First dispatch uses fresh control state. An explicit same-ID retry
           // reuses the exact command, even if the original Stop/answer took effect.
-          const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
-          const choices = op === 'select-model' || ['send', 'launch'].includes(op) && a.modelSelection !== undefined
-            ? await this.modelCatalog(p) : null;
-          receipt.payload = op === 'launch' ? launchCommand(a,p,this.descriptor,choices) : modelCommand(op,a,p,this.descriptor,choices);
-          receipt.tag = op === 'launch' ? 'orchestration.launchThread' : 'orchestration.dispatchCommand';
+          if (op === 'launch-project') {
+            receipt.payload=launchProjectCommand(a,await this.launchDefaults(a));
+          } else {
+            const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
+            if (op === 'thread-action') {
+              const shell=await this.http('/api/orchestration/shell');
+              receipt.payload=threadActionCommand(a,p,shell.threads?.find(t=>t.id===a.threadId));
+            } else {
+              const choices = op === 'select-model' || ['send', 'launch'].includes(op) && a.modelSelection !== undefined
+                ? await this.modelCatalog(p) : null;
+              receipt.payload = op === 'launch' ? launchCommand(a,p,this.descriptor,choices) : modelCommand(op,a,p,this.descriptor,choices);
+            }
+          }
+          receipt.tag = ['launch','launch-project'].includes(op) ? 'orchestration.launchThread' : 'orchestration.dispatchCommand';
         }
         requireThat(!this.closed && this.rpc, 'T3 disconnected before dispatch.', 'disconnected');
         if (this.journal && !receipt.durable) {
@@ -469,9 +538,34 @@ export class T3 {
           receipt.durable = saved; receipt.payload = saved.payload; receipt.tag = saved.tag;
           if (saved.result) { receipt.result = saved.result; return saved.result; }
         }
-        const result = await this.rpc.call(receipt.tag, receipt.payload).promise;
-        if (!(op === 'launch' ? typeof result?.threadId === 'string' : Number.isSafeInteger(result?.sequence) && result.sequence >= 0)) throw new Fault('incompatible', 'T3 returned an unfamiliar acknowledgement; inspect the thread before another action.', true);
-        const accepted = op === 'launch' ? {threadId:result.threadId} : {sequence:result.sequence};
+        const isLaunch=['launch','launch-project'].includes(op);
+        let result;
+        if (isLaunch && receipt.uncertain) {
+          // Explicit recovery first reconciles the persisted exact native
+          // thread/message identity. No title search or duplicate redispatch.
+          const payload=receipt.payload;
+          const p=targetThread(await this.bounded(identifier(payload.threadId)),payload.threadId);
+          const same=p.thread.projectId===payload.projectId &&
+            p.thread.runtimeMode===payload.runtimeMode && p.thread.interactionMode===payload.interactionMode &&
+            sameSelection(p.thread.modelSelection,payload.modelSelection) &&
+            launchWorkspaceMatches(p.thread,payload.workspaceStrategy,a.workspaceRoot);
+          const hasMessage=!payload.initialMessage || p.runs.some(r=>r.userMessageId===payload.initialMessage.messageId) ||
+            p.visibleTurnItems.some(r=>r.item?.messageId===payload.initialMessage.messageId);
+          requireThat(same && hasMessage, 'Launch remains uncertain: exact native thread/message identity is not reconciled; no launch was retried.', 'uncertain_launch');
+          result={threadId:payload.threadId,reconciled:true};
+        } else result = await this.rpc.call(receipt.tag, receipt.payload).promise;
+        if (!(isLaunch ? typeof result?.threadId === 'string' && result.threadId===receipt.payload.threadId : Number.isSafeInteger(result?.sequence) && result.sequence >= 0)) throw new Fault('incompatible', 'T3 returned an unfamiliar acknowledgement; inspect the thread before another action.', true);
+        const accepted = isLaunch ? {threadId:result.threadId,...(result.reconciled?{reconciled:true}:{})} : {sequence:result.sequence};
+        if (op==='thread-action') {
+          accepted.threadId=a.threadId; accepted.action=a.action;
+          // Action acceptance remains authentic even when the optional
+          // post-read fails. In that case no undo revision is offered.
+          try {
+            const shell=await this.http('/api/orchestration/shell');
+            const current=shell.threads?.find(t=>t.id===a.threadId);
+            if (current) accepted.nativeRevision=nativeRevision(current);
+          } catch { /* do not turn an acknowledged action into a retry */ }
+        }
         // No success reaches the client until its receipt is durable too.
         // A storage failure after upstream acceptance remains retryable with
         // the original persisted payload, never with freshly derived controls.

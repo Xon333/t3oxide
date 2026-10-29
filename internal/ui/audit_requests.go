@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -247,15 +248,15 @@ func (m *Model) requestFormKey(msg tea.KeyPressMsg) tea.Cmd {
 	d := m.dialog
 	f := d.requestForm
 	q := f.questions[f.index]
+	if key.Matches(msg, m.actionBinding("info")) {
+		return m.dispatch("info", "")
+	}
+	if key.Matches(msg, m.actionBinding("request-submit")) {
+		return m.advanceRequest(false)
+	}
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		return m.cancelForm()
-	case "ctrl+l":
-		m.saveRequestAnswer()
-		d.details = true
-		m.refreshDialogDetails()
-		m.resize()
-		return nil
 	case "tab", "shift+tab":
 		if !m.saveRequestAnswer() {
 			return nil
@@ -281,8 +282,6 @@ func (m *Model) requestFormKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.notice = "Original answer cleared locally; type a replacement before submitting"
 			return m.focusRequestForm()
 		}
-	case "ctrl+enter":
-		return m.advanceRequest(false)
 	case "enter":
 		switch f.focus {
 		case 0:
@@ -437,7 +436,7 @@ func (m *Model) requestFormView(width, height int) string {
 		rows = append(rows, label)
 		if m.requestEditorVisible() {
 			if d.preservedInitial != "" {
-				rows = append(rows, fitLine("Exact answer preserved · Ctrl+L review", width))
+				rows = append(rows, fitLine("Exact answer preserved · "+m.actionBinding("info").Help().Key+" Info", width))
 			} else {
 				rows = append(rows, m.modalInput.View())
 			}

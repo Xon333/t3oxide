@@ -12,12 +12,13 @@ import (
 // rows are offered targets; opening one still passes through Target and the
 // normal environment/hello/snapshot verification on the new session.
 type NavigatorPage struct {
-	ProfileID  string
-	Label      string
-	Query      string
-	Page       ThreadPage
-	Navigation NavigationState
-	Tree       bool
+	ProfileID     string
+	EnvironmentID string
+	Label         string
+	Query         string
+	Page          ThreadPage
+	Navigation    NavigationState
+	Tree          bool
 }
 
 func (a *Session) NavigatorProfiles() []Choice {
@@ -54,7 +55,16 @@ func (a *Session) NavigatorRead(ctx context.Context, profile, query string) (Nav
 	if err != nil {
 		return NavigatorPage{}, err
 	}
-	return NavigatorPage{ProfileID: profile, Label: env.Label, Query: query, Page: page, Navigation: a.manager.navigation(env.EnvironmentID), Tree: tree}, nil
+	return NavigatorPage{ProfileID: profile, EnvironmentID: env.EnvironmentID, Label: env.Label, Query: query, Page: page, Navigation: a.manager.navigation(env.EnvironmentID), Tree: tree}, nil
+}
+
+// NavigatorScope is the explicit browsing scope, independent of launch target
+// or the current attachment. Its initial value includes every configured host.
+func (a *Session) NavigatorScope() []string {
+	if a == nil || a.manager == nil {
+		return nil
+	}
+	return a.manager.browserScope("")
 }
 
 // NavigatorChange only changes local navigation state. Targets and continuation
@@ -133,7 +143,7 @@ func (a *Session) NavigatorOpen(page NavigatorPage, thread string) (*Session, er
 }
 
 func (a *Session) NavigatorSource(ctx context.Context, page NavigatorPage, thread, action string) (Result, error) {
-	if action != "new" && action != "settings" {
+	if action != "new" && action != "new-same" && action != "settings" {
 		return Result{}, errors.New("source action was not offered")
 	}
 	if _, err := a.navigatorEnvironment(page.ProfileID); err != nil {
@@ -141,6 +151,12 @@ func (a *Session) NavigatorSource(ctx context.Context, page NavigatorPage, threa
 	}
 	for _, row := range page.Page.Threads {
 		if row.ID == thread {
+			if action == "new-same" {
+				return a.NewConversationForProject(ctx, "", row.ProjectID, false)
+			}
+			if action == "new" {
+				return a.NewConversation(ctx, "", false, false)
+			}
 			return a.withBrowserSource(ctx, page.ProfileID, thread, action)
 		}
 	}

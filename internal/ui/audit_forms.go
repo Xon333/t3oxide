@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -115,14 +116,12 @@ func (m *Model) cycleModelSetting(delta int) {
 func (m *Model) modelSettingsKey(msg tea.KeyPressMsg) tea.Cmd {
 	f := m.dialog.settingsForm
 	count := f.optionCount() + 3 // model, options, Apply, Cancel
+	if key.Matches(msg, m.actionBinding("info")) {
+		return m.dispatch("info", "")
+	}
 	switch msg.String() {
 	case "esc", "ctrl+c":
 		return m.cancelForm()
-	case "ctrl+l":
-		m.dialog.details = true
-		m.refreshDialogDetails()
-		m.resize()
-		return nil
 	case "tab", "down":
 		f.focus = (f.focus + 1) % count
 	case "shift+tab", "up":
@@ -251,6 +250,7 @@ func (m *Model) modelSettingsDetails() string {
 // renders it, keeping compact forms from paying for a second shortcut row.
 func (m *Model) formDialogHelpPairs() []string {
 	d := m.dialog
+	info, dismiss := m.actionBinding("info").Help().Key, m.actionBinding("dismiss").Help().Key
 	if d.settingsForm != nil {
 		f := d.settingsForm
 		action := "choose"
@@ -259,14 +259,22 @@ func (m *Model) formDialogHelpPairs() []string {
 		} else if f.focus == f.optionCount()+2 {
 			action = "cancel"
 		}
-		return []string{"Enter", action, "Tab/↑↓", "field", "Ctrl+L", "details", "Esc", "back"}
+		return []string{"Enter", action, "Tab/↑↓", "field", info, "Info", dismiss, "back"}
 	}
 	if d.requestForm != nil {
 		f := d.requestForm
 		action := "select"
 		switch f.focus {
 		case 1:
-			return []string{"Tab", "continue", "Ctrl+J", "newline", "Ctrl+L", "details", "Esc", "back"}
+			submit := "next"
+			if f.index == len(f.questions)-1 {
+				submit = "submit"
+			}
+			pairs := []string{"Tab", "controls", "Enter", "newline"}
+			if binding := m.actionBinding("request-submit"); binding.Enabled() {
+				pairs = append(pairs, binding.Help().Key, submit)
+			}
+			return append(pairs, info, "Info", dismiss, "back")
 		case 2:
 			action = "back"
 		case 3:
@@ -277,7 +285,7 @@ func (m *Model) formDialogHelpPairs() []string {
 		case 4:
 			action = "cancel"
 		}
-		return []string{"Enter", action, "Tab", "controls", "Ctrl+L", "details", "Esc", "back"}
+		return []string{"Enter", action, "Tab", "controls", info, "Info", dismiss, "back"}
 	}
 	return nil
 }

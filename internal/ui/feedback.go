@@ -96,7 +96,7 @@ func (m *Model) feedbackDiagnosis() (diagnosis, next string) {
 
 func (m *Model) feedbackSummary(width int) string {
 	diagnosis, _ := m.feedbackDiagnosis()
-	hint := "Ctrl+L error"
+	hint := m.actionBinding("info").Help().Key + " error"
 	if m.preservedDraft != "" || m.dialog != nil && m.dialog.preservedInitial != "" {
 		hint = "/error"
 	}

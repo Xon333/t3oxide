@@ -26,6 +26,7 @@ type Environment struct {
 	HostConfig     string  `json:"hostConfig"`
 	WebURL         *string `json:"webURL,omitempty"`
 	Enabled        bool    `json:"enabled"`
+	DefaultForNew  bool    `json:"defaultForNew,omitempty"`
 }
 
 var sshAlias = regexp.MustCompile(`^[A-Za-z0-9_.@-]+$`)
@@ -100,6 +101,7 @@ func Load(path string) ([]Environment, error) {
 	}
 	ids, identities := map[string]bool{}, map[string]bool{}
 	var enabled []Environment
+	defaults := 0
 	for _, e := range saved.Environments {
 		if err = e.Validate(); err != nil {
 			return nil, err
@@ -109,6 +111,12 @@ func Load(path string) ([]Environment, error) {
 		}
 		ids[e.ID], identities[e.EnvironmentID] = true, true
 		if e.Enabled {
+			if e.DefaultForNew {
+				defaults++
+				if defaults > 1 {
+					return nil, errors.New("only one enabled environment may be defaultForNew")
+				}
+			}
 			enabled = append(enabled, e)
 		}
 	}

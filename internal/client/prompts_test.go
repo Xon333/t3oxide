@@ -147,10 +147,24 @@ func TestSessionHasOnlyOneListenerAndClosingRetiresPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
+	started := make(chan struct{}, 1)
 	go func() {
 		defer close(done)
 		for range s.Events(context.Background()) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
 		}
+	}()
+	<-started
+	s.mu.Lock()
+	promptContext := s.ctx
+	s.mu.Unlock()
+	// Startup is metadata-only and does not manufacture a selection prompt.
+	// Exercise prompt retirement with a deliberately opened local question.
+	go func() {
+		_, _ = s.prompts.Ask(promptContext, Question{Kind: ChooseOne, Title: "Choose environment", Choices: []Choice{{ID: env.ID, Label: env.Label}}})
 	}()
 	p := <-s.Prompts()
 	seenError := false

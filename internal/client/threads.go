@@ -22,6 +22,8 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		return nil, false, errors.New("thread list must be an array")
 	}
 	var rows []struct {
+		UpdatedAt                                            string
+		Inbox                                                json.RawMessage
 		ID, Title, Project, Status, Model                    *string
 		ProjectID                                            *string
 		Lineage                                              json.RawMessage
@@ -36,6 +38,15 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 	threads := make([]Thread, 0, len(rows))
 	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
+		if row.UpdatedAt != "" {
+			if _, err := time.Parse(time.RFC3339Nano, row.UpdatedAt); err != nil {
+				return nil, false, errors.New("invalid thread update time")
+			}
+		}
+		inbox, err := wire.DecodeInboxMetadata(row.Inbox)
+		if err != nil {
+			return nil, false, err
+		}
 		if row.ID == nil || *row.ID == "" || len(*row.ID) > 4096 || seen[*row.ID] || strings.IndexFunc(*row.ID, func(r rune) bool { return r < 32 }) >= 0 {
 			return nil, false, errors.New("invalid thread identity in list")
 		}
@@ -73,6 +84,8 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		}
 		threads = append(threads, Thread{ID: *row.ID, Title: *row.Title, Project: *row.Project, ProjectID: projectID, Status: *row.Status, Model: *row.Model, Lineage: lineage, ParentTitle: row.ParentTitle, ChildCount: row.ChildCount, Depth: row.Depth, Expanded: row.Expanded, ContextOnly: row.ContextOnly})
 		threads[len(threads)-1].WorkingChildCount = row.WorkingChildCount
+		threads[len(threads)-1].UpdatedAt = row.UpdatedAt
+		threads[len(threads)-1].Inbox = inbox
 		threads[len(threads)-1].KnownChildCount = row.KnownChildCount
 		threads[len(threads)-1].LoadedChildCount = row.LoadedChildCount
 	}

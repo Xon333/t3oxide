@@ -23,8 +23,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.stop()
 	case key.Matches(msg, k.Quit):
 		return m.quit()
+	case key.Matches(msg, k.Mode):
+		return m.setMode("")
 	case key.Matches(msg, k.Detail) && m.detail == "":
-		return m.dispatch("details", "")
+		return m.dispatch("info", "")
 	case key.Matches(msg, k.Help):
 		return m.dispatch("help", "")
 	case key.Matches(msg, k.Error):
@@ -55,13 +57,21 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.quit()
 	}
 	if m.detail != "" {
+		if key.Matches(msg, k.Copy) {
+			return m.copyText("detail")
+		}
+		if key.Matches(msg, k.Dismiss) {
+			m.detail = ""
+			m.resize()
+			return m.restoreFocus()
+		}
 		switch msg.String() {
+		case "tab", "shift+tab":
+			return m.leaveActivityDetail()
 		case "esc", "q":
 			m.detail = ""
 			m.resize()
 			return m.restoreFocus()
-		case "ctrl+y":
-			return m.copyText("detail")
 		}
 		var cmd tea.Cmd
 		m.detailViewport, cmd = m.detailViewport.Update(msg)
@@ -69,16 +79,16 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.dialog != nil {
 		// Error detail overlays the current request, never replacing its state.
-		if (msg.String() == "f2" || msg.String() == "ctrl+l") && !m.dialog.details && m.dialog.preservedInitial == "" && (m.problem != "" || m.streamProblem != "") && m.openFeedbackDetail() {
+		if key.Matches(msg, k.Detail) && !m.dialog.details && m.dialog.preservedInitial == "" && (m.problem != "" || m.streamProblem != "") && m.openFeedbackDetail() {
 			return nil
 		}
-		if msg.String() == "ctrl+y" && (m.dialog.preservedInitial != "" || m.dialog.launch != nil && m.dialog.launch.preservedMessage != "") {
+		if key.Matches(msg, k.Copy) && (m.dialog.preservedInitial != "" || m.dialog.launch != nil && m.dialog.launch.preservedMessage != "") {
 			return m.copyText("answer")
 		}
 		return m.dialogKey(msg)
 	}
 	if m.browserPage || m.launchPage {
-		if msg.String() == "esc" {
+		if key.Matches(msg, k.Dismiss) {
 			if m.cancelBrowser != nil {
 				m.cancelBrowser()
 			} else if m.cancelAction != nil {
@@ -90,6 +100,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Find temporarily owns the keyboard while retaining its invoking pane
 	// for Escape. Those pane flags must not route edits behind the search.
 	if m.searching {
+		if key.Matches(msg, k.Dismiss) {
+			m.searching = false
+			m.resize()
+			return m.restoreFocus()
+		}
 		switch msg.String() {
 		case "esc":
 			m.searching = false
@@ -110,13 +125,53 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.updateComponent("search", 0, msg)
 	}
-	if m.navigator.focused && m.navigationVisible() {
+	if handled, cmd := m.agentboxKey(msg); handled {
+		return cmd
+	}
+	for number := 1; number <= 9; number++ {
+		if key.Matches(msg, m.actionBinding(fmt.Sprintf("thread.%d", number))) {
+			return m.openVisibleNavigatorNumber(number)
+		}
+	}
+	// Application commands share the resolver before pane-specific movement.
+	// Editor-owned bindings are absent from the composer's resolved context.
+	switch {
+	case key.Matches(msg, k.New):
+		return m.dispatch("new", "")
+	case key.Matches(msg, k.NewSame):
+		return m.dispatch("new-same", "")
+	case key.Matches(msg, k.Settings):
+		return m.dispatch("settings", "")
+	case key.Matches(msg, k.Refresh):
+		if m.navigator.focused && m.navigationVisible() && m.mode != "agentbox" {
+			return m.navigatorAction("refresh")
+		}
+		return m.dispatch("refresh", "")
+	case key.Matches(msg, k.Filter):
+		return m.execute("filter", "")
+	case key.Matches(msg, k.FocusNavigation):
+		return m.focusNavigator()
+	case key.Matches(msg, k.FocusComposer):
+		m.navigator.focused, m.contextFocused, m.activityFocused, m.transcriptFocus = false, false, false, false
+		return m.restoreFocus()
+	case key.Matches(msg, k.Sidebar):
+		return m.setting("sidebar", boolWord(!m.sidebar))
+	case key.Matches(msg, k.Model):
+		return m.execute("model", "")
+	case key.Matches(msg, k.Effort):
+		return m.execute("effort", "")
+	case key.Matches(msg, k.Speed):
+		return m.execute("speed", "")
+	case key.Matches(msg, k.Requests):
+		return m.execute("requests", "")
+	}
+	if m.mode != "agentbox" && m.navigator.focused && m.navigationVisible() {
 		return m.navigatorKey(msg)
 	}
-	if m.activityFocused {
+	if m.mode != "agentbox" && m.activityFocused {
 		return m.activityKey(msg)
 	}
-	if m.contextFocused && m.contextVisible() {
+	if m.mode != "agentbox" && m.contextFocused && m.contextVisible() {
 		return m.contextKey(msg)
 	}
 	switch {
@@ -160,14 +215,18 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.copyText("")
 	case key.Matches(msg, k.Literal):
 		return m.sendText(m.currentDraft())
+	case key.Matches(msg, k.Steer):
+		return m.sendTextWithDelivery(m.currentDraft(), "steer")
+	case key.Matches(msg, k.Send):
+		return m.send()
 	}
 	if handled, cmd := m.completionKey(msg); handled {
 		return cmd
 	}
-	switch msg.String() {
-	case "tab", "shift+tab":
-		return m.cycleWorkspace(msg.String() == "tab")
-	case "esc":
+	if key.Matches(msg, k.Focus) || key.Matches(msg, k.FocusBack) {
+		return m.cycleWorkspace(key.Matches(msg, k.Focus))
+	}
+	if key.Matches(msg, k.Dismiss) {
 		m.problem, m.notice = "", ""
 		if m.transcriptFocus {
 			m.transcriptFocus = false
@@ -175,7 +234,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.transcriptFocus {
+	if m.mode != "agentbox" && m.transcriptFocus {
 		switch msg.String() {
 		case "end", "G":
 			m.viewport.GotoBottom()
@@ -208,9 +267,6 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.viewport, cmd = m.viewport.Update(msg)
 		m.follow = m.viewport.AtBottom()
 		return cmd
-	}
-	if key.Matches(msg, k.Send) {
-		return m.send()
 	}
 	return m.updateComponent("composer", 0, msg)
 }
@@ -303,7 +359,19 @@ func (m *Model) slash(text string) tea.Cmd {
 		m.problem = reason
 		return nil
 	}
-	local := name == "help" || name == "keys" || name == "theme" || name == "mouse" || name == "sidebar" || name == "search" || name == "copy" || name == "quit" || name == "edit" || name == "clear" || name == "recall" || name == "error" || name == "details" || name == "keyboard"
+	if name == "switch" || name == "threads" {
+		cmd, err := m.executeNavigatorCommand(name, args)
+		if err != nil {
+			m.problem = safeText(err.Error())
+			return cmd
+		}
+		old := m.composer.Value()
+		m.preservedDraft = ""
+		m.composer.SetValue("")
+		m.composerChanged(old)
+		return cmd
+	}
+	local := name == "help" || name == "keys" || name == "theme" || name == "mouse" || name == "sidebar" || name == "search" || name == "copy" || name == "quit" || name == "edit" || name == "clear" || name == "recall" || name == "error" || name == "details" || name == "info" || name == "keyboard" || name == "shortcuts" || name == "mode" || name == "inbox"
 	if local {
 		old := m.composer.Value()
 		m.preservedDraft = ""
@@ -329,6 +397,39 @@ func (m *Model) slash(text string) tea.Cmd {
 
 func (m *Model) dispatch(name, args string) tea.Cmd {
 	switch name {
+	case "mode":
+		return m.setMode(args)
+	case "inbox", "file", "file-many", "review":
+		return m.agentboxAction(name, args)
+	case "refresh":
+		if m.mode == "agentbox" {
+			return m.loadInbox(true)
+		}
+		return m.navigatorAction("refresh")
+	case "new-same":
+		if m.navigator.focused && m.navigationVisible() {
+			return m.navigatorAction("new-same")
+		}
+		return m.execute("new-same", args)
+	case "send", "send-literal", "steer":
+		if m.dialog != nil || m.detail != "" || m.searching {
+			m.notice = "Return to the composer before sending"
+			return nil
+		}
+		if strings.TrimSpace(m.currentDraft()) == "/"+name {
+			m.notice = "Write a message, then use its send shortcut or Commands action"
+			return nil
+		}
+		if name == "steer" {
+			return m.sendTextWithDelivery(m.currentDraft(), "steer")
+		}
+		if name == "send-literal" {
+			return m.sendText(m.currentDraft())
+		}
+		return m.send()
+	case "shortcuts":
+		m.openDetail("Shortcuts", m.shortcutsText())
+		return nil
 	case "navigator-action":
 		return m.navigatorAction(args)
 	case "navigator-profile":
@@ -355,7 +456,7 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 		return m.useExactRejectedInput()
 	case "settings":
 		return m.execute("settings", "")
-	case "details":
+	case "details", "info":
 		if m.dialog != nil {
 			if m.dialog.details {
 				m.dialog.details = false
@@ -376,6 +477,9 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 			m.resize()
 			return m.restoreFocus()
 		}
+		if m.agentboxOwnsKeys() {
+			return m.inboxInfo()
+		}
 		if m.navigator.focused && m.navigationVisible() {
 			return m.openNavigatorDetail()
 		}
@@ -383,7 +487,7 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 			m.openDetail("Exact draft", m.preservedDraft)
 			m.detailCopy = m.preservedDraft
 		} else if !m.openFeedbackDetail() {
-			m.openDetail("Conversation details", m.conversationDetailText())
+			m.openDetail("Conversation Info", m.conversationDetailText())
 		}
 		return nil
 	case "quit":

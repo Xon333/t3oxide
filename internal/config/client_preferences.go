@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -18,11 +19,16 @@ type BrowserPreferences struct {
 // LaunchDraft is a durable, user-reviewed new conversation form keyed by its
 // exact environment and source thread. It never triggers a launch on restore.
 type LaunchDraft struct {
-	Title     string          `json:"title"`
-	Message   string          `json:"message"`
-	ProjectID string          `json:"projectId,omitempty"`
-	Workspace string          `json:"workspace,omitempty"`
-	Selection *ModelSelection `json:"selection,omitempty"`
+	Title                  string             `json:"title"`
+	Message                string             `json:"message"`
+	ProjectID              string             `json:"projectId,omitempty"`
+	Workspace              string             `json:"workspace,omitempty"`
+	Selection              *ModelSelection    `json:"selection,omitempty"`
+	NativeDefaultsRevision string             `json:"nativeDefaultsRevision,omitempty"`
+	NativeWorkspaceRoot    string             `json:"nativeWorkspaceRoot,omitempty"`
+	WorkspaceStrategy      *WorkspaceStrategy `json:"workspaceStrategy,omitempty"`
+	RuntimeMode            string             `json:"runtimeMode,omitempty"`
+	InteractionMode        string             `json:"interactionMode,omitempty"`
 }
 
 func cloneBrowserPreferences(p BrowserPreferences) BrowserPreferences {
@@ -31,6 +37,10 @@ func cloneBrowserPreferences(p BrowserPreferences) BrowserPreferences {
 }
 
 func cloneLaunchDraft(d LaunchDraft) LaunchDraft {
+	if d.WorkspaceStrategy != nil {
+		copy := *d.WorkspaceStrategy
+		d.WorkspaceStrategy = &copy
+	}
 	if d.Selection != nil {
 		selection := d.Selection.Clone()
 		d.Selection = &selection
@@ -53,6 +63,15 @@ func launchSelectionMatches(saved *ModelSelection, value any) bool {
 		return false
 	}
 	return saved.Equal(selection)
+}
+
+func launchWorkspaceMatches(saved *WorkspaceStrategy, value any) bool {
+	if saved == nil {
+		return false
+	}
+	raw, err := json.Marshal(value)
+	var strategy WorkspaceStrategy
+	return err == nil && json.Unmarshal(raw, &strategy) == nil && *saved == strategy
 }
 
 func validateClientPreferences(v savedState) error {
@@ -78,6 +97,14 @@ func validateClientPreferences(v savedState) error {
 		return errors.New("launch draft limit exceeded")
 	}
 	for key, draft := range v.LaunchDrafts {
+		if draft.WorkspaceStrategy != nil {
+			if err := draft.WorkspaceStrategy.Validate(); err != nil {
+				return err
+			}
+		}
+		if draft.NativeDefaultsRevision != "" && (len(draft.NativeDefaultsRevision) != 64 || strings.Trim(draft.NativeDefaultsRevision, "0123456789abcdef") != "") || len(draft.RuntimeMode) > 64 || len(draft.InteractionMode) > 64 || len(draft.NativeWorkspaceRoot) > 4096 || strings.ContainsAny(draft.NativeWorkspaceRoot, "\x00\n\r") || draft.NativeWorkspaceRoot != "" && !strings.HasPrefix(draft.NativeWorkspaceRoot, "/") {
+			return errors.New("invalid native launch draft")
+		}
 		if key == "" || len(key) > 8192 || !utf8.ValidString(key) || len(draft.Title) > 512 || len(draft.Message) > 64*1024 || len(draft.ProjectID) > 4096 || len(draft.Workspace) > 4096 || !utf8.ValidString(draft.Title) || !utf8.ValidString(draft.Message) || !utf8.ValidString(draft.ProjectID) || !utf8.ValidString(draft.Workspace) {
 			return errors.New("invalid or oversized launch draft")
 		}
@@ -164,6 +191,15 @@ func (s *State) ClearLaunchDraft(env, sourceThread string, expected LaunchDraft)
 }
 
 func launchDraftEqual(a, b LaunchDraft) bool {
+	if a.NativeDefaultsRevision != b.NativeDefaultsRevision || a.NativeWorkspaceRoot != b.NativeWorkspaceRoot || a.RuntimeMode != b.RuntimeMode || a.InteractionMode != b.InteractionMode {
+		return false
+	}
+	if (a.WorkspaceStrategy == nil) != (b.WorkspaceStrategy == nil) {
+		return false
+	}
+	if a.WorkspaceStrategy != nil && *a.WorkspaceStrategy != *b.WorkspaceStrategy {
+		return false
+	}
 	if a.Title != b.Title || a.Message != b.Message || a.ProjectID != b.ProjectID || a.Workspace != b.Workspace {
 		return false
 	}

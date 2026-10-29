@@ -10,13 +10,20 @@ The transport and recovery code were reused from the separately delivered Go
 core-tui alternative for this same project, then adapted into a T3-specific
 session layer; that alternative's UI source is not bundled here.
 
-adapter/core.mjs, adapter/t3.mjs, adapter/models.mjs and adapter/navigation.mjs
+adapter/core.mjs, adapter/t3.mjs, adapter/models.mjs, adapter/navigation.mjs
+and adapter/native.mjs
 adapt narrow command, response, catalog, lineage and event
 structures from pingdotgg/t3code at 0e7346ccd9427c06161e222319e718e6bd70887f.
 adapter/wire.mjs implements the narrow Effect RPC envelopes documented in that
 repository's .repos/effect-smol RpcMessage.ts. These are adapted client-side
 contracts, not a bundled copy of the full T3 runtime. See docs/architecture.md
 and docs/model-navigation.md.
+
+Native workflow extension 1 independently implements bounded project/default,
+launch, inbox lifecycle and review presentation over those verified native
+contracts. Its JSONC/default-file behavior follows the pinned public contract;
+it bundles no Effect schema runtime or native execution service. See
+docs/native-workflows.md for exact source references and compatibility limits.
 
 T3 source license retained below:
 

@@ -109,7 +109,11 @@ func TestHiddenCompletionCannotConsumeInput(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 28, Height: 12})
 	m.Update(tea.PasteMsg{Content: "/hel"})
 	m.Update(keyPress(tea.KeyEnter))
-	if m.currentDraft() != "/hel" || m.detail != "" || m.problem != "Choose a conversation first" {
+	if m.currentDraft() != "/hel\n" || m.detail != "" || m.problem != "" {
 		t.Fatal("invisible popup accepted or executed a command")
+	}
+	m.Update(keyPress(']', tea.ModCtrl))
+	if m.currentDraft() != "/hel\n" || m.detail != "" || m.problem != "Choose a conversation first" {
+		t.Fatal("explicit Send accepted an invisible command completion or changed the exact draft")
 	}
 }

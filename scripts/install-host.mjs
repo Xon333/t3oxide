@@ -75,7 +75,7 @@ async function main() {
     finally { backend.close(); }
     const current = join(base, 'current'), currentStat = await statOrNull(current);
     requireThat(!currentStat || currentStat.isSymbolicLink(), 'The install current path is not a symlink; preserve it and resolve manually.');
-    const files = ['core.mjs', 'wire.mjs', 'journal.mjs', 'models.mjs', 'navigation.mjs', 'activity.mjs', 't3.mjs', 'main.mjs'];
+    const files = ['core.mjs', 'wire.mjs', 'journal.mjs', 'models.mjs', 'navigation.mjs', 'activity.mjs', 'native.mjs', 't3.mjs', 'main.mjs'];
     const contents = new Map(), hash = createHash('sha256');
     for (const name of [...files, 'NOTICE']) {
       const bytes = await readFile(name === 'NOTICE' ? join(root, name) : join(root, 'adapter', name));

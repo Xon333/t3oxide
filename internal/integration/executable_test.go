@@ -271,10 +271,10 @@ func TestAssembledExecutablePTYSendThemeResizeStopAndTerminalRestore(t *testing.
 	// This is a new transcript row, not a short status whose unchanged suffix
 	// can be retained by the terminal's differential renderer.
 	r.waitText("Initial Markdown for Alpha")
-	r.keys("Hello Živjo 日本語 🙂\r")
+	r.keys("Hello Živjo 日本語 🙂\x1d")
 	f.waitMessage(t, "Hello Živjo 日本語 🙂")
 	r.waitText("Response after Hello")
-	r.keys("/theme cyan\r")
+	r.keys("/theme cyan\x1d")
 	settingsPath := filepath.Join(filepath.Dir(statePath), "terminal.json")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -335,7 +335,7 @@ func TestAssembledExecutablePTYUncertainSendStopPriorityAndExplicitRetry(t *test
 	f.mu.Unlock()
 	r, statePath := startExecutablePTY(t, f)
 	r.waitText("Initial Markdown for Alpha")
-	r.keys("Uncertain executable message\r")
+	r.keys("Uncertain executable message\x1d")
 	id := f.waitMessage(t, "Uncertain executable message")
 	// The main action is still awaiting its acknowledgment. Stop must have
 	// independent admission through the actual keyboard/update/command path.
@@ -429,7 +429,7 @@ func TestAssembledExecutablePTYUncertainSendStopPriorityAndExplicitRetry(t *test
 	// Ctrl+X explicitly clears this local composer; it cannot stop remote work. The saved
 	// record still contains the original text for explicit retry.
 	r.keys("\x18")
-	r.keys("/retry\r")
+	r.keys("/retry\x1d")
 	deadline = time.Now().Add(6 * time.Second)
 	for readPending() != nil {
 		if time.Now().After(deadline) {

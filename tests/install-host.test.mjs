@@ -48,8 +48,8 @@ test('host installer includes additive modules, preserves journals/config, and i
   const release = await realpath(join(f.base, 'current'));
   // macOS canonicalizes /tmp to /private/tmp.
   assert.ok(release.startsWith(join(await realpath(home), '.local/share/t3oxide/releases/')));
-  assert.deepEqual((await readdir(release)).sort(), ['NOTICE', 'activity.mjs', 'core.mjs', 'journal.mjs', 'main.mjs', 'models.mjs', 'navigation.mjs', 't3.mjs', 'wire.mjs']);
-  for (const file of ['core.mjs', 'wire.mjs', 'journal.mjs', 'models.mjs', 'navigation.mjs', 'activity.mjs', 't3.mjs', 'main.mjs']) {
+  assert.deepEqual((await readdir(release)).sort(), ['NOTICE', 'activity.mjs', 'core.mjs', 'journal.mjs', 'main.mjs', 'models.mjs', 'native.mjs', 'navigation.mjs', 't3.mjs', 'wire.mjs']);
+  for (const file of ['core.mjs', 'wire.mjs', 'journal.mjs', 'models.mjs', 'navigation.mjs', 'activity.mjs', 'native.mjs', 't3.mjs', 'main.mjs']) {
     assert.deepEqual(await readFile(join(release, file)), await readFile(join(root, 'adapter', file)));
   }
   const probe = JSON.parse((await exec(process.execPath, [first.adapter, '--probe'], { env, timeout: 5000 })).stdout);

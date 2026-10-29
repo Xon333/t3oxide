@@ -23,7 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.7.1-bubbletea"
+var version = "0.8.0-bubbletea"
 
 const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 
@@ -271,6 +271,7 @@ func run(ctx context.Context, args []string, out io.Writer) (err error) {
 		settings.Mouse = false
 	}
 	manager := client.NewManager(envs, state)
+	manager.CreationProfile = a.env
 	agent, err := manager.NewSession(a.env, a.thread)
 	if err != nil {
 		return err

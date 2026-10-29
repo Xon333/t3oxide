@@ -197,7 +197,7 @@ func (c *Connection) Request(ctx context.Context, op string, fields map[string]a
 		return nil, &Fault{Code: "invalid_request", Message: "invalid request ID"}
 	}
 	switch op {
-	case "hello", "list", "watch", "history", "models", "activity", "inspect-item", "select-model", "send", "stop", "answer", "launch":
+	case "hello", "list", "watch", "history", "models", "activity", "inspect-item", "select-model", "send", "stop", "answer", "launch", "projects", "launch-defaults", "launch-project", "thread-action", "thread-review":
 	default:
 		return nil, &Fault{Code: "invalid_request", Message: "unsupported companion operation"}
 	}

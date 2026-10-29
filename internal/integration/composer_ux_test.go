@@ -17,18 +17,18 @@ func TestBubbleTeaComposerLiteralPathsCompletionAndExactRecoveredPaste(t *testin
 	r, _ := startAppTUI(t, a)
 	r.waitText("Initial Markdown for Alpha")
 	path := "/Users/example/project/file.go"
-	r.send(path + "\r")
+	r.send(path + "\x1d")
 	f.waitMessage(t, path)
 	r.waitText("Response after /Users/example")
 	r.send("/hel")
 	r.waitText("Tab complete")
 	r.send("\t")
-	r.send("\r")
+	r.send("\x1d")
 	r.waitText("Keyboard and commands")
 	r.program.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	r.waitText("Message")
-	r.send("/mouse invalid\r")
-	r.waitText("Ctrl+L error")
+	r.send("/mouse invalid\x1d")
+	r.waitText("use /mouse [on|off]")
 	// Invalid local arguments leave their source editable; Ctrl+X is explicit
 	// recoverable clear, and cannot send a command or remote Stop.
 	r.send("\x18")
@@ -39,7 +39,7 @@ func TestBubbleTeaComposerLiteralPathsCompletionAndExactRecoveredPaste(t *testin
 	r.waitText("Recall prompt")
 	r.send("\r")
 	r.waitText("Exact draft")
-	r.send("\r")
+	r.send("\x1d")
 	exact := "\tindented\r\nreplacement �\n "
 	f.waitMessage(t, exact)
 	awaitStatus(t, a, func(s client.Status) bool {

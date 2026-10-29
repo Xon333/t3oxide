@@ -69,10 +69,12 @@ func clientCapabilities() map[string]any {
 	}
 	return map[string]any{
 		"product": "t3oxide", "version": version,
-		"commands": commands, "sessionActions": tui,
+		"modes":           []string{"developer", "agentbox"},
+		"nativeWorkflows": map[string]any{"extensionVersion": 1, "requiresAdapterFeature": "nativeWorkflows", "installedSupport": "requires exact host verification", "priorityBacklogScheduler": false, "defaultEnvironmentBridge": false, "afterExit": "existing native runs and accepted message queues only"},
+		"commands":        commands, "sessionActions": tui,
 		"protocol":          map[string]any{"companion": 1, "orchestration": 2},
 		"transport":         map[string]any{"local": "owned stdio helper", "remote": "existing OpenSSH route to owned stdio helper", "credentials": "host only", "backgroundService": false},
-		"bounds":            map[string]any{"retainedDetailedAttachments": 1, "temporarySourceReviews": 1, "defaultRootConversations": 24, "defaultChildLoading": false, "maxFrameBytes": wire.MaxFrameBytes, "maxReadableRows": wire.MaxRows, "maxReadableBytes": wire.MaxRowsBytes, "maxActivityItems": wire.MaxActivityItems, "maxActivityBytes": wire.MaxActivityBytes, "maxActivityDetailBytes": wire.MaxActivityDetailBytes},
+		"bounds":            map[string]any{"retainedDetailedAttachments": 1, "temporarySourceReviews": 1, "developerMetadataConcurrency": 4, "inboxMetadataConcurrency": 3, "defaultRootConversations": 24, "defaultChildLoading": false, "maxFrameBytes": wire.MaxFrameBytes, "maxReadableRows": wire.MaxRows, "maxReadableBytes": wire.MaxRowsBytes, "maxActivityItems": wire.MaxActivityItems, "maxActivityBytes": wire.MaxActivityBytes, "maxActivityDetailBytes": wire.MaxActivityDetailBytes},
 		"mutationAccess":    "interactive-only",
 		"recovery":          map[string]any{"durableIdentity": true, "automaticMutationReplay": false, "stop": "reviewed app run with queue hold"},
 		"revisionSemantics": "getTurnItem revision is a cache key; returned details can differ",

@@ -64,7 +64,8 @@ func (m *Model) refreshCompletion() {
 }
 
 func (m *Model) completionVisible() bool {
-	return m.width >= 32 && m.height >= 12 && m.completion.active && m.detail == "" && m.dialog == nil && !m.searching && !m.transcriptFocus && !m.navigator.focused && !m.contextFocused && !m.activityFocused && m.preservedDraft == ""
+	composer := m.mode == "agentbox" && m.agentbox.reply || m.mode != "agentbox" && !m.transcriptFocus && !m.navigator.focused && !m.contextFocused && !m.activityFocused
+	return m.width >= 32 && m.height >= 12 && m.completion.active && m.detail == "" && m.dialog == nil && !m.searching && composer && m.preservedDraft == ""
 }
 
 func (m *Model) dismissCompletion() {
@@ -82,6 +83,10 @@ func (m *Model) completionKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if !m.completionVisible() {
 		return false, nil
 	}
+	if key.Matches(msg, m.actionBinding("dismiss")) {
+		m.dismissCompletion()
+		return true, nil
+	}
 	switch {
 	case key.Matches(msg, m.composer.KeyMap.LinePrevious):
 		m.completion.list.CursorUp()
@@ -91,20 +96,12 @@ func (m *Model) completionKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	switch msg.String() {
-	case "esc":
-		m.dismissCompletion()
-		return true, nil
 	case "tab":
 		m.acceptCompletion()
 		return true, nil
-	case "enter":
-		// Exact command names execute only through normal validation. A partial
-		// suggestion is accepted into the draft first, never executed implicitly.
-		if !m.isSlashCommand(m.currentDraft()) {
-			m.acceptCompletion()
-			return true, nil
-		}
 	}
+	// Enter remains a newline even with completion visible. Tab explicitly
+	// accepts a suggestion; the resolved Send key executes a complete command.
 	return false, nil
 }
 

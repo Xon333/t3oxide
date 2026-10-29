@@ -225,7 +225,7 @@ func validateRecord(env string, record map[string]any) error {
 		}
 	}
 	switch record["op"] {
-	case "send", "stop", "answer", "launch", "select-model":
+	case "send", "stop", "answer", "launch", "select-model", "launch-project", "thread-action":
 	default:
 		return errors.New("unsupported saved operation")
 	}
@@ -321,6 +321,7 @@ func (s *State) ClearPending(env string, stop bool, id string) error {
 		return errors.New("saved operation changed; refusing to clear another action")
 	}
 	delete(lane, env)
+
 	return s.commit(next)
 }
 
@@ -342,7 +343,23 @@ func (s *State) Acknowledge(env string, stop bool, id, thread, message string) e
 	if thread != "" && old["threadId"] != thread {
 		return errors.New("saved operation belongs to another thread")
 	}
+	if old["op"] == "launch-project" {
+		if err := advanceBatchDraft(&next, old); err != nil {
+			return err
+		}
+	}
 	delete(lane, env)
+	if old["op"] == "launch-project" {
+		form, _ := old["formSource"].(string)
+		key := draftKey(env, form)
+		if saved, ok := next.LaunchDrafts[key]; ok && saved.Title == old["title"] && saved.Message == old["message"] && saved.ProjectID == old["projectId"] && saved.NativeDefaultsRevision == old["defaultsRevision"] && launchSelectionMatches(saved.Selection, old["modelSelection"]) && launchWorkspaceMatches(saved.WorkspaceStrategy, old["workspaceStrategy"]) {
+			delete(next.LaunchDrafts, key)
+			messageKey := draftKey(env, "\x00new/"+form)
+			if next.Drafts[messageKey] == saved.Message {
+				delete(next.Drafts, messageKey)
+			}
+		}
+	}
 	if old["op"] == "send" && message != "" && old["message"] == message {
 		rememberPrompt(&next, env, thread, "sent", message)
 	}

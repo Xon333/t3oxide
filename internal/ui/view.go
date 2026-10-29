@@ -174,6 +174,24 @@ func (m *Model) View() tea.View {
 		m.recordWorkspaceHits()
 		return m.terminalView(m.fullSurfaceView())
 	}
+	if m.mode == "agentbox" {
+		return m.agentboxView()
+	}
+	if m.session != nil && m.status.ThreadID == "" || m.navigationVisible() && m.navigatorWidth() == m.width {
+		canvas := m.emptyWorkspaceView()
+		if m.navigationVisible() {
+			canvas = m.navigatorView(m.navigatorWidth(), m.height)
+			if m.navigatorWidth() < m.width {
+				canvas = lipgloss.JoinHorizontal(lipgloss.Top, canvas, m.emptyWorkspaceView())
+			}
+		}
+		if m.dialog != nil || m.detail != "" {
+			panel := m.modalView()
+			canvas = lipgloss.NewCompositor(lipgloss.NewLayer(canvas), lipgloss.NewLayer(panel).X(max(0, (m.width-lipgloss.Width(panel))/2)).Y(max(0, (m.height-lipgloss.Height(panel))/2)).Z(1)).Render()
+		}
+		m.recordWorkspaceHits()
+		return m.terminalView(clipBlock(canvas, m.width, m.height))
+	}
 	inner := m.workspaceWidth()
 	contextLine := m.status.Context
 	if m.status.Location.Environment != "" {
@@ -187,7 +205,7 @@ func (m *Model) View() tea.View {
 	}
 	header := p.active().Render("t3oxide") + "  " + p.plain().Render(fitLine(contextLine, max(1, inner-9)))
 	if m.navigationVisible() {
-		header = p.active().Render("t3oxide") + "  " + p.plain().Bold(true).Render(fitLine("Attached · "+contextLine, max(1, inner-9)))
+		header = p.active().Render("t3oxide") + "  " + p.plain().Bold(true).Render(fitLine(contextLine, max(1, inner-9)))
 	}
 	state := m.authoritativeStatus()
 	if state == "" {
@@ -228,11 +246,17 @@ func (m *Model) View() tea.View {
 		composer = m.searchInput.View()
 	}
 	frame := framed(label, padBlock(composer, max(1, m.contentWidth-4), m.composer.Height()), m.contentWidth-4, p, m.composer.Focused() || m.searching)
-	parts := []string{header, status, toolbar}
+	parts := []string{header, status}
+	if toolbar != "" {
+		parts = append(parts, toolbar)
+	}
 	if operation := m.operationLine(); operation != "" {
 		parts = append(parts, m.operationView(inner))
 	}
 	parts = append(parts, padBlock(body, inner, m.bodyHeight))
+	if m.activityStripRows() > 0 {
+		parts = append(parts, "")
+	}
 	if strip := m.activityStripView(inner); strip != "" {
 		parts = append(parts, strip)
 	}
@@ -437,20 +461,21 @@ func (m *Model) pickerSelectionView(width int) string {
 // Full pages include the independent global lanes and wrap whole bindings so
 // compact widths retain activation and Stop before secondary controls.
 func (m *Model) dialogHelp(width int, fullSurface bool) string {
-	detailLabel, escape := "details", "close"
+	detailLabel, escape := "Info", "close"
+	info, copyKey, dismiss := m.actionBinding("info").Help().Key, m.actionBinding("copy").Help().Key, m.actionBinding("dismiss").Help().Key
 	if m.problem != "" || m.streamProblem != "" {
 		detailLabel = "error"
 	}
 	if fullSurface {
 		escape = "resume"
 	}
-	pairs := []string{"Enter", "select", "Ctrl+L", detailLabel, "Esc", escape}
+	pairs := []string{"Enter", "select", info, detailLabel, dismiss, escape}
 	d := m.dialog
 	switch {
 	case m.detail != "":
-		pairs = []string{"Esc", "back", "Ctrl+Y", "copy", "↑/↓", "scroll"}
+		pairs = []string{dismiss, "back", copyKey, "copy", "↑/↓", "scroll"}
 	case d != nil && d.details:
-		pairs = []string{"Ctrl+L/Esc", "back", "↑/↓", "scroll"}
+		pairs = []string{info + "/" + dismiss, "back", "↑/↓", "scroll"}
 	case d != nil && (d.settingsForm != nil || d.requestForm != nil):
 		pairs = m.formDialogHelpPairs()
 	case d != nil && d.launch != nil:
@@ -463,25 +488,25 @@ func (m *Model) dialogHelp(width int, fullSurface bool) string {
 				activation = strings.ToLower(actionLabel(actions[index]))
 			}
 		}
-		pairs = []string{"Enter", activation, "Tab", "controls", "Ctrl+L", detailLabel, "Esc", escape}
+		pairs = []string{"Enter", activation, "Tab", "controls", info, detailLabel, dismiss, escape}
 	case d != nil && d.kind == client.EnterText:
-		pairs = []string{"Enter", "answer", "Ctrl+J", "newline", "Ctrl+L", detailLabel, "Esc", escape}
+		pairs = []string{"Enter", "answer", "Ctrl+J", "newline", info, detailLabel, dismiss, escape}
 		if d.preservedInitial != "" {
-			pairs = []string{"Ctrl+L", "review", "Ctrl+Y", "copy", "Ctrl+U", "replace", "Esc", escape}
+			pairs = []string{info, "Info", copyKey, "copy", "Ctrl+U", "replace", dismiss, escape}
 		}
 	case d != nil && d.kind == client.ChooseMany:
 		activation, tab := "toggle", "continue"
 		if d.finishFocused {
 			activation, tab = "continue", "choices"
 		}
-		pairs = []string{"Enter", activation, "Tab", tab, "Ctrl+L", detailLabel, "Esc", escape}
+		pairs = []string{"Enter", activation, "Tab", tab, info, detailLabel, dismiss, escape}
 		if !fullSurface && !d.finishFocused {
 			// Keep the only portable completion route visible when native
 			// single-row help truncates secondary bindings on narrow dialogs.
-			pairs = []string{"Tab", tab, "Enter", activation, "Ctrl+L", detailLabel, "Esc", escape}
+			pairs = []string{"Tab", tab, "Enter", activation, info, detailLabel, dismiss, escape}
 		}
 	case d != nil && d.surface == client.SurfaceBrowser:
-		pairs = []string{"Enter", "open", "Tab", "controls", "Ctrl+L", detailLabel, "Esc", escape}
+		pairs = []string{"Enter", "open", "Tab", "controls", info, detailLabel, dismiss, escape}
 	case d != nil && d.prompt != nil && d.prompt.Question.Navigation:
 		pairs[1] = "open"
 	}
@@ -489,7 +514,7 @@ func (m *Model) dialogHelp(width int, fullSurface bool) string {
 		return m.hints(width, pairs...)
 	}
 	if d == nil && m.detail == "" {
-		pairs = []string{"Esc", "resume"}
+		pairs = []string{dismiss, "resume"}
 	}
 	k := m.keyMap()
 	stop, quit := k.Stop.Help(), k.Quit.Help()

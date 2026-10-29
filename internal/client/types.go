@@ -186,6 +186,9 @@ type LaunchReview struct {
 	StoreDraft func(LaunchInput) error
 }
 type Question struct {
+	// StoreText retains only an explicit human draft, bound by its client
+	// owner. It is never a permission response or remote operation.
+	StoreText                           func(string) error
 	Surface                             Surface
 	BrowserPage                         *BrowserPage
 	LaunchReview                        *LaunchReview

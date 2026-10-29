@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -28,7 +29,23 @@ func (m *Model) mainOriginX() int {
 	return m.navigatorWidth() + max(0, (m.mainWidth()-m.workspaceWidth())/2)
 }
 
+// At compact widths, changing focus can replace the full-width navigator with
+// the conversation. Recompute the complete layout and native render width;
+// resizing only the list leaves the hidden conversation's one-cell allocation.
+func (m *Model) resizeWorkspaceFocus() tea.Cmd {
+	oldWidth := m.contentWidth
+	m.resize()
+	focus := m.restoreFocus()
+	if oldWidth != m.contentWidth {
+		return tea.Batch(focus, m.requestRender(false, false))
+	}
+	return focus
+}
+
 func (m *Model) cycleWorkspace(forward bool) tea.Cmd {
+	if m.startupBrowser && m.status.ThreadID == "" {
+		return m.focusNavigator() // no invisible composer or transcript before an explicit open
+	}
 	panes := []string{}
 	if m.navigationVisible() {
 		panes = append(panes, "navigator")
@@ -73,8 +90,7 @@ func (m *Model) cycleWorkspace(forward bool) tea.Cmd {
 	if m.contextFocused {
 		m.reviewContextSelection()
 	}
-	m.resizeNavigator()
-	return m.restoreFocus()
+	return m.resizeWorkspaceFocus()
 }
 
 func (m *Model) openLocal(title, name string, items []list.Item) {
@@ -94,12 +110,12 @@ func (m *Model) openLocal(title, name string, items []list.Item) {
 }
 
 func (m *Model) reconcileNavigator() {
-	if !m.navigator.loaded || m.navigator.profile != m.status.ProfileID || m.status.ThreadID == "" {
+	if !m.navigator.loaded || m.status.ThreadID == "" {
 		return
 	}
 	for i, raw := range m.navigator.list.Items() {
 		item, ok := raw.(navigatorItem)
-		if !ok || item.thread.ID != m.status.ThreadID {
+		if !ok || item.thread.ID != m.status.ThreadID || item.profile != "" && item.profile != m.status.ProfileID {
 			continue
 		}
 		if m.status.RunState != "" {
@@ -112,7 +128,7 @@ func (m *Model) reconcileNavigator() {
 }
 
 func (m *Model) toolbarActions() []struct{ label, action string } {
-	actions := []struct{ label, action string }{{"Commands", "commands"}}
+	actions := []struct{ label, action string }{}
 	if m.status.Requests > 0 {
 		actions = append(actions, struct{ label, action string }{"Requests", "requests"})
 	}
@@ -124,14 +140,7 @@ func (m *Model) toolbarActions() []struct{ label, action string } {
 	}
 	if m.snapshot != nil && m.snapshot.Metadata.Historical {
 		actions = append(actions, struct{ label, action string }{"Latest", "latest"})
-	} else if m.snapshot != nil && m.snapshot.Metadata.HasMore {
-		actions = append(actions, struct{ label, action string }{"Earlier", "earlier"})
 	}
-	actions = append(actions, struct{ label, action string }{"Settings", "settings"})
-	if m.status.Activity && m.recentActivity() == nil {
-		actions = append(actions, struct{ label, action string }{"Activity", "activity"})
-	}
-	actions = append(actions, struct{ label, action string }{"Context", "context"})
 	return actions
 }
 
@@ -146,32 +155,9 @@ func (m *Model) toolbarView(width int) string {
 
 func (m *Model) contextFacts() []string {
 	loc := m.status.Location
-	env := loc.Environment
-	if env == "" {
-		env = m.status.ProfileID
-	}
-	title := loc.Title
-	if title == "" {
-		title = m.status.ThreadID
-	}
-	rows := []string{env, title}
+	var rows []string
 	if loc.Workspace != "" {
-		rows = append(rows, loc.Workspace)
-	}
-	access := "Read only"
-	if m.status.Writable {
-		access = "Writes enabled"
-	}
-	rows = append(rows, m.status.ModelName, m.authoritativeStatus(), access, m.connectionStatus())
-	if m.snapshot != nil {
-		if r := m.snapshot.Metadata.RuntimeDetails; r != nil {
-			if r.RunModelSelection != nil {
-				rows = append(rows, "Requested: "+r.RunModelSelection.Summary())
-			}
-			if r.ProviderReportedSelection != nil {
-				rows = append(rows, "Reported: "+r.ProviderReportedSelection.Summary())
-			}
-		}
+		rows = append(rows, compactContextPath(loc.Workspace, 28))
 	}
 	return rows
 }
@@ -210,7 +196,7 @@ func (m *Model) contextView(width, height int) string {
 // activity remains on screen even when facts or earlier tools fill the pane.
 func (m *Model) contextPanel(width, height int) (string, int, int) {
 	p := colors(m.theme)
-	label := "Context"
+	label := "Activity"
 	if m.contextFocused {
 		label = "> " + label
 	}
@@ -223,10 +209,12 @@ func (m *Model) contextPanel(width, height int) (string, int, int) {
 	first, count := -1, 0
 	if m.snapshot != nil && m.snapshot.Metadata.Activity != nil {
 		activity := m.snapshot.Metadata.Activity
-		rows = append(rows, "", p.active().Render("Activity"))
+		if len(rows) > 0 {
+			rows = append(rows, "")
+		}
 		first, count = len(rows), len(activity.Items)
 		for i, item := range activity.Items {
-			text := activityLabel(item) + " · " + item.Status
+			text := navigatorStatus(item.Status) + " " + activityLabel(item)
 			style := p.plain()
 			if m.contextFocused && i == m.contextSelection {
 				text = "> " + text
@@ -235,13 +223,13 @@ func (m *Model) contextPanel(width, height int) (string, int, int) {
 			rows = append(rows, style.Render(fitLine(text, width)))
 		}
 		if activity.HasMore {
-			rows = append(rows, p.subtle().Render("Earlier activity · Commands"))
+			rows = append(rows, p.subtle().Render("More · /activity"))
 		} else if activity.Limited {
 			rows = append(rows, p.subtle().Render("Summaries shortened"))
 		}
 	}
 	if m.status.Activity && (m.snapshot == nil || m.snapshot.Metadata.Activity == nil || len(m.snapshot.Metadata.Activity.Items) == 0) {
-		rows = append(rows, "", p.plain().Render("Activity"))
+		rows = append(rows, p.subtle().Render("No activity in this page"))
 	}
 	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(max(1, height-1)))
 	v.SetContent(strings.Join(rows, "\n"))
@@ -263,6 +251,15 @@ func (m *Model) reviewContextSelection() {
 }
 
 func (m *Model) contextKey(msg tea.KeyPressMsg) tea.Cmd {
+	k := m.keyMap()
+	switch {
+	case key.Matches(msg, k.Focus), key.Matches(msg, k.FocusBack):
+		return m.cycleWorkspace(key.Matches(msg, k.Focus))
+	case key.Matches(msg, k.Threads):
+		return m.focusNavigator()
+	case key.Matches(msg, k.Search):
+		return m.beginSearch()
+	}
 	count := 0
 	if m.snapshot != nil && m.snapshot.Metadata.Activity != nil {
 		count = len(m.snapshot.Metadata.Activity.Items)
@@ -271,8 +268,6 @@ func (m *Model) contextKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		m.contextFocused = false
 		return m.restoreFocus()
-	case "tab", "shift+tab":
-		return m.cycleWorkspace(msg.String() == "tab")
 	case "up":
 		m.contextSelection = max(0, m.contextSelection-1)
 		m.reviewContextSelection()
@@ -291,13 +286,6 @@ func (m *Model) contextKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			return m.execute("activity", item.Key)
 		}
-	case "ctrl+o":
-		if m.navigationVisible() {
-			return m.focusNavigator()
-		}
-		return m.execute("switch", "")
-	case "ctrl+r":
-		return m.execute("requests", "")
 	}
 	return nil
 }
@@ -333,14 +321,21 @@ func (m *Model) operationLine() string {
 	if m.status.DraftSaveFailed {
 		parts = append(parts, "Draft not saved")
 	}
-	if receipt := m.status.Receipt; receipt != nil && receipt.Phase != "" {
-		parts = append(parts, "Send "+receipt.Phase)
+	if receipt := m.status.Receipt; receipt != nil {
+		switch receipt.Phase {
+		case "sending", "acknowledged", "uncertain":
+			parts = append(parts, "Send "+receipt.Phase)
+		}
 	}
 	return strings.Join(parts, " · ")
 }
 func (m *Model) transcriptTop() int {
-	if m.operationLine() != "" {
-		return 4
+	rows := 2
+	if m.toolbarView(m.workspaceWidth()) != "" {
+		rows++
 	}
-	return 3
+	if m.operationLine() != "" {
+		rows++
+	}
+	return rows
 }
