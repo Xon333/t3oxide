@@ -16,7 +16,9 @@ Focused review found a Changes read that remained loading after switching conver
 
 The native build passed ARM64 Mach-O inspection, strict ad-hoc signature verification, version/help and offline capabilities without creating the supplied absent configuration/state paths. Executable SHA-256: `dc97f6b6c2ded4407f7a3c8a0b2583582f808c3b54cf00af7248af6b7891714a`. The M1 executable and versioned adapter were updated, with installed doctor/capability reads passing. The previous executable, adapter and credential remain available; configuration semantics, state inventory, drafts, lock, sidecars and host journals were preserved. No T3 service or provider setting changed.
 
-Physical terminal delivery and disposable live mutation cases remain untested. No OMV adapter update or compatibility claim follows these M1 checks. M4 client publication remains gated on the owner's explicit answer.
+After explicit owner authorization, the same executable was published on M4 through its existing versioned-release/current pointer. All 38 bundle files matched the approved manifest; installed ARM64, strict signature, version/help and configuration-free capabilities passed. Both configured environments passed read-only doctor checks. Immediate preservation and final comparison verified unchanged configuration, drafts, sidecars, locks, command symlink, launcher, legacy app and previous releases. No active client was terminated. The preceding release remains rollback; consumed staging was removed after verification.
+
+Physical terminal delivery and disposable live mutation cases remain untested. No OMV adapter update or compatibility claim follows these M1 checks. M4's doctor result verifies authenticated metadata access through its existing profiles, without a productive transcript attachment or mutation.
 
 This public record describes software behavior and compatibility. Private deployment inventories, machine identities, access routes, and delivery locations are maintained separately and must not be committed here.
 

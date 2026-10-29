@@ -2,7 +2,7 @@
 
 The portable implementation contains both Developer refinements and native-backed AgentBox. [Verification](docs/verification.md) separates the actual Linux/fixture results from installed-host acceptance. Historical native records in that document remain evidence only for their recorded versions and unchanged paths.
 
-The 2026-10-29 M1 integration passed the complete native Go/race checks, shared Swift/Python checks, all 196 Node tests and the signed ARM64 build. Installed project/default/ref/diff reads passed against T3 `0.1.5-nightly.20261029.3867`; the local executable and adapter were updated with state and rollback preserved. The remaining physical-terminal and live-mutation cases below retain their separate scope. M4 publication awaits explicit owner approval.
+The 2026-10-29 M1 integration passed the complete native Go/race checks, shared Swift/Python checks, all 196 Node tests and the signed ARM64 build. Installed project/default/ref/diff reads passed against T3 `0.1.5-nightly.20261029.3867`; the local executable and adapter were updated with state and rollback preserved. The owner subsequently authorized M4 publication: its existing release pointer was switched atomically, installed checks and both profile doctor reads passed, and state/rollback comparisons matched. The remaining physical-terminal and live-mutation cases below retain their separate scope.
 
 ## Focused client acceptance
 
