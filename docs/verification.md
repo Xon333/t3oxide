@@ -1,5 +1,13 @@
 # Verification
 
+## Installed form and status refinement, 2026-10-29
+
+After explicit owner authorization, the native ARM64 build from `b5308d3a33720b84a6087e01203a26a4a85d24cf` replaced the existing client on both Apple Silicon installations. Both installed commands match SHA-256 `0fd947a19a59ed99ed457a6df6d54ca02edb23e7938522b2fe6456b457c2921a`; the version label remains `0.8.2-bubbletea`. Architecture, strict ad-hoc signature, version/help and configuration-free capabilities passed before and after publication. Read-only doctor checks passed for every configured profile on both clients.
+
+The direct executable was replaced atomically with its original retained for rollback. The receiving client's existing command symlink and launcher were preserved, and its content-addressed release pointer was switched atomically after all 38 bundle files matched their manifest. Immediate before/after comparisons found unchanged configuration, drafts, sidecars, locks and host journals. Neither client had an active window/process to terminate. Adapters, T3 services, provider settings, the separate Swift rollback and Vault records were unchanged.
+
+These checks establish installed-file identity and authenticated metadata access. Physical mouse/wheel and Command-key behavior and productive live mutation/recovery acceptance remain unverified. The preceding source-only pending-publication statement below describes the earlier integration stage and is superseded by this installation receipt.
+
 ## Native integration of form and decision refinement, 2026-10-29
 
 The returned implementation was verified against its immutable 265-file baseline and applied as a patch to the matching clean dev checkout. All 269 returned source files matched the return manifest's hashes and Unix modes before integration fixes. Four independent reviews covered request ownership, rendered geometry/AgentBox, regression quality and the return contract. One blocking regression was corrected: the structured approval form now displays each offered warning beside its option, wraps it within the form, and preserves the selected consequence while Submit has focus. Clicking warning text stages that exact offered option and cannot submit it.
