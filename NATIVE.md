@@ -34,7 +34,7 @@ Save the output fields `environmentId`, `node`, `adapter`, and `hostConfig` for 
 
 ## 2. Build and configure the Go client
 
-With Go 1.26.0+ installed:
+With Go 1.26.10+ installed:
 
 ```sh
 bash scripts/build-go.sh
