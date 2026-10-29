@@ -13,14 +13,16 @@ T3 owns execution, permissions, threads, worktrees and queues. t3oxide connects 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"background": "#20232B", "primaryColor": "#2A2F3A", "primaryTextColor": "#E6E9F0", "primaryBorderColor": "#BBA5FA", "lineColor": "#A7ADBF", "edgeLabelBackground": "#20232B"}}}%%
 flowchart LR
-  C["t3oxide<br/>Developer · AgentBox"] -->|"Local stdio or SSH"| A["On-demand adapter"]
-  A --> T["Your existing T3 environments<br/>Threads · runs · workspaces"]
+  C["t3oxide<br/>One workspace · multiple environments"] -->|"Local stdio"| A["On-demand adapter"]
+  C -->|"SSH"| B["On-demand adapter"]
+  A --> L["Local T3 environment<br/>Threads · runs · workspaces"]
+  B --> R["Remote T3 environment<br/>Threads · runs · workspaces"]
   classDef client fill:#2A2F3A,stroke:#BBA5FA,color:#E6E9F0
   classDef adapter fill:#2A2F3A,stroke:#84D7E4,color:#E6E9F0
   classDef native fill:#2A2F3A,stroke:#C1D99B,color:#E6E9F0
   class C client
-  class A adapter
-  class T native
+  class A,B adapter
+  class L,R native
 ```
 
 ## Features
