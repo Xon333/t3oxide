@@ -187,7 +187,7 @@ func (m *Model) paletteItems() []list.Item {
 			case "mode":
 				variants = []struct{ args, label string }{{"developer", "Developer"}, {"agentbox", "AgentBox"}}
 			case "keyboard":
-				variants = []struct{ args, label string }{{"modern", "Ctrl+P Commands (default)"}, {"legacy", "Editor Ctrl+P"}}
+				variants = []struct{ args, label string }{{"modern", "Ctrl+P Commands fallback"}, {"legacy", "Editor Ctrl+P"}}
 			case "copy":
 				variants = []struct{ args, label string }{{"", "Last agent message (loaded page)"}, {"page", "Loaded page (bounded)"}, {"draft", "Exact draft"}, {"answer", "Current answer"}, {"error", "Error details"}, {"detail", "Open details"}}
 			default:

@@ -10,7 +10,7 @@ Every Command action has a Control fallback in the same context. macOS help pref
 
 | Action | Shipped keys | Context / Command alias |
 | --- | --- | --- |
-| Commands | Ctrl+P; Ctrl+Space / Ctrl+@; F3 | Modern Ctrl+P; delivered Cmd+P. Lists keep Ctrl+P as previous row. |
+| Commands | Ctrl+Space / Ctrl+@; F3; Ctrl+P fallback | Ctrl+Space is the displayed default. Cmd+P belongs to Terminal Print and is not an app alias. Lists keep Ctrl+P as previous row. |
 | Switch conversation | Ctrl+O; F6 | Ordinary workspace; delivered Cmd+O. In the sidebar, F6 retains More. |
 | More sidebar actions | Alt+A; F6 | Sidebar query/results; the visible More control uses the same actions. |
 | Info | Ctrl+L; F2 | All surfaces; delivered Cmd+I. `/details` remains an alias for `/info`. |
@@ -43,7 +43,7 @@ Every Command action has a Control fallback in the same context. macOS help pref
 
 `Enter`, Ctrl+J and Option/Alt+Enter are newline bindings in the ordinary composer. Shift+Enter can also insert newline when delivered distinctly. Ctrl+I stays Tab; Ctrl+H stays deletion/backspace. Ctrl+Backspace retains native word deletion rather than becoming Stop. On traditional terminals, Ctrl+Enter may arrive as plain Enter and therefore safely inserts a newline; use Ctrl+\ for literal send. If Ctrl+Alt+Enter is not distinct in your terminal, use Commands → Steer.
 
-Modern Ctrl+P opens Commands in the composer and plain answer editors. `/keyboard legacy` gives those editors native previous-line Ctrl+P; Ctrl+Space still opens Commands. `/keyboard modern` restores the existing default. Ctrl+A/E/B/F, movement, selection, word deletion and paste retain their focused editor ownership. Ctrl+N and Ctrl+G stay next-line and Select All in multiline editors. Editable navigator/browser queries keep Ctrl+B/E/F and Alt+Left/Right; their search uses Ctrl+Alt+F and navigator environment selection uses Ctrl+Alt+E. Earlier/Latest remains in Commands while a query owns those word-movement keys.
+Ctrl+Space opens Commands throughout the client. Modern Ctrl+P remains a fallback in the composer and plain answer editors. `/keyboard legacy` gives those editors native previous-line Ctrl+P; Ctrl+Space still opens Commands. `/keyboard modern` restores the Ctrl+P fallback. Ctrl+A/E/B/F, movement, selection, word deletion and paste retain their focused editor ownership. Ctrl+N and Ctrl+G stay next-line and Select All in multiline editors. Editable navigator/browser queries keep Ctrl+B/E/F and Alt+Left/Right; their search uses Ctrl+Alt+F and navigator environment selection uses Ctrl+Alt+E. Earlier/Latest remains in Commands while a query owns those word-movement keys.
 
 ## Forms and mouse
 

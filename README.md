@@ -58,7 +58,7 @@ Use `/theme` or **Settings → Appearance** to choose an environment's theme. Vi
 
 ## Installation
 
-Download [0.8.2 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.8.2), or build from source:
+Download [0.9.0 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.9.0), or build from source:
 
 Requirements: **Go 1.26.10+**, **Node 22.4+** on each adapter host, and an existing T3 instance. Remote profiles use your existing OpenSSH configuration.
 
@@ -80,7 +80,7 @@ Developer is the default for a new settings file. Open **Commands → AgentBox**
 
 | Action | Portable default |
 | --- | --- |
-| Commands | Ctrl+P or Ctrl+Space |
+| Commands | Ctrl+Space; Ctrl+P fallback |
 | Conversations / Info | Ctrl+O / Ctrl+L |
 | Newline / Send | Enter / Ctrl+] |
 | Literal send | Ctrl+\ |

@@ -33,7 +33,7 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 	// Select the exact visible palette title, then use the integrated metadata
 	// navigator at every width without changing the detailed attachment.
-	r.send("\x10")
+	r.send("\x00") // Terminal Ctrl+Space arrives as NUL; Tea must open Commands.
 	r.modalReady("Commands")
 	r.send("Conversations\r")
 	waitNavigatorQuery(t, r, "Filter loaded")

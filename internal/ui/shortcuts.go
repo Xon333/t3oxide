@@ -42,7 +42,7 @@ func workspaceNavigatorKeys(reading, composer, navigator []string) map[string][]
 var shortcutActions = []shortcutAction{
 	{"stop", "stop", "Stop/hold", map[string][]string{"global": {"ctrl+s"}}},
 	{"quit", "quit", "exit", map[string][]string{"global": {"ctrl+q"}}},
-	{"palette", "", "commands", map[string][]string{"global": {"ctrl+space", "ctrl+@", "f3", "super+p"}, "composer": {"ctrl+p"}, "reading": {"ctrl+p"}, "navigator": {"ctrl+p"}, "activity": {"ctrl+p"}, "context": {"ctrl+p"}, "form": {"ctrl+p"}, "search": {"ctrl+p"}, "detail": {"ctrl+p"}, "agentbox": {"ctrl+p"}}},
+	{"palette", "", "commands", map[string][]string{"global": {"ctrl+space", "ctrl+@", "f3"}, "composer": {"ctrl+p"}, "reading": {"ctrl+p"}, "navigator": {"ctrl+p"}, "activity": {"ctrl+p"}, "context": {"ctrl+p"}, "form": {"ctrl+p"}, "search": {"ctrl+p"}, "detail": {"ctrl+p"}, "agentbox": {"ctrl+p"}}},
 	{"help", "help", "help", map[string][]string{"global": {"ctrl+alt+h", "f1", "super+h"}, "reading": {"?"}, "activity": {"?"}, "context": {"?"}, "agentbox": {"?"}}},
 	{"info", "info", "Info", map[string][]string{"global": {"ctrl+l", "f2", "super+i"}}},
 	{"error", "error", "error", map[string][]string{"global": {"f8"}}},
@@ -174,6 +174,11 @@ func (c *ShortcutConfig) keysFor(a shortcutAction, context string) []string {
 				return slices.Clone(override)
 			}
 		}
+	}
+	if a.id == "palette" && context != "global" {
+		// Commands advertises its portable global default before contextual
+		// Ctrl+P fallbacks. Explicit context overrides above still own their keys.
+		return append(slices.Clone(global), active...)
 	}
 	keys := slices.Clone(active)
 	if context == "global" {

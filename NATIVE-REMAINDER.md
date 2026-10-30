@@ -1,10 +1,18 @@
-# Native integration remainder — t3oxide 0.8
+# Native integration remainder — t3oxide 0.9
 
 The portable implementation contains both Developer refinements and native-backed AgentBox. [Verification](docs/verification.md) separates the actual Linux/fixture results from installed-host acceptance. Historical native records in that document remain evidence only for their recorded versions and unchanged paths.
+
+The 2026-10-30 M1 source gate passed the complete Go/test/vet/race suite, all 219 Node tests, shared Swift/Python checks, security scan, native ARM64 Go build and retained Swift build/signatures. The final Go candidate identifies itself as `0.9.0-bubbletea`. The authenticated running server reports `0.1.6-nightly.20261030.3904`; the older shell CLI is not its identity. Capability advertisement alone is not native behavioral acceptance. This worker has not changed active installations or services; release/publication remains the owner's separate action.
+
+Actual disposable installed-server acceptance then passed two distinct empty native worktree launches, revision-bound pin/unpin, bounded read-only preview, native search, scoped defaults fallback, exact reported account telemetry and reconnect without mutation replay. Developer draft restart and AgentBox partial-batch restart passed: one reply-only task completed, and the second remained unsubmitted. Further native checks passed managed-child question/Working behavior, real temporary companion credential rotation and revocation, and controlled loss of an actual native ACK followed by Go Needs recovery, restart and explicit same-ID reconciliation without duplicates. Genuine provider-approval propagation remains unproven; no approval was fabricated. The seven disposable native workflow threads are settled with no active runs, requests or unresolved operations. Three clean native-bound worktrees remain for supported native retirement; later root/shared tests created no additional trees. Private receipts identify the exact bindings. See [verification](docs/verification.md) for tested candidates and boundaries.
 
 The 2026-10-29 M1 integration passed the complete native Go/race checks, shared Swift/Python checks, all 196 Node tests and the signed ARM64 build. Installed project/default/ref/diff reads passed against T3 `0.1.5-nightly.20261029.3867`; the local executable and adapter were updated with state and rollback preserved. The owner subsequently authorized M4 publication: its existing release pointer was switched atomically, installed checks and both profile doctor reads passed, and state/rollback comparisons matched. The remaining physical-terminal and live-mutation cases below retain their separate scope.
 
 ## Focused client acceptance
+
+Current external Terminal checks passed the four supported layouts, caret/selection mode returns, theme and filled-selection presentation, independent Stop, explicit request Submit, multiline Steer, portable Send/literal Send, exact tool click and wheel. The final `fb13bd82…50cf93` candidate displays Ctrl+Space, but external Control+Space did not open Commands in the tested environment; OS interception versus terminal non-delivery is unproven. Control+P opened Commands and preserved the draft on return. The owner accepted that explicit fallback; no global input-source setting changed. Terminal converted tested LF clipboard input to CR; conservative rejection and explicit exact-byte recovery/send passed, not LF-preserving paste. Genuine provider-approval propagation and other physical Command aliases remain unproven. No physical input-to-pixel latency is claimed.
+
+The retained matrix below describes affected future acceptance; completed cases above need no blanket replay.
 
 Use the actual supported Apple Silicon terminal with disposable state first. Verify 60×16, 80×24, 120×35 and wide layouts, filled selection and reduced-color/Terminal themes. Confirm physical Command aliases when delivered, portable Ctrl+]/Ctrl+\, independent Ctrl+S, Enter newline, separate Steer and request Submit, list text editing and visible-pane focus. Do not change global terminal or OS settings to make a key test pass.
 
@@ -20,7 +28,7 @@ Verify project enumeration/defaults (including `t3.json`), first-thread scaffold
 
 Drop a launch response in an authorized disposable workflow and reconcile the original thread/message/workspace identity. An absent or mismatched result must remain uncertain with no second launch. Verify normal and Stop recovery lanes independently. Closing the TUI must leave existing native work owned by T3; unsubmitted filing-list drafts must not dispatch after exit.
 
-The canonical knowledge-host `scripts/check-capabilities.sh` and review of all four affected existing records passed during M1 integration. Repeat only when their declared inputs change again. The portable environment's earlier missing-helper result remains historical evidence.
+The earlier canonical knowledge-host record review remains historical evidence. The new local `scripts/check-capabilities.sh` checked all four enrolled records and proposed input-hash-only changes, with no generated drift. The owner paused Obsidian/Personal work before acceptance: retain those plans unaccepted and report the knowledge update pending. Do not activate Obsidian or write the records while that hold remains.
 
 ## Native capability gaps
 

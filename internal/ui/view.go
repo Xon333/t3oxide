@@ -328,7 +328,7 @@ func (m *Model) terminalView(content string) tea.View {
 func (m *Model) bodyView() string {
 	p := colors(m.theme)
 	if m.transcript == "" {
-		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render("Ctrl+P  Commands")
+		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render(m.actionBinding("palette").Help().Key+"  Commands")
 		if m.snapshot != nil {
 			text = p.subtle().Render("Preparing conversation…")
 		}

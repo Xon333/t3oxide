@@ -1,6 +1,6 @@
 # Accepted refinement implementation
 
-This change extends the `1bd8cfa9ff69b560e3b1bd8e77d9ef92cb5688f9` source without changing companion protocol 1, dependency versions, release version, the Swift rollback client, or native T3's execution authority. Native compatibility details and pinned primary sources are in [native refinement contracts](native-refinement-contracts.md). Durable storage is described in [state and recovery](state-recovery.md).
+This change extends the `1bd8cfa9ff69b560e3b1bd8e77d9ef92cb5688f9` source for release `0.9.0-bubbletea` without changing companion protocol 1, dependency versions, the Swift rollback client, or native T3's execution authority. Native compatibility details and pinned primary sources are in [native refinement contracts](native-refinement-contracts.md). Durable storage is described in [state and recovery](state-recovery.md).
 
 ## Responsive rendering and controls
 
@@ -46,4 +46,4 @@ Changes show source, observation time, hashes, file count, clipping and native P
 
 Maintained tests cover actual Go components, the real Bubble Tea event loop, assembled executable POSIX PTYs and the actual Node adapter against synthetic HTTP/WebSocket fixtures. Content-free opt-in performance probes keep boundary names, sample counts and raw observations. Actual Linux xterm window captures are real target-app screenshots using fixture data. They do not certify an installed native T3 version, real accounts, macOS physical keys/mouse, real terminal pixels from input timestamps, or production latency.
 
-The full implementation return records all accepted requirement statuses, exact checks and before/after raw measurements. Installed-host schema/capability verification, the missing safe defaults-write primitive, retained Swift/macOS build checks, canonical capability verification under its separate authorization, and human physical terminal acceptance remain explicit native completion items. No deployment or merge is part of this change.
+The full portable implementation return records its accepted requirement statuses, exact checks and raw measurements. Subsequent [M1 verification](verification.md) records the native Go/Swift checks, installed-server workflows, auth/ACK recovery and external Terminal acceptance with their exact candidate identities and limits. Safe persistent defaults writes remain unavailable, physical Ctrl+Space delivery uses an accepted Ctrl+P fallback in the tested environment, and the owner has paused knowledge-record updates. No deployment or merge is performed by this source integration worker.

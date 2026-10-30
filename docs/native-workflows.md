@@ -39,9 +39,10 @@ The shell's pending runtime request is one summary, with its exact native reques
 `New` resolves its creation environment independently of the highlighted or attached conversation. Its order is:
 
 1. An explicitly supplied CLI `--env` target.
-2. The one enabled profile marked `"defaultForNew": true` in `environments.json`.
-3. The sole enabled configured environment.
-4. An explicit environment choice when multiple profiles remain ambiguous.
+2. The exact saved creation environment/project pin, when present.
+3. The one enabled profile marked `"defaultForNew": true` in `environments.json`.
+4. The sole enabled configured environment.
+5. An explicit environment choice when multiple profiles remain ambiguous.
 
 `defaultForNew` is an optional client preference in the existing version-1 profile file. At most one enabled profile may set it. It does not change any native account/model setting, require a watcher, or create a second configuration UI.
 

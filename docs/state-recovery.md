@@ -21,7 +21,7 @@ No automatic live-state migration or installation is performed by this source re
 
 ## Native-default launch migration
 
-New now resolves the creation target independently of the active thread. Set at most one profile's optional `defaultForNew: true`, or use explicit `--env`. A single configured environment is unambiguous. With multiple environments and no explicit creation default, the client asks; it does not infer a default from the newest row or last attachment.
+New resolves the creation target independently of the active thread: explicit `--env`, the exact saved creation environment/project pin, a profile's optional `defaultForNew: true`, a single configured environment, or an explicit choice. At most one enabled profile may set `defaultForNew`. An unavailable saved pin requires correction instead of silently selecting another target. The client does not infer a default from the newest row or last attachment.
 
 Existing legacy launch drafts and uncertain records remain source-bound. New native project launch forms use a separate project-launch scope. Restored form text, title and options stay exact. If the native defaults revision changed, the review requires explicit Defaults before Create. This avoids silently rebasing a saved draft onto new model/workspace policy.
 

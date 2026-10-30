@@ -60,7 +60,7 @@ func TestHelpAndBareJSONDoNotOpenConfigurationOrState(t *testing.T) {
 }
 
 func TestCLIHelpAdvertisesPortableControlsAndActualJSONContracts(t *testing.T) {
-	for _, want := range []string{"Ctrl+O", "Ctrl+P", "/edit", "/recall", "/help", "Ctrl+S", "/retry [stop]", "doctor [--env m1] [--json]", "status --env m1 [--thread ID]", "always JSON"} {
+	for _, want := range []string{"Ctrl+O", "Ctrl+Space", "Ctrl+P", "/edit", "/recall", "/help", "Ctrl+S", "/retry [stop]", "doctor [--env m1] [--json]", "status --env m1 [--thread ID]", "always JSON"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("missing help contract %q", want)
 		}
