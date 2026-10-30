@@ -29,7 +29,7 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	r.send("\r")
 	r.waitText("1 Changes")
 	r.send("r")
-	r.waitText("Reply · Alpha")
+	waitProgramReply(t, r, "Alpha")
 	const draft = "jknrelsz123\nexact second line"
 	r.send("jknrelsz123\rexact second line")
 	r.waitText("exact second line")
@@ -45,7 +45,7 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	}
 	r.send("\x1b[98;7u")
 	r.waitText("AgentBox")
-	r.waitText("Reply · Alpha")
+	waitProgramReply(t, r, "Alpha")
 	if a.Draft() != draft {
 		t.Fatal("AgentBox mode return did not retain reply")
 	}
@@ -60,7 +60,7 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	f.mu.Unlock()
 	f.broadcast("thread-a", "turn-item.updated", update, 0)
 	waitWorkspaceFrame(t, r, func(v string) bool {
-		return f.requestCounts()["rpc:orchestration.subscribeThread"] > subscriptions && a.Status().ConnectionState == "connected" && strings.Contains(v, reconnectedText) && strings.Contains(v, "AgentBox") && strings.Contains(v, "Reply · Alpha") && !strings.Contains(v, "synchronizing")
+		return f.requestCounts()["rpc:orchestration.subscribeThread"] > subscriptions && a.Status().ConnectionState == "connected" && strings.Contains(v, reconnectedText) && strings.Contains(v, "AgentBox") && hasProgramReply(v, "Alpha") && !strings.Contains(v, "synchronizing")
 	}, "AgentBox reconnect on the same native identity")
 	if a.Draft() != draft || a.Status().ThreadID != "thread-a" {
 		t.Fatal("native reconnect changed AgentBox reply identity/text")
@@ -95,7 +95,7 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	r.send("\x1b[B\r")
 	waitCommandType(t, f, "thread.settle")
 	waitWorkspaceFrame(t, r, func(v string) bool {
-		return strings.Contains(v, "Native settle acknowledged") && !strings.Contains(v, "Loading…")
+		return strings.Contains(v, "Reviewed acknowledged") && strings.Contains(v, "Next") && !strings.Contains(v, "Loading…")
 	}, "native review acknowledgement")
 	r.send("z")
 	waitCommandType(t, f, "thread.unsettle")
@@ -128,7 +128,7 @@ func TestAgentBoxProgramFilesRealIsolatedTaskFromNativeReview(t *testing.T) {
 	r.program.Send(tea.PasteMsg{Content: brief})
 	r.waitText("keep the selected path")
 	r.send("\t\x01\x0bNative task from inbox\r")
-	r.waitText("[Create]")
+	r.waitText("[Create & send]")
 	if effects, _ := f.counts(); effects != 0 {
 		t.Fatal("reviewed title or brief launched without Create")
 	}
@@ -178,7 +178,7 @@ func TestAgentBoxProgramHealthyHostUsableWhileOtherMetadataIsPending(t *testing.
 	r.send("\r")
 	r.waitText("1 Changes")
 	r.send("r")
-	r.waitText("Reply · Alpha")
+	waitProgramReply(t, r, "Alpha")
 	r.send("use the healthy host now\x1d")
 	fid := first.waitMessage(t, "use the healthy host now")
 	if fid == "" {
@@ -198,6 +198,7 @@ func TestAgentBoxProgramFormalDecisionCannotBeResolvedByReplyOrStaleForm(t *test
 	}
 	r, _ := startAppTUI(t, a)
 	r.waitText("Initial Markdown for Alpha")
+	dismissInitialAutomaticRequestAttention(t, r, f)
 	r.send("/mode agentbox\x1d")
 	waitWorkspaceFrame(t, r, func(v string) bool {
 		return strings.Contains(v, "AgentBox") && strings.Contains(v, "Alpha") && !strings.Contains(v, "Loading…")
@@ -225,7 +226,7 @@ func TestAgentBoxProgramFormalDecisionCannotBeResolvedByReplyOrStaleForm(t *test
 		return !strings.Contains(v, "T3 approval") && !strings.Contains(v, "Loading…") && strings.Contains(v, "? Waiting · 1 request")
 	}, "retired exact approval form and refreshed source")
 	r.send("r")
-	r.waitText("Reply · Alpha")
+	waitProgramReply(t, r, "Alpha")
 	r.send("yes, continue with the plan\x1d")
 	f.waitMessage(t, "yes, continue with the plan")
 	f.mu.Lock()

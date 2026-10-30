@@ -86,9 +86,11 @@ func unifiedStartupActivation(t *testing.T, size [2]int, activation string) {
 		t.Fatal("result arrows attached before explicit activation")
 	}
 	if activation == "mouse" {
-		// The query repeats the title; the environment-qualified rendered row
-		// is the offered identity, independently located from the real View.
-		clickIntuitiveControl(t, r, "[S] Second alpha")
+		// The query repeats the title; the project/kind bubble identifies the
+		// actual rendered row. Full source identity remains in its selected
+		// details, and the subscription/draft checks below verify the exact
+		// environment half of the otherwise duplicate native thread ID.
+		clickIntuitiveControl(t, r, "[FI◇] Second alpha")
 	} else {
 		r.send("\r")
 	}

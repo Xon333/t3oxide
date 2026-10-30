@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/Xon333/t3oxide/internal/client"
 	"github.com/Xon333/t3oxide/internal/config"
+	"github.com/Xon333/t3oxide/internal/wire"
 )
 
 func (m *Model) inboxActionTarget() (client.InboxThread, bool) {
@@ -129,11 +130,15 @@ func (m *Model) mutateInbox(action, until string, undo bool) tea.Cmd {
 	m.actionDone = done
 	m.actionBusy = true
 	m.actionName = "inbox-" + action
+	order := make([]string, 0, len(m.agentbox.rows))
+	for _, candidate := range m.agentbox.rows {
+		order = append(order, candidate.Target.Key())
+	}
 	return func() tea.Msg {
 		defer close(done)
 		defer cancel()
 		receipt, err := session.AgentBoxAction(ctx, row.Target, action, until)
-		return inboxMutationMsg{action: actionMsg{generation: generation, id: id, name: "inbox-" + action, err: err}, target: row.Target, receipt: receipt, previous: previous, undo: undo}
+		return inboxMutationMsg{action: actionMsg{generation: generation, id: id, name: "inbox-" + action, err: err}, target: row.Target, receipt: receipt, previous: previous, undo: undo, order: order}
 	}
 }
 
@@ -142,6 +147,17 @@ func (m *Model) inboxMutationFinished(msg inboxMutationMsg) (tea.Model, tea.Cmd)
 		return m, nil
 	}
 	if msg.action.err == nil {
+		if (msg.receipt.Action == "settle" || msg.receipt.Action == "snooze") && !msg.undo {
+			if row, ok := m.selectedInbox(); ok && row.Target.Key() == msg.target.Key() {
+				label := "Reviewed"
+				if msg.receipt.Action == "snooze" {
+					label = "Later"
+				}
+				m.agentbox.ack = &inboxAcknowledgement{row: row, label: label, order: msg.order}
+				m.agentbox.selected = row.Target.Key()
+				m.agentbox.decision = true
+			}
+		}
 		if msg.undo {
 			m.agentbox.undo = nil
 		} else if msg.previous != nil && msg.receipt.NativeRevision != "" {
@@ -169,6 +185,9 @@ func (m *Model) inboxMutationFinished(msg inboxMutationMsg) (tea.Model, tea.Cmd)
 		m.agentbox.reply = false
 		m.filterInbox()
 		msg.action.result.Text = "Native " + msg.receipt.Action + " acknowledged"
+		if m.agentbox.ack != nil {
+			msg.action.result.Text = m.agentbox.ack.label + " acknowledged · Next / Back to inbox"
+		}
 	}
 	_, cmd := m.Update(msg.action)
 	if msg.action.err == nil {
@@ -224,12 +243,26 @@ func (m *Model) inboxReviewFinished(msg inboxReviewMsg) tea.Cmd {
 	}
 	for _, pr := range msg.review.PullRequests {
 		lines = append(lines, fmt.Sprintf("PR #%d · %s · %s", pr.Number, pr.State, pr.URL))
+		sync := pr.SyncedAt
+		if sync == "" {
+			sync = "unreported"
+		}
+		lines = append(lines, "PR synced: "+sync)
 	}
+	if len(msg.review.PullRequests) == 0 {
+		lines = append(lines, "PR sync: unreported")
+	}
+	observed := msg.review.GeneratedAt
+	if observed == "" {
+		observed = "unreported"
+	}
+	lines = append(lines, "Diff observed: "+observed, fmt.Sprintf("Sources: %d · files: %d · clipped: %t", len(msg.review.Sources), len(msg.review.Files), msg.review.DiffTruncated))
+	lines = append(lines, "Diff/run completion does not establish tests, merge, or human review.")
 	if msg.review.Unavailable != "" {
 		lines = append(lines, "\n"+msg.review.Unavailable)
 	}
 	for _, source := range msg.review.Sources {
-		lines = append(lines, source.Title+" · "+source.Kind+" · "+source.Hash)
+		lines = append(lines, source.Title+" · "+source.Kind+" · "+source.Hash+fmt.Sprintf(" · clipped: %t", source.Truncated))
 	}
 	for _, file := range msg.review.Files {
 		lines = append(lines, fmt.Sprintf("%s · +%d −%d", file.Path, file.Additions, file.Deletions))
@@ -243,6 +276,13 @@ func (m *Model) inboxReviewFinished(msg inboxReviewMsg) tea.Cmd {
 		lines = append(lines, "\nDiff is bounded; inspect the remaining changes in full T3.")
 	}
 	m.openDetail("Changes", safeText(strings.Join(lines, "\n")))
+	if m.session != nil {
+		offset, notice := m.session.ReviewPosition(msg.target, msg.review)
+		m.detailViewport.SetYOffset(offset)
+		if notice != "" {
+			m.notice = notice
+		}
+	}
 	return nil
 }
 
@@ -375,6 +415,15 @@ func (m *Model) inboxOfferedChoice(index int) tea.Cmd {
 	if !ok || !m.inboxAttached(row) {
 		return nil
 	}
+	if m.agentbox.ack != nil && m.agentbox.ack.row.Target.Key() == row.Target.Key() && m.status.Requests == 0 {
+		if index == 1 {
+			return m.nextAcknowledgedInbox()
+		}
+		if index == 2 {
+			return m.agentboxAction("inbox", "back")
+		}
+		return nil
+	}
 	if m.status.Requests > 0 {
 		switch index {
 		case 1:
@@ -399,6 +448,9 @@ func (m *Model) inboxOfferedChoice(index int) tea.Cmd {
 
 func (m *Model) inboxInfo() tea.Cmd {
 	lines := []string{"AgentBox · native T3 threads", "Priority changes only this client's presentation order. Native T3 owns execution and queueing.", "The loaded page is bounded. Future queued launch scheduling is not implemented by this client.", "Existing native work continues when this client exits."}
+	if m.agentbox.query.Value() != "" {
+		lines = append(lines, "Current query: "+m.agentbox.query.Value(), "Last native read query: "+m.agentbox.readQuery, "Sources: "+m.inboxSourceHealth())
+	}
 	for _, source := range m.agentbox.page.Sources {
 		lines = append(lines, fmt.Sprintf("\n%s · profile=%s environment=%s · nativeWorkflows=%t · cursor=%d more=%t", source.Label, source.ProfileID, source.EnvironmentID, source.NativeWorkflows, source.Page.Cursor, source.Page.More))
 		if source.Error != "" {
@@ -407,9 +459,18 @@ func (m *Model) inboxInfo() tea.Cmd {
 		if source.Page.ObservedAt != "" {
 			lines = append(lines, "Observed: "+source.Page.ObservedAt)
 		}
+		if source.Page.SearchScope != "" {
+			lines = append(lines, fmt.Sprintf("Search scope: %s · incomplete: %t", source.Page.SearchScope, source.Page.SearchIncomplete))
+		}
 	}
 	if row, ok := m.selectedInbox(); ok {
-		lines = append(lines, "\nThread: "+row.Target.ThreadID, "Project: "+row.Target.ProjectID, "Revision: "+row.Target.Revision, "Status: "+row.Thread.Status)
+		lines = append(lines, "\nConversation: "+row.Thread.Title, "Thread: "+row.Target.ThreadID, "Project: "+row.Thread.Project, "Project ID: "+row.Target.ProjectID, "Revision: "+row.Target.Revision, "Status: "+row.Thread.Status)
+		lines = append(lines, "Profile: "+row.Target.ProfileID, "Environment: "+row.Environment, "Environment ID: "+row.Target.EnvironmentID, "Machine kind: "+m.inboxMachineKind(row.Target.ProfileID))
+		identity := row.Thread.ProviderIdentity
+		if identity == nil && row.Thread.ProviderInstanceID != "" {
+			identity = &wire.ProviderIdentity{InstanceID: row.Thread.ProviderInstanceID}
+		}
+		lines = append(lines, providerIdentityLines(identity)...)
 		if row.Thread.Inbox != nil {
 			v := row.Thread.Inbox
 			queued := "unreported"

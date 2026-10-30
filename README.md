@@ -37,7 +37,7 @@ Read streaming Markdown, compose a reply, inspect tools and changes, or answer a
 
 ### Review tasks in AgentBox
 
-Start with **Needs you**, then move between Working, Queued, Later, Done, All and Unknown. File work into an existing project, review each launch, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
+Start with **Needs you**, then move between Working, Queued, Later, Reviewed, All and Unknown. **Completed** describes a run; **Reviewed** describes the native review disposition. File work into an existing project, review each launch, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
 
 Priorities organize the client view; they do not schedule work after exit. Existing native runs and accepted message queues continue independently. See the [AgentBox guide](docs/agentbox.md) for the full workflow.
 

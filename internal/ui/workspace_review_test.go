@@ -13,6 +13,7 @@ func TestWorkspaceSearchOwnsKeysAndRestoresInvokingPane(t *testing.T) {
 			m := navigatorFixture(t, 170, 40)
 			m.sidebar = true
 			m.navigator.focused = pane == "navigator"
+			m.navigator.editing = pane == "navigator"
 			m.contextFocused = pane == "context"
 			m.activityFocused = pane == "activity"
 			m.transcriptFocus = false

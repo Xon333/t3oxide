@@ -11,6 +11,7 @@ import (
 type workspaceReturn struct {
 	editor                      textarea.Model
 	draft, preserved            string
+	nextDelivery                string
 	anchor                      readingAnchor
 	offset                      int
 	follow, reading, navigation bool
@@ -40,7 +41,7 @@ func (m *Model) rememberWorkspace() {
 	if anchor.key == "" || m.anchorOffset != m.viewport.YOffset() {
 		anchor = anchorAt(m.transcriptRows, m.viewport.YOffset())
 	}
-	m.workspaceReturns[key] = workspaceReturn{editor: m.composer, draft: m.currentDraft(), preserved: m.preservedDraft, anchor: anchor, offset: m.viewport.YOffset(), follow: m.follow, reading: m.transcriptFocus, navigation: m.navigator.focused, context: m.contextFocused, activity: m.activityFocused, contextSelection: m.contextSelection, contextKey: m.contextFocusKey, activityKey: m.activityFocusKey}
+	m.workspaceReturns[key] = workspaceReturn{editor: m.composer, draft: m.currentDraft(), preserved: m.preservedDraft, nextDelivery: m.nextDelivery, anchor: anchor, offset: m.viewport.YOffset(), follow: m.follow, reading: m.transcriptFocus, navigation: m.navigator.focused, context: m.contextFocused, activity: m.activityFocused, contextSelection: m.contextSelection, contextKey: m.contextFocusKey, activityKey: m.activityFocusKey}
 }
 
 func (m *Model) recallWorkspace(s *client.Session) {
@@ -56,6 +57,8 @@ func (m *Model) recallWorkspace(s *client.Session) {
 	if s.Draft() == saved.draft {
 		m.composer = saved.editor
 		m.preservedDraft = saved.preserved
+		m.nextDelivery = saved.nextDelivery
+		m.deliverySerial++
 	}
 	m.transcriptFocus = saved.reading
 	m.navigator.focused = saved.navigation
@@ -97,10 +100,31 @@ func (m *Model) openVisibleNavigatorNumber(number int) tea.Cmd {
 	if !m.navigationVisible() || m.dialog != nil || m.detail != "" || number < 1 || number > 9 {
 		return nil
 	}
-	items := m.navigator.list.VisibleItems()
-	start, end := m.navigator.list.Paginator.GetSliceBounds(len(items))
-	index := start + number - 1
-	if index >= end || index >= len(items) {
+	// Number only real, clipped row regions from the last drawn surface. The
+	// list paginator knows neither shelf headings nor selected-row expansion.
+	identity, seen := "", make(map[string]bool)
+	for _, hit := range m.navigator.surface.hits {
+		if hit.action != "navigator-row" || hit.serial != m.navigator.serial || hit.height < 1 || seen[hit.args] {
+			continue
+		}
+		seen[hit.args] = true
+		number--
+		if number == 0 {
+			identity = hit.args
+			break
+		}
+	}
+	if identity == "" {
+		return nil
+	}
+	index := -1
+	for i, raw := range m.navigator.list.VisibleItems() {
+		if item, ok := raw.(navigatorItem); ok && item.identity() == identity && !item.stale {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
 		return nil
 	}
 	m.navigator.list.Select(index)

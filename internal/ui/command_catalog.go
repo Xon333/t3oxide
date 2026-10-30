@@ -27,9 +27,12 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"review", "Review", "", "Requests or actual changes for the current task", m.actionBinding("agentbox.diff")},
 		{"switch", "Conversations", "[words]", "", k.Threads},
 		{"mode", "Mode", "[developer|agentbox]", "Same T3 conversations and drafts", k.Mode},
-		{"inbox", "Inbox", "[needs-you|working|queued|later|done|all]", "Native task state and local review disposition", m.actionBinding("agentbox.inbox")},
+		{"inbox", "Inbox", "[needs-you|working|queued|later|reviewed|all]", "Native task state and review disposition", m.actionBinding("agentbox.inbox")},
 		{"file", "File work", "", "Review a native task launch", m.actionBinding("agentbox.file")},
 		{"file-many", "File multiple tasks", "", "One task per line; review each native launch", key.Binding{}},
+		{"destination", "Creation destination", "", "Pin/change/reset environment and project; reload native defaults on every New", key.Binding{}},
+		{"native-defaults", "Native defaults", "", "Project on environment or Environment · reported values and inheritance", key.Binding{}},
+		{"batch-receipts", "Batch receipts", "", "Acknowledged / Needs recovery / Remaining draft", key.Binding{}},
 		{"send", "Send", "", "Send the current draft using selected delivery", k.Send},
 		{"steer", "Steer", "", "Explicit one-message steering; same conversation", k.Steer},
 		{"send-literal", "Send literal text", "", "Preserve leading slash and exact draft bytes", k.Literal},
@@ -55,7 +58,10 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"override", "Next-message override", "[model|effort|speed|presets|clear]", "T3 may adopt the dispatched selection", key.Binding{}},
 		{"runtime", "Runtime details", "", "Saved, requested and reported settings", key.Binding{}},
 		{"delivery", "Delivery", "auto|queue|steer", "", key.Binding{}},
+		{"delivery-menu", "Next send delivery", "", "Stage Auto / Queue / Steer; Send submits", key.Binding{}},
+		{"next-delivery", "Set next send delivery", "auto|queue|steer|clear", "One-message override; saved delivery unchanged", key.Binding{}},
 		{"pending", "Saved operations", "", "Original IDs and payloads", key.Binding{}},
+		{"recover", "Review saved action", "", "All environments · exact original target, payload and ID · explicit reconciliation", key.Binding{}},
 		{"retry", "Retry saved action", "[stop]", "Reuses the original operation ID", key.Binding{}},
 		{"resolve", "Resolve reviewed action", "[stop]", "Confirms local record clearance", key.Binding{}},
 		{"error", "Error details", "", "", k.Error},
@@ -142,6 +148,10 @@ func (m *Model) commandUnavailable(name string) string {
 		if !m.status.PendingAction && !m.status.PendingStop {
 			return "Unavailable: no saved operations for the attached conversation"
 		}
+	case "recover":
+		if !m.hasSavedActions() {
+			return "Unavailable: no saved operations in any configured or retained environment"
+		}
 	case "model", "effort", "speed", "override":
 		if !m.status.ModelControls {
 			return "Unavailable: connect a writable thread with a model-capable adapter"
@@ -226,12 +236,12 @@ func (m *Model) validateCommand(name, args string) error {
 	}
 	valid := true
 	switch name {
-	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details", "info", "context", "shortcuts", "review", "file", "file-many", "send", "send-literal", "steer", "refresh":
+	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "recover", "destination", "native-defaults", "batch-receipts", "delivery-menu", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details", "info", "context", "shortcuts", "review", "file", "file-many", "send", "send-literal", "steer", "refresh":
 		valid = args == ""
 	case "mode":
 		valid = args == "" || args == "developer" || args == "agentbox"
 	case "inbox":
-		valid = args == "" || args == "needs-you" || args == "working" || args == "queued" || args == "later" || args == "done" || args == "all"
+		valid = args == "" || args == "needs-you" || args == "working" || args == "queued" || args == "later" || args == "done" || args == "reviewed" || args == "all"
 	case "keyboard":
 		valid = args == "modern" || args == "legacy"
 	case "theme":
@@ -240,6 +250,8 @@ func (m *Model) validateCommand(name, args string) error {
 		valid = args == "" || args == "on" || args == "off"
 	case "delivery":
 		valid = args == "auto" || args == "queue" || args == "steer"
+	case "next-delivery":
+		valid = args == "auto" || args == "queue" || args == "steer" || args == "clear"
 	case "retry", "resolve":
 		valid = args == "" || args == "stop"
 	case "copy":

@@ -90,3 +90,46 @@ Existing profile/state files remain valid. New optional form and preference fiel
 Portable tests exercise the actual Go client, Bubble Tea program, Node adapter, HTTP/RPC framing and native-shaped local fixtures. They are not physical terminal-key evidence or an installed-host claim. Native adoption still requires the authorized M1 integrator to verify project/default discovery, native empty filing and isolated launch, exact approvals, held launch plus independent Stop, stale/changed multi-client recovery, diff/PR availability and native work continuing after client exit. Separately authorized remote-host checks must use that host's exact identities and installed revision.
 
 After a capability change, run `scripts/check-capabilities.sh` on the canonical knowledge host and review affected existing records with the prescribed helper. That host-specific helper is not supplied by this source tree. Its earlier portable absence and the completed M1 record review are recorded separately in [verification](verification.md). Another host's integration or client publication requires its own authorized scope and preservation checks. The subsequent owner-authorized M4 publication is recorded there as installed-file and read-only connection evidence.
+
+## Creation destination and scoped defaults
+
+`/destination` pins an exact configured profile/environment/project independently
+of the highlighted or attached conversation. The pin contains identity only and
+is atomically saved by the existing private state owner. New resolves current
+native model/account/options/workspace defaults again. An explicit CLI creation
+profile wins; otherwise the saved pin precedes `defaultForNew`, a single configured
+environment, and an explicit choice. A removed or identity-changed profile is an
+error requiring Change/Reset; it never retargets by display label. Reset restores
+that precedence. `new-same` carries only the source project into the chosen
+creation environment.
+
+New offers **Pin destination**, **Creation destination**, and **Native defaults**.
+The latter separates **Project on environment** from **Environment**, shows each
+field's source and whether it overrides an inherited value, and retains an
+unavailable stored provider/model. This-launch controls remain staged only for
+that launch. A project field reset means removing that override, not saving a
+copy of today's inherited value.
+
+Persistent default writes are deliberately unavailable for the inspected pinned
+T3 contract: `server.updateSettings` accepts a patch and optional provider
+mutation but no revision/CAS or operation ID, and project overrides replace a
+whole entry. The adapter returns the exact limitation and native Settings route.
+The client cannot safely preserve concurrent opaque siblings or reconcile an
+uncertain write under that contract. Reads, scoped provenance and creation-target
+pinning work; enabling a future write flag alone grants no authority. Native
+Settings remains the supported edit/reset route until a versioned safe write
+contract is implemented and verified. No desktop-local preferences are read.
+
+Explicit **Search server conversations** uses the bounded native search contract;
+ordinary loaded-list typing does not. Both Developer and AgentBox offer it when
+the loaded filter has no matches. AgentBox switches explicitly to All while
+retaining environment/project/priority filters. Returned native message matches
+are not filtered away by their titles. Editing the query cancels the old read,
+retires its result generation and filters the already loaded metadata locally;
+it does not issue another native search. Its response is marked incomplete because
+the inspected native search response has no completeness cursor. Space preview
+uses a separately canceled read-only helper, clears all request/run authority,
+and never watches, marks seen, changes the attachment, or replaces its draft/Stop
+target. Older helpers show the metadata-only limitation. Pin/unpin requires the
+advertised native pin capability and the displayed source revision; it uses the
+ordinary saved-operation lane and never automatically retries a stale offer.

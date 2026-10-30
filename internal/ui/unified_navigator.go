@@ -17,6 +17,12 @@ import (
 const allProfiles = "*"
 
 func (i navigatorItem) identity() string { return i.profile + "\x00" + i.thread.ID }
+func (i navigatorItem) nativeIdentity() string {
+	if i.environment != "" {
+		return i.environment + "\x00" + i.thread.ID
+	}
+	return i.identity()
+}
 
 // Project accents are a pure function of exact authority and project identity.
 // Refreshes, priorities, duplicate names and inserted rows cannot recolor them.
@@ -42,6 +48,24 @@ func environmentMark(label, profile string) string {
 	return "@"
 }
 
+// Explicit membership changes retire the old offered rows before the next read
+// generation. Preserve editor and exact selection identity; fresh independent
+// source results repopulate the page progressively. Background refreshes do not
+// use this path and keep their disabled/frozen slots until leave or Refresh.
+func (m *Model) resetNavigatorMembership() {
+	n := &m.navigator
+	if selected, ok := n.list.SelectedItem().(navigatorItem); ok {
+		n.selected = selected.identity()
+	}
+	n.pages = nil
+	n.ordered = nil
+	n.list.SetItems(nil)
+	n.loaded = false
+	n.reorderNow, n.orderDeferred = true, false
+	n.review = nil
+	m.layoutDirty = true
+}
+
 func (m *Model) unifiedNavigatorLoad(profile, query string, force bool) tea.Cmd {
 	if m.session == nil || !m.navigationVisible() {
 		return nil
@@ -59,6 +83,13 @@ func (m *Model) unifiedNavigatorLoad(profile, query string, force bool) tea.Cmd 
 	if n.cancel != nil {
 		n.cancel()
 	}
+	m.cancelNavigatorPreview()
+	if n.serverSearch {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			n.serverSearch = false
+		}
+	}
 	if i, ok := n.list.SelectedItem().(navigatorItem); ok {
 		n.selected = i.identity()
 	}
@@ -66,8 +97,13 @@ func (m *Model) unifiedNavigatorLoad(profile, query string, force bool) tea.Cmd 
 	serial, generation, session := n.serial, m.generation, m.session
 	ctx, cancel := context.WithCancel(m.sessionCtx)
 	n.cancel = cancel
+	changedScope := n.profile != profile || n.query != query
 	n.profile, n.query, n.error = profile, query, ""
-	n.pages = make(map[string]client.NavigatorPage)
+	if changedScope || n.pages == nil {
+		n.pages = make(map[string]client.NavigatorPage)
+		n.ordered = nil
+		n.list.SetItems(nil)
+	}
 	n.pending = make(map[string]bool)
 	n.failures = make(map[string]string)
 	n.loaded, n.loading = false, false
@@ -78,6 +114,7 @@ func (m *Model) unifiedNavigatorLoad(profile, query string, force bool) tea.Cmd 
 	// Bound simultaneous helpers independently of profile count. Each result
 	// is delivered immediately: an offline host never holds healthy rows back.
 	slots := make(chan struct{}, 4)
+	serverSearch := n.serverSearch
 	commands := make([]tea.Cmd, 0, len(scope))
 	for _, id := range scope {
 		n.pending[id] = true
@@ -88,7 +125,13 @@ func (m *Model) unifiedNavigatorLoad(profile, query string, force bool) tea.Cmd 
 				return navigatorMsg{generation: generation, serial: serial, profile: id, err: ctx.Err()}
 			}
 			defer func() { <-slots }()
-			page, err := session.NavigatorRead(ctx, id, query)
+			var page client.NavigatorPage
+			var err error
+			if serverSearch {
+				page, err = session.NavigatorSearch(ctx, id, query)
+			} else {
+				page, err = session.NavigatorRead(ctx, id, query)
+			}
 			return navigatorMsg{generation: generation, serial: serial, profile: id, page: page, err: err}
 		})
 	}
@@ -117,6 +160,9 @@ func (m *Model) unifiedNavigatorLoaded(msg navigatorMsg) tea.Cmd {
 	}
 	if n.failures == nil {
 		n.failures = make(map[string]string)
+	}
+	if msg.err == nil && (msg.page.ProfileID != profile || msg.page.Query != n.query) {
+		msg.err = fmt.Errorf("returned navigation source/query changed; refresh this source")
 	}
 	delete(n.pending, profile)
 	n.loading = len(n.pending) > 0
@@ -165,7 +211,7 @@ func (m *Model) rebuildUnifiedNavigator() {
 			page = source
 		}
 		for _, row := range source.Page.Threads {
-			rows = append(rows, navigatorItem{thread: row, profile: id, environment: source.EnvironmentID, label: source.Label})
+			rows = append(rows, navigatorItem{thread: row, profile: id, environment: source.EnvironmentID, label: source.Label, kind: source.Page.MachineKind, shelf: nativeShelf(row)})
 		}
 		if source.Page.More {
 			page.Page.More = true
@@ -177,19 +223,52 @@ func (m *Model) rebuildUnifiedNavigator() {
 		page.Page.Cursor = max(page.Page.Cursor, source.Page.Cursor)
 		page.Tree = page.Tree || source.Tree
 	}
+	preferred := map[string]string{}
+	for _, row := range n.ordered {
+		preferred[row.nativeIdentity()] = row.profile
+	}
+	unique := make([]navigatorItem, 0, len(rows))
+	indexes := map[string]int{}
+	for _, row := range rows {
+		key := row.nativeIdentity()
+		if index, exists := indexes[key]; exists {
+			if preferred[key] == row.profile {
+				unique[index] = row
+			}
+			continue
+		}
+		indexes[key] = len(unique)
+		unique = append(unique, row)
+	}
+	rows = unique
 	sort.SliceStable(rows, func(i, j int) bool {
+		if shelfRank(rows[i].shelf) != shelfRank(rows[j].shelf) {
+			return shelfRank(rows[i].shelf) < shelfRank(rows[j].shelf)
+		}
+		if rows[i].shelf == "Pinned" && rows[i].thread.Inbox.PinOrderKey != rows[j].thread.Inbox.PinOrderKey {
+			return rows[i].thread.Inbox.PinOrderKey < rows[j].thread.Inbox.PinOrderKey
+		}
 		if rows[i].thread.UpdatedAt != rows[j].thread.UpdatedAt {
 			return rows[i].thread.UpdatedAt > rows[j].thread.UpdatedAt
 		}
 		return rows[i].identity() < rows[j].identity()
 	})
+	rows = m.freezeNavigatorRows(rows)
+	n.ordered = rows
+	visible := make([]navigatorItem, 0, len(rows))
+	for _, row := range rows {
+		if !n.collapsed[row.shelf] {
+			visible = append(visible, row)
+		}
+	}
+	rows = visible
 	items := make([]list.Item, len(rows))
 	for i := range rows {
 		items[i] = rows[i]
 	}
 	n.page = page
 	n.list.SetItems(items)
-	if filter != "" {
+	if filter != "" && !n.serverSearch {
 		n.list.SetFilterText(filter)
 		n.list.SetFilterState(list.FilterApplied)
 	} else {
@@ -214,7 +293,16 @@ func (m *Model) navigatorSource() (client.NavigatorPage, client.Thread, bool) {
 	}
 	if i.profile != "" {
 		page, exists := m.navigator.pages[i.profile]
-		return page, i.thread, exists && !m.navigator.pending[i.profile] && m.navigator.failures[i.profile] == ""
+		offered := false
+		if !i.stale {
+			for _, row := range page.Page.Threads {
+				if row.ID == i.thread.ID {
+					offered = true
+					break
+				}
+			}
+		}
+		return page, i.thread, exists && offered && !m.navigator.pending[i.profile] && m.navigator.failures[i.profile] == ""
 	}
 	return m.navigator.page, i.thread, m.navigator.loaded && !m.navigator.loading
 }
@@ -264,6 +352,23 @@ func (m *Model) navigatorHealth() string {
 	}
 	if n.page.Page.More {
 		parts = append(parts, "More available")
+	}
+	incomplete := 0
+	for _, page := range n.pages {
+		if page.Page.SearchIncomplete {
+			incomplete++
+		}
+	}
+	if n.serverSearch {
+		parts = append(parts, fmt.Sprintf("%d searched", len(n.pages)))
+	} else if incomplete > 0 {
+		parts = append(parts, "Loaded search results")
+	}
+	if incomplete > 0 {
+		parts = append(parts, fmt.Sprintf("%d incomplete", incomplete))
+	}
+	if n.orderDeferred {
+		parts = append(parts, "Order held · Refresh to reorder")
 	}
 	return strings.Join(parts, " · ")
 }

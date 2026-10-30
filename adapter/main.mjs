@@ -16,6 +16,7 @@ export async function run(argv = process.argv.slice(2), {
   input = process.stdin, output = process.stdout,
   createBackend = (config, emit) => new T3(config, emit),
   onFailure = () => { process.exitCode = 1; },
+  trace = null, now = () => performance.now(),
 } = {}) {
   const at = argv.indexOf('--config');
   const configPath = at >= 0 ? argv[at+1] : resolve(homedir(),'.config/t3oxide/host.json');
@@ -27,6 +28,12 @@ export async function run(argv = process.argv.slice(2), {
   let backend, buffer = Buffer.alloc(0), navigation = 0;
   const lanes = { regular: { tail: Promise.resolve(), pending: 0, limit: MAX_REGULAR },
     stop: { tail: Promise.resolve(), pending: 0, limit: MAX_STOP } };
+  function mark(stage, extra = {}) {
+    // Optional content-free measurements of admission and Writable callbacks.
+    // No command IDs, text, targets, credentials or native payloads escape.
+    if (typeof trace === 'function') trace({stage,at:now(),queuedFrames:queued.length,queuedBytes,
+      regularPending:lanes.regular.pending,stopPending:lanes.stop.pending,...extra});
+  }
   function close() {
     if (ended) return;
     ended = true; ++navigation;
@@ -38,6 +45,7 @@ export async function run(argv = process.argv.slice(2), {
   }
   function fail(error) {
     if (ended) return;
+    mark('output-fail-close',{code:error.code ?? 'internal'});
     close();
     // A dropped delta would silently corrupt the view. Close the pipe instead:
     // the client must reconnect and acquire a new snapshot and revision base.
@@ -54,14 +62,20 @@ export async function run(argv = process.argv.slice(2), {
       requireThat(queued.length < MAX_OUTPUT && queuedBytes + bytes <= MAX_OUTPUT_BYTES,
         'Companion reader is stalled; reconnect for a fresh snapshot.', 'backpressure');
       queued.push(encoded); queuedBytes += bytes;
-    } else blocked = !output.write(encoded);
+      mark('output-queued');
+    } else blocked = !writeEncoded(encoded);
+  }
+  function writeEncoded(encoded) {
+    if (typeof trace !== 'function') return output.write(encoded);
+    const bytes=Buffer.byteLength(encoded);mark('output-write-start',{bytes});
+    return output.write(encoded,error=>mark('output-write-complete',{bytes,failed:Boolean(error)}));
   }
   function drain() {
     try {
       blocked = false;
       while (queued.length && !blocked) {
         const next = queued.shift(); queuedBytes -= Buffer.byteLength(next);
-        blocked = !output.write(next);
+        blocked = !writeEncoded(next);
       }
     } catch (error) { fail(error); }
   }
@@ -81,6 +95,7 @@ export async function run(argv = process.argv.slice(2), {
   }
   async function handle(a, generation) {
     const superseded = () => generation !== null && generation !== navigation;
+    mark('operation-start',{lane:a.op==='stop'?'stop':'regular'});
     try {
       if (superseded()) throw new Fault('cancelled','Navigation was superseded.');
       let result;
@@ -90,6 +105,8 @@ export async function run(argv = process.argv.slice(2), {
         case 'models': result = await backend.models(a.threadId); break;
         case 'projects': result = await backend.projects(a); break;
         case 'launch-defaults': result = await backend.launchDefaults(a); break;
+        case 'native-defaults': result = await backend.nativeDefaults(a); break;
+        case 'thread-preview': result = await backend.previewThread(a); break;
         case 'thread-review': result = await backend.reviewThread(a); break;
         case 'activity': result = await backend.activity(a.threadId, a.cursor); break;
         case 'inspect-item': result = await backend.inspectActivity(a); break;
@@ -102,13 +119,14 @@ export async function run(argv = process.argv.slice(2), {
       write({id:a.id,result:result ?? {}});
     } catch (error) {
       replyError(a.id, superseded() ? new Fault('cancelled','Navigation was superseded.') : error);
-    }
+    } finally {mark('operation-end',{lane:a.op==='stop'?'stop':'regular'});}
   }
   function accept(a) {
     let id = null;
     try {
       id = identifier(a?.id); requireThat(a.v === 1, 'Unsupported companion protocol.', 'incompatible');
       if (a.op !== 'hello') requireThat(a.environmentId === config.environmentId, 'Environment identity mismatch.', 'identity_mismatch');
+      if (a.op !== 'thread-preview') backend.cancelPreview?.();
       const lane = a.op === 'stop' ? lanes.stop : lanes.regular;
       requireThat(lane.pending < lane.limit, 'Too many pending companion requests.', 'backpressure');
       let generation = null;
@@ -121,6 +139,7 @@ export async function run(argv = process.argv.slice(2), {
         backend.cancelNavigation();
       }
       lane.pending++;
+      mark('operation-admitted',{lane:a.op==='stop'?'stop':'regular'});
       lane.tail = lane.tail.then(() => ended ? undefined : handle(a, generation))
         .catch(fail).finally(() => { lane.pending--; });
     } catch (error) { replyError(id, error); }

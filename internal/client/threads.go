@@ -22,6 +22,8 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		return nil, false, errors.New("thread list must be an array")
 	}
 	var rows []struct {
+		ProviderIdentity                                     *wire.ProviderIdentity
+		ProviderInstanceID                                   string
 		UpdatedAt                                            string
 		Inbox                                                json.RawMessage
 		ID, Title, Project, Status, Model                    *string
@@ -49,6 +51,17 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		}
 		if row.ID == nil || *row.ID == "" || len(*row.ID) > 4096 || seen[*row.ID] || strings.IndexFunc(*row.ID, func(r rune) bool { return r < 32 }) >= 0 {
 			return nil, false, errors.New("invalid thread identity in list")
+		}
+		if row.ProviderIdentity != nil {
+			if err := row.ProviderIdentity.Validate(); err != nil {
+				return nil, false, err
+			}
+			if row.ProviderInstanceID != "" && row.ProviderIdentity.InstanceID != row.ProviderInstanceID {
+				return nil, false, errors.New("provider identity does not match navigation row")
+			}
+		}
+		if len(row.ProviderInstanceID) > 256 || strings.IndexFunc(row.ProviderInstanceID, func(r rune) bool { return r < 32 }) >= 0 {
+			return nil, false, errors.New("invalid provider instance identity")
 		}
 		if row.Title == nil || len(*row.Title) > 512 || row.Project == nil || len(*row.Project) > 256 || row.Status == nil || len(*row.Status) > 64 || row.Model == nil || len(*row.Model) > 256 {
 			return nil, false, errors.New("invalid bounded thread display fields")
@@ -82,7 +95,7 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 		if len(row.ParentTitle) > 512 || row.ChildCount < 0 || row.ChildCount > 1000000 || row.WorkingChildCount < 0 || row.WorkingChildCount > 1000000 || row.KnownChildCount < 0 || row.KnownChildCount > 1000000 || row.LoadedChildCount < 0 || row.LoadedChildCount > 200 || row.Depth < 0 || row.Depth > 12 {
 			return nil, false, errors.New("invalid thread navigation metadata")
 		}
-		threads = append(threads, Thread{ID: *row.ID, Title: *row.Title, Project: *row.Project, ProjectID: projectID, Status: *row.Status, Model: *row.Model, Lineage: lineage, ParentTitle: row.ParentTitle, ChildCount: row.ChildCount, Depth: row.Depth, Expanded: row.Expanded, ContextOnly: row.ContextOnly})
+		threads = append(threads, Thread{ProviderIdentity: row.ProviderIdentity, ProviderInstanceID: row.ProviderInstanceID, ID: *row.ID, Title: *row.Title, Project: *row.Project, ProjectID: projectID, Status: *row.Status, Model: *row.Model, Lineage: lineage, ParentTitle: row.ParentTitle, ChildCount: row.ChildCount, Depth: row.Depth, Expanded: row.Expanded, ContextOnly: row.ContextOnly})
 		threads[len(threads)-1].WorkingChildCount = row.WorkingChildCount
 		threads[len(threads)-1].UpdatedAt = row.UpdatedAt
 		threads[len(threads)-1].Inbox = inbox
@@ -95,13 +108,16 @@ func DecodeThreads(result map[string]any) ([]Thread, bool, error) {
 // ThreadPage preserves completeness and observation metadata without changing
 // the legacy array-oriented DecodeThreads API.
 type ThreadPage struct {
-	Threads    []Thread `json:"threads"`
-	More       bool     `json:"more"`
-	ObservedAt string   `json:"observedAt,omitempty"`
-	Lifecycle  string   `json:"lifecycle,omitempty"`
-	Cursor     int      `json:"cursor"`
-	Limit      int      `json:"limit,omitempty"`
-	NextCursor *int     `json:"nextCursor"`
+	MachineKind      string   `json:"machineKind,omitempty"`
+	SearchIncomplete bool     `json:"searchIncomplete,omitempty"`
+	SearchScope      string   `json:"searchScope,omitempty"`
+	Threads          []Thread `json:"threads"`
+	More             bool     `json:"more"`
+	ObservedAt       string   `json:"observedAt,omitempty"`
+	Lifecycle        string   `json:"lifecycle,omitempty"`
+	Cursor           int      `json:"cursor"`
+	Limit            int      `json:"limit,omitempty"`
+	NextCursor       *int     `json:"nextCursor"`
 }
 
 func DecodeThreadPage(result map[string]any) (ThreadPage, error) {
@@ -110,6 +126,32 @@ func DecodeThreadPage(result map[string]any) (ThreadPage, error) {
 		return ThreadPage{}, err
 	}
 	page := ThreadPage{Threads: rows, More: more}
+	if value, exists := result["machineKind"]; exists {
+		kind, ok := value.(string)
+		if !ok {
+			return ThreadPage{}, errors.New("invalid machine kind")
+		}
+		switch kind {
+		case "unknown", "server", "cloud", "linux", "desktop", "laptop", "mac-mini", "mac-studio":
+			page.MachineKind = kind
+		default:
+			page.MachineKind = "unknown"
+		}
+	}
+	if value, exists := result["searchIncomplete"]; exists {
+		flag, ok := value.(bool)
+		if !ok {
+			return ThreadPage{}, errors.New("invalid search completeness")
+		}
+		page.SearchIncomplete = flag
+	}
+	if value, exists := result["searchScope"]; exists {
+		scope, ok := value.(string)
+		if !ok || len(scope) > 256 {
+			return ThreadPage{}, errors.New("invalid search scope")
+		}
+		page.SearchScope = scope
+	}
 	if raw, exists := result["observedAt"]; exists {
 		value, ok := raw.(string)
 		if !ok || len(value) > 64 {

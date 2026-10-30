@@ -12,14 +12,15 @@ import (
 )
 
 type ModelCatalog struct {
-	ThreadID                        string                `json:"threadId"`
-	Current                         config.ModelSelection `json:"current"`
-	InstanceID                      string                `json:"instanceId"`
-	ProviderLabel                   string                `json:"providerLabel"`
-	Available                       bool                  `json:"available"`
-	Models                          []CatalogModel        `json:"models"`
-	More                            bool                  `json:"more"`
-	RequiresNewThreadForModelChange bool                  `json:"requiresNewThreadForModelChange"`
+	ProviderIdentity                *wire.ProviderIdentity `json:"providerIdentity,omitempty"`
+	ThreadID                        string                 `json:"threadId"`
+	Current                         config.ModelSelection  `json:"current"`
+	InstanceID                      string                 `json:"instanceId"`
+	ProviderLabel                   string                 `json:"providerLabel"`
+	Available                       bool                   `json:"available"`
+	Models                          []CatalogModel         `json:"models"`
+	More                            bool                   `json:"more"`
+	RequiresNewThreadForModelChange bool                   `json:"requiresNewThreadForModelChange"`
 }
 type CatalogModel struct {
 	Slug      string             `json:"slug"`
@@ -51,6 +52,14 @@ func DecodeCatalog(result map[string]any) (*ModelCatalog, error) {
 	var c ModelCatalog
 	if err = json.Unmarshal(b, &c); err != nil {
 		return nil, err
+	}
+	if c.ProviderIdentity != nil {
+		if err = c.ProviderIdentity.Validate(); err != nil {
+			return nil, err
+		}
+		if c.ProviderIdentity.InstanceID != c.InstanceID {
+			return nil, errors.New("provider identity does not match catalog")
+		}
 	}
 	if err = c.Current.Validate(); err != nil {
 		return nil, err

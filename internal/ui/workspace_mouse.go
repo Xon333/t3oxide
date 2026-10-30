@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 
@@ -72,21 +71,12 @@ func (m *Model) recordWorkspaceHits() {
 		m.addHit(0, 1, w, 1, "navigator", "environment", serial)
 		m.addHit(0, 2, 3, 1, "navigator", "new", serial)
 		m.addHit(5, 2, 4, 1, "navigator", "actions", serial)
+		m.addHit(11, 2, max(1, w-11), 1, "navigator", "destination", serial)
 		m.addHit(0, 3, w, 1, "navigator-focus", "", serial)
-		start, end := m.navigator.list.Paginator.GetSliceBounds(len(m.navigator.list.VisibleItems()))
-		for index := start; index < end; index++ {
-			i, ok := m.navigator.list.VisibleItems()[index].(navigatorItem)
-			if !ok {
-				continue
-			}
-			y := 4 + index - start
-			if y >= m.height-4 {
-				break
-			}
-			m.addHit(0, y, w, 1, "navigator-row", i.identity(), serial)
-			if i.thread.ChildCount > 0 {
-				m.addHit(0, y, 2, 1, "navigator-toggle", i.identity(), serial)
-			}
+		m.hitZones = append(m.hitZones, moveHits(m.compactNavigatorOperations(w).hits, 0, 4)...)
+		m.hitZones = append(m.hitZones, moveHits(m.navigator.surface.hits, 0, m.navigatorRowsTop())...)
+		if len(m.navigator.list.VisibleItems()) == 0 && m.navigator.list.FilterInput.Value() != "" {
+			m.addHit(0, m.navigatorRowsTop()+1, w, 1, "navigator", "search", serial)
 		}
 		row := m.height - 3
 		left := 0
@@ -98,6 +88,9 @@ func (m *Model) recordWorkspaceHits() {
 		left += 9
 		if m.navigator.page.Page.NextCursor != nil {
 			m.addHit(left, row, 4, 1, "navigator", "next", serial)
+		}
+		if m.hasSavedActions() {
+			m.addHit(0, m.height-1, min(w, len("Review saved action")), 1, "navigator-recover", "", 0)
 		}
 	}
 	if mainVisible && m.contextVisible() {
@@ -120,43 +113,17 @@ func (m *Model) recordWorkspaceHits() {
 }
 
 func (m *Model) recordModalHits() {
-	m.hitZones = m.modalHitZones()
+	// View has just captured this frame. Revalidate authority only when an
+	// input event tries to use it, without rendering or hashing it twice.
+	m.hitZones = m.drawnModal.surface.hits
 }
 
 func (m *Model) modalHitZones() []hitZone {
-	if m.detail != "" || m.dialog == nil {
+	f := m.drawnModal
+	if m.dialog == nil || m.detail != "" || m.dialog.details || f.authority == "" || f.generation != m.generation || f.width != m.width || f.height != m.height || f.authority != m.modalAuthority() {
 		return nil
 	}
-	d := m.dialog
-	if d.details {
-		return nil
-	}
-	var hits []hitZone
-	if m.browserPage || m.launchPage {
-		hits = m.fullSurfaceLayout().hits
-	} else {
-		panel := m.modalLayout()
-		x, y := max(0, (m.width-lipgloss.Width(panel.content))/2), max(0, (m.height-lipgloss.Height(panel.content))/2)
-		hits = moveHits(panel.hits, x, y)
-	}
-	owner := ""
-	if d.settingsForm != nil {
-		// Summary intentionally omits unrecognized options; hit identity must
-		// retain every staged value, including those native defaults preserve.
-		selection, err := json.Marshal(d.settingsForm.selection)
-		if err != nil {
-			return nil
-		}
-		owner = string(selection)
-	}
-	for i := range hits {
-		hits[i].serial = d.serial
-		if d.settingsForm != nil {
-			// The same option name on a different model is a different offer.
-			hits[i].owner = owner
-		}
-	}
-	return clipHits(hits, 0, 0, m.width, m.height)
+	return f.surface.hits
 }
 
 func modalPromptLive(d *dialog) bool {
@@ -190,6 +157,8 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			return m.activateModalHit(z)
 		}
 		switch z.action {
+		case "navigator-recover":
+			return m.execute("recover", "")
 		case "toolbar":
 			return m.toolbarAction(z.args)
 		case "transcript":
@@ -215,7 +184,12 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			return m.execute("activity", z.args)
 		case "navigator-focus":
 			if z.serial == m.navigator.serial {
+				m.navigator.editing = true
 				return m.focusNavigator()
+			}
+		case "navigator-shelf":
+			if z.serial == m.navigator.serial {
+				return m.toggleNavigatorShelf(z.args)
 			}
 		case "navigator":
 			if z.serial == m.navigator.serial {
@@ -250,6 +224,11 @@ func (m *Model) activateModalHit(z hitZone) tea.Cmd {
 	d := m.dialog
 	defer m.resizeDialog()
 	switch z.action {
+	case "defaults-body":
+		d.actionFocus = 0
+		return m.restoreFocus()
+	case "defaults-action":
+		return m.nativeDefaultsAction(z.args)
 	case "dialog-row":
 		for i, raw := range d.list.VisibleItems() {
 			item, ok := raw.(choiceItem)
@@ -314,6 +293,7 @@ func (m *Model) activateModalHit(z hitZone) tea.Cmd {
 		if f == nil || f.questions[f.index].ID != z.owner {
 			return nil
 		}
+		m.attention.armed = true
 		if z.action == "request-action" {
 			switch z.args {
 			case "back":
@@ -355,6 +335,9 @@ func (m *Model) workspaceWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
 	if !m.mouse {
 		return true, nil
 	}
+	if m.dialog != nil && m.detail == "" && !m.dialog.details && m.dialog.surface == client.SurfaceNativeDefaults {
+		return true, m.nativeDefaultsWheel(msg)
+	}
 	if m.dialog != nil && m.detail == "" && !m.dialog.details {
 		if handled, cmd := m.formWheel(msg); handled {
 			return true, cmd
@@ -372,9 +355,11 @@ func (m *Model) workspaceWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
 		} else if msg.Button == tea.MouseWheelDown {
 			m.navigator.list.CursorDown()
 		}
+		m.layoutDirty = true
 		return true, nil
 	}
 	if m.contextVisible() && msg.X >= m.mainOriginX()+m.contentWidth+2 {
+		m.layoutDirty = true
 		if msg.Button == tea.MouseWheelUp {
 			m.contextSelection = max(0, m.contextSelection-1)
 		} else if msg.Button == tea.MouseWheelDown && m.snapshot != nil && m.snapshot.Metadata.Activity != nil {
@@ -406,7 +391,10 @@ func (m *Model) formWheel(msg tea.MouseWheelMsg) (bool, tea.Cmd) {
 	if delta == 0 {
 		return true, nil
 	}
-	panel := m.modalLayout()
+	if m.drawnModal.authority == "" || m.drawnModal.authority != m.modalAuthority() {
+		return true, nil
+	}
+	panel := m.drawnModal.surface
 	x, y := max(0, (m.width-lipgloss.Width(panel.content))/2), max(0, (m.height-lipgloss.Height(panel.content))/2)
 	bounds := hitZone{x: x, y: y, width: lipgloss.Width(panel.content), height: lipgloss.Height(panel.content)}
 	if m.browserPage || m.launchPage {

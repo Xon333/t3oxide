@@ -53,7 +53,15 @@ func sizeIntuitiveProgram(t *testing.T, r *tuiProgram, size [2]int, mode string)
 	r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 	waitWorkspaceFrame(t, r, func(view string) bool {
 		lines := strings.Split(view, "\n")
-		return len(lines) == size[1] && ansi.StringWidth(lines[0]) == size[0]
+		if len(lines) != size[1] {
+			return false
+		}
+		for _, line := range lines {
+			if ansi.StringWidth(line) > size[0] {
+				return false
+			}
+		}
+		return true // headers need not pad to full width; actual rows stay bounded
 	}, fmt.Sprintf("%dx%d layout", size[0], size[1]))
 	if mode == "agentbox" {
 		r.send("\x1b[98;7u")
@@ -107,11 +115,11 @@ func TestIntuitiveMouseProgramLaunchFieldsChoosersCancelAndOneCreate(t *testing.
 				clickIntuitiveControl(t, r, "Title  ")
 				const title = "Mouse launch"
 				r.send("\x01\x0b" + title + "\r")
-				r.waitText("[Create]")
+				r.waitText("[Create thread]")
 				r.send("\x1b[C")
 				r.waitText("[Cancel]")
 				r.send("\x1b[A")
-				r.waitText("[Create]")
+				r.waitText("[Create thread]")
 				assertIntuitiveCounts(t, f, 0)
 				clickIntuitiveControl(t, r, "First message")
 				r.waitText("Enter newline")
@@ -144,7 +152,7 @@ func TestIntuitiveMouseProgramLaunchFieldsChoosersCancelAndOneCreate(t *testing.
 				r.waitText(title)
 				r.waitText("second line")
 				assertIntuitiveCounts(t, f, 0)
-				clickIntuitiveControl(t, r, "Create")
+				clickIntuitiveControl(t, r, "Create & send")
 				// Create returns a new Session to the UI; the old source Session
 				// is intentionally closed. Observe the actual replacement view.
 				waitWorkspaceFrame(t, r, func(view string) bool {
@@ -246,6 +254,7 @@ func TestIntuitiveMouseProgramRequestsStageBackCancelAndExactSubmit(t *testing.T
 				r, _ := startAppTUI(t, a)
 				r.waitText("Initial Markdown for Alpha")
 				awaitStatus(t, a, func(s client.Status) bool { return s.Requests == 2 })
+				dismissInitialAutomaticRequestAttention(t, r, f)
 				sizeIntuitiveProgram(t, r, size, mode)
 				if mode == "agentbox" {
 					clickIntuitiveControl(t, r, "Alpha")
@@ -342,13 +351,17 @@ func TestIntuitiveMouseProgramAgentBoxDecisionsPreserveDraftAndExactReview(t *te
 			clickIntuitiveControl(t, r, "Alpha")
 			r.waitText("1 Changes")
 			clickIntuitiveControl(t, r, "1 Changes")
+			if !strings.Contains(r.views.text(), "export.go") {
+				r.waitText("╭─ Changes")
+				r.send("\x1b[6~") // provenance remains above the actual diff in narrow views
+			}
 			r.waitText("export.go")
 			r.send("\x1b")
 			waitWorkspaceFrame(t, r, func(view string) bool {
 				return strings.Contains(view, "1 Changes") && !strings.Contains(view, "╭─ Changes")
 			}, "returned decision")
 			clickIntuitiveControl(t, r, "2 Reply")
-			r.waitText("Reply · Alpha")
+			waitProgramReply(t, r, "Alpha")
 			r.waitText("retained second line")
 			assertIntuitiveCounts(t, f, 0)
 			r.send("\x1b")

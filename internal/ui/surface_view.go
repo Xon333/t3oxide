@@ -52,7 +52,7 @@ func (m *Model) connectionStatus() string {
 }
 
 func (m *Model) durableProblem() bool {
-	return m.status.PendingAction || m.status.PendingStop || m.status.DraftSaveFailed
+	return m.hasSavedActions() || m.status.DraftSaveFailed
 }
 
 func (m *Model) browserControls(width int) string {
@@ -134,7 +134,9 @@ func (m *Model) browserControlsHeight(width int) int {
 // Browser/launch replace the page. Underlying native editors and viewports are
 // retained untouched until an explicit offered open returns another session.
 func (m *Model) fullSurfaceView() string {
-	return m.fullSurfaceLayout().content
+	surface := m.fullSurfaceLayout()
+	m.captureModalFrame(surface, true)
+	return surface.content
 }
 
 func (m *Model) fullSurfaceLayout() renderedSurface {
@@ -202,7 +204,7 @@ func (m *Model) launchLayout(width, height int) renderedSurface {
 	}
 	var controls []surfaceControl
 	for i, action := range m.launchActions() {
-		label := actionLabel(action)
+		label := m.launchActionLabel(action)
 		if f.focus == i+2 {
 			label = p.selection().Render("[" + label + "]")
 		} else if action == "create" {

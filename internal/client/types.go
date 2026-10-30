@@ -11,7 +11,8 @@ import (
 	"github.com/Xon333/t3oxide/internal/wire"
 )
 
-// Event is a complete bounded view. Revision is attachment-local, while the
+// Event carries current controls and, when changed, a complete bounded view.
+// A nil Snapshot preserves the previous page. Revision is attachment-local;
 // Snapshot retains the adapter's authoritative revision and stable row keys.
 // Consumers must ignore events from a previously detached session.
 type Event struct {
@@ -76,6 +77,9 @@ const (
 	SurfaceDialog  Surface = "dialog"
 	SurfaceBrowser Surface = "browser"
 	SurfaceLaunch  Surface = "launch"
+	// Native defaults are an inspectable, scrolling read-only surface. Its
+	// offered actions only change read scope, refresh, or return to the caller.
+	SurfaceNativeDefaults Surface = "native-defaults"
 )
 
 type BrowserPage struct {
@@ -140,6 +144,10 @@ func cloneRequestAnswer(value any) any {
 }
 
 func cloneModelCatalog(c ModelCatalog) ModelCatalog {
+	if c.ProviderIdentity != nil {
+		copy := *c.ProviderIdentity
+		c.ProviderIdentity = &copy
+	}
 	c.Current = c.Current.Clone()
 	c.Models = append([]CatalogModel(nil), c.Models...)
 	for i := range c.Models {
@@ -186,6 +194,8 @@ type LaunchReview struct {
 	StoreDraft func(LaunchInput) error
 }
 type Question struct {
+	// Exact attached formal offer; empty on ordinary client dialogs.
+	EnvironmentID, ThreadID, RequestID, RequestRevision string
 	// StoreText retains only an explicit human draft, bound by its client
 	// owner. It is never a permission response or remote operation.
 	StoreText        func(string) error

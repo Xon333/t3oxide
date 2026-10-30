@@ -97,14 +97,14 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 	r.waitText("First message")
 	r.waitText(message)
 	r.send(strings.Repeat("\t", 5)) // Title, Create, Cancel, Model, Effort.
-	for _, control := range []string{"Effort", "Tier", "Workspace", "Defaults", "Project", "Environment", "Editor"} {
+	for _, control := range []string{"Effort", "Tier", "Workspace", "Reset this launch", "Native defaults", "Pin destination", "Change destination", "Project", "Environment", "Editor"} {
 		r.waitText("[" + control + "]")
 		if control != "Editor" {
 			r.send("\t")
 		}
 	}
 	r.send(strings.Repeat("\t", 3)) // Message, Title, Create.
-	r.waitText("[Create]")
+	r.waitText("[Create & send]")
 	r.send("\t")
 	r.waitText("[Cancel]")
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {

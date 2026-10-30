@@ -201,7 +201,7 @@ func TestNavigationLaunchPrimaryControlsAndCompactGeometry(t *testing.T) {
 				t.Fatal("title confirmation did more than focus primary Create")
 			}
 			view := ansi.Strip(m.View().Content)
-			if !strings.Contains(view, "[Create]") {
+			if !strings.Contains(view, "[Create & send]") {
 				t.Fatalf("primary control missing at %v:\n%s", size, view)
 			}
 			if len(strings.Split(view, "\n")) != size[1] {

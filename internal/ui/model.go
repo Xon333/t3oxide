@@ -43,6 +43,8 @@ type actionMsg struct {
 	stop           bool
 	browser        bool
 	commandDraft   string
+	delivery       string
+	deliverySerial uint64
 }
 type settingMsg struct {
 	kind, value string
@@ -61,6 +63,9 @@ type Model struct {
 	events                                     chan sessionMsg
 	generation, revision                       uint64
 	settings                                   *Settings
+	attention                                  requestAttentionState
+	nextDelivery                               string
+	deliverySerial                             uint64
 	theme                                      string
 	mode                                       string
 	agentbox                                   agentboxState
@@ -73,6 +78,7 @@ type Model struct {
 	contextSelection                           int
 	contextFocusKey                            string
 	hitZones                                   []hitZone
+	drawnModal                                 modalFrame
 	hitGeneration                              uint64
 	layoutDirty                                bool
 	width, height, contentWidth, bodyHeight    int
@@ -130,6 +136,9 @@ type Model struct {
 	cancelBrowser                              context.CancelFunc
 	browserDone                                <-chan struct{}
 	renderer                                   transcriptRenderer
+	renderInput                                transcriptRenderInput
+	transcriptSearch                           *preparedTranscript
+	contentInstalls, searchScans               uint64
 	renderSerial                               uint64
 	presentedSerial, renderPage                uint64
 	renderIdentity                             renderPageIdentity
@@ -225,6 +234,11 @@ func (m *Model) Close() error {
 
 func (m *Model) setSession(s *client.Session) {
 	m.rememberWorkspace()
+	m.cancelNavigatorPreview()
+	m.agentbox.ack = nil
+	m.retireRequestAttention()
+	m.nextDelivery = ""
+	m.deliverySerial++
 	m.agentbox.reviewSerial++
 	m.agentbox.reviewLoading = false
 	m.agentbox.review = nil
@@ -299,6 +313,8 @@ func (m *Model) setSession(s *client.Session) {
 	m.preservedDraft = ""
 	m.completion = commandCompletion{}
 	m.transcript = ""
+	m.transcriptSearch = nil
+	m.renderInput = transcriptRenderInput{}
 	m.viewport.SetContent("")
 	m.viewport.GotoTop()
 	m.follow = true
@@ -407,8 +423,36 @@ func (m *Model) requestRender(reset, follow bool) tea.Cmd {
 			m.cancelRender()
 		}
 	}
+	// An explicit Latest/Earlier goal can change reading position even when
+	// the newly authoritative page renders identically. Reuse only a fully
+	// presented frame; active or pending work still follows the worker/page
+	// ownership guards below. No line installation or search is required.
+	if !m.rendering && m.pendingRender == nil && m.presentedSerial == m.renderSerial && m.renderInput.matchesContent(m) {
+		m.renderInput.page = m.renderPage
+		if m.renderReset {
+			if !m.restoreWorkspaceReading(m.transcriptRows) {
+				if m.renderFollow {
+					m.viewport.GotoBottom()
+				} else {
+					m.viewport.GotoTop()
+				}
+				m.readingAnchor = readingAnchor{}
+				m.anchorOffset = m.viewport.YOffset()
+			}
+			m.renderReset = false
+		}
+		return nil
+	}
+	// Badge, request and sequence revisions are applied before this call. They
+	// have no transcript work unless an exact rendered input actually changed.
+	// Capture values, not snapshot pointers: tests and future callers may replace
+	// or reuse a source object, and equal native revision is not an identity.
+	if !reset && m.renderInput.matches(m) {
+		return nil
+	}
+	m.renderInput = captureTranscriptInput(m)
 	m.renderSerial++
-	req := &renderRequest{generation: m.generation, revision: m.revision, serial: m.renderSerial, page: m.renderPage, snapshot: m.snapshot, width: m.contentWidth, theme: m.theme, reset: m.renderReset, follow: m.renderFollow}
+	req := &renderRequest{generation: m.generation, revision: m.revision, serial: m.renderSerial, page: m.renderPage, snapshot: m.snapshot, width: m.contentWidth, theme: m.theme, reset: m.renderReset, follow: m.renderFollow, searchTerm: m.searchTerm}
 	m.pendingRender = req
 	return m.startRender()
 }
@@ -424,11 +468,48 @@ func (m *Model) startRender() tea.Cmd {
 	return func() tea.Msg {
 		defer cancel()
 		content, err := m.renderer.render(ctx, req)
-		return renderedMsg{request: req, content: content, err: err, rows: m.renderer.rows}
+		result := renderedMsg{request: req, content: content, err: err, rows: m.renderer.rows}
+		if err == nil {
+			result.prepared = prepareTranscript(content, req.width, req.searchTerm)
+			if err := ctx.Err(); err != nil {
+				result.err = err
+				result.prepared = nil
+			}
+		}
+		return result
 	}
 }
 
-func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
+	switch message.(type) {
+	case tea.MouseClickMsg:
+	case tea.MouseWheelMsg:
+		// Pointer routing reads the last drawn bounds. A disabled or rejected
+		// wheel does not invalidate otherwise unchanged controls.
+	default:
+		m.layoutDirty = true
+	}
+	if _, pasted := message.(tea.PasteMsg); pasted {
+		m.noteRequestInput()
+	}
+	navigatorWasFocused := m.navigator.focused
+	defer func() {
+		if navigatorWasFocused && !m.navigator.focused {
+			m.navigator.editing = false
+			if m.navigator.orderDeferred {
+				m.applyNavigatorOrder()
+			}
+		}
+		if m.navigator.previewTarget != "" {
+			selected, ok := m.navigator.list.SelectedItem().(navigatorItem)
+			if !ok || selected.identity() != m.navigator.previewTarget || !m.navigator.focused || m.dialog != nil || (m.detail != "" && m.detailTitle != "Preview") || (m.navigator.preview != nil && m.detailTitle != "Preview") {
+				m.cancelNavigatorPreview()
+			}
+		}
+		if next := m.maintainRequestAttention(); next != nil {
+			command = tea.Batch(command, next)
+		}
+	}()
 	defer m.captureLaunchDraft()
 	defer m.captureTextDraft()
 	defer func() {
@@ -444,6 +525,16 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}()
 	var commands []tea.Cmd
 	switch msg := message.(type) {
+	case reviewPositionSavedMsg:
+		if msg.generation == m.generation && msg.err != nil {
+			m.notice = "Review position not saved: " + safeText(msg.err.Error())
+		}
+		return m, nil
+	case requestIdleMsg:
+		m.requestIdle(msg)
+		return m, nil
+	case navigatorPreviewMsg:
+		return m, m.navigatorPreviewFinished(msg)
 	case inboxMsg:
 		return m, m.inboxLoaded(msg)
 	case inboxSourceMsg:
@@ -466,6 +557,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case componentMsg:
 		if msg.generation != m.generation {
 			return m, nil
+		}
+		if m.attention.returnFocus != nil && msg.kind == m.attention.returnFocus.inputKind && (msg.kind != "navigator" || msg.id == m.navigator.serial) && (msg.kind != "agentbox-search" || msg.id == m.agentbox.serial) {
+			if handled, cmd := m.resumeUnarmedRequestInput(msg.message); handled {
+				return m, cmd
+			}
 		}
 		return m, m.updateComponent(msg.kind, msg.id, msg.message)
 	case tea.WindowSizeMsg:
@@ -506,6 +602,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.revision = event.Revision
 		previousStatus := m.status
 		m.status = event.Status
+		m.observeRequestAttention(event.Snapshot)
 		m.layoutDirty = true
 		m.reconcileNavigator()
 		commands = append(commands, m.loadNavigator("", "", false))
@@ -565,6 +662,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.generation == m.generation && m.ctx.Err() == nil {
 			m.status.Connected = false
 			m.status.State = "detached · /reconnect"
+			m.retireVisibleRequest()
 		}
 		return m, nil
 	case renderedMsg:
@@ -574,7 +672,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		// for producer idleness: every useful completed frame advances the page.
 		// Pending work remains latest-only. Page ownership is independent of
 		// serial, so a deliberate Earlier/Latest replacement cannot leak through.
-		if msg.request.generation == m.generation && msg.request.page == m.renderPage && msg.request.theme == m.theme && msg.request.width == m.contentWidth && (msg.request.serial > m.presentedSerial || msg.request.serial == 0 && m.presentedSerial == 0) {
+		if msg.request.generation == m.generation && msg.request.page == m.renderPage && msg.request.theme == m.theme && newTranscriptLayout(msg.request.width) == newTranscriptLayout(m.contentWidth) && (msg.request.serial > m.presentedSerial || msg.request.serial == 0 && m.presentedSerial == 0) {
+			if msg.err != nil && msg.request.serial == m.renderSerial {
+				// A failed latest rendering must remain retryable on the next
+				// content request; do not invalidate a newer pending page.
+				m.renderInput.valid = false
+			}
 			if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 				m.problem = "Render: " + msg.err.Error()
 			}
@@ -584,8 +687,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				if anchor.key == "" || m.anchorOffset != m.viewport.YOffset() {
 					anchor = anchorAt(m.transcriptRows, m.viewport.YOffset())
 				}
-				m.transcript = msg.content
-				m.viewport.SetContent(msg.content)
+				contentChanged := m.transcript != msg.content || m.renderReset
+				if contentChanged {
+					m.installTranscript(msg)
+				}
 				restoredWorkspace := m.restoreWorkspaceReading(msg.rows)
 				if restoredWorkspace {
 					anchor = m.readingAnchor
@@ -609,7 +714,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.transcriptRows = msg.rows
 				m.presentedSerial = msg.request.serial
 				m.renderReset = false
-				m.refreshSearch(false)
+				if contentChanged {
+					m.refreshSearch(false)
+				}
 			}
 		}
 		return m, m.startRender()
@@ -623,7 +730,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, waitPrompt(m.sessionCtx, m.session, m.generation)
 		default:
 		}
-		m.openPrompt(msg.prompt)
+		if !m.deferAutomaticRequestPrompt(msg.prompt) {
+			m.openPrompt(msg.prompt)
+			m.requestPromptOpened(msg.prompt)
+		}
 		generation, id, done := m.generation, msg.prompt.ID, msg.prompt.Done
 		commands = append(commands, waitPrompt(m.sessionCtx, m.session, m.generation), func() tea.Msg {
 			select {
@@ -636,6 +746,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		commands = append(commands, m.restoreFocus())
 		return m, tea.Batch(commands...)
 	case promptClosedMsg:
+		if msg.generation == m.generation && m.requestPromptClosed(msg.id) {
+			m.resize()
+			return m, m.restoreFocus()
+		}
 		if msg.generation == m.generation && m.browserDialog != nil && m.browserDialog.prompt.ID == msg.id {
 			m.browserDialog = nil
 			if m.dialog != nil && m.dialog.prompt == nil {
@@ -685,6 +799,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.actionName = ""
 			m.cancelAction = nil
 			m.actionDone = nil
+			if msg.name == "requests" {
+				m.requestActionFinished()
+			}
 		}
 		if !msg.stop && !m.browserBusy {
 			m.browserPage = false
@@ -711,7 +828,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.problem = safeText(msg.err.Error())
 		}
+		if msg.err != nil && msg.result.Detail != "" {
+			m.openDetail(msg.result.DetailTitle, m.readableClientDetail(msg.name, msg.result.Detail))
+		}
 		if msg.err == nil {
+			if msg.name == "send" && msg.delivery == m.nextDelivery && msg.deliverySerial == m.deliverySerial {
+				m.nextDelivery = ""
+			}
 			if !msg.browser && !msg.stop && (!m.durableProblem() || msg.name == "retry" || msg.name == "resolve") {
 				m.problem = ""
 			}
@@ -728,6 +851,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.result.Next != nil {
 				m.inboxAdoptLaunch(msg.name)
 				m.setSession(msg.result.Next)
+				if msg.result.Detail != "" {
+					m.openDetail(msg.result.DetailTitle, m.readableClientDetail(msg.name, msg.result.Detail))
+				}
 				return m, m.listen()
 			}
 		}
@@ -785,6 +911,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
+		m.noteRequestInput()
+		if handled, cmd := m.resumeUnarmedRequestInput(msg); handled {
+			return m, cmd
+		}
 		if (key.Matches(msg, m.actionBinding("dismiss")) || msg.String() == "ctrl+c") && m.dialog != nil && m.dialog.launch != nil && !m.dialog.details && m.detail == "" {
 			if err := m.storeLaunchDraft(); err != nil {
 				m.problem = "Launch draft save: " + safeText(err.Error())
@@ -793,10 +923,23 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearLaunchCheckpoint()
 		}
 		return m, m.handleKey(msg)
+	case tea.PasteMsg:
+		if handled, cmd := m.resumeUnarmedRequestInput(msg); handled {
+			return m, cmd
+		}
+		if !m.searching && m.dialog == nil && m.detail == "" && m.mode != "agentbox" && m.navigator.focused && m.navigationVisible() {
+			m.navigator.editing = true
+			m.navigator.list.FilterInput.Focus()
+			return m, m.updateComponent("navigator", m.navigator.serial, msg)
+		}
+		if !m.searching && m.dialog == nil && m.detail == "" && m.mode == "agentbox" && m.agentbox.searching && !m.agentbox.reply && !m.browserPage && !m.launchPage {
+			return m, m.updateComponent("agentbox-search", m.agentbox.serial, msg)
+		}
 	case tea.MouseWheelMsg:
 		if handled, cmd := m.workspaceWheel(msg); handled {
 			return m, cmd
 		}
+		m.layoutDirty = true
 		if m.detail != "" {
 			var cmd tea.Cmd
 			m.detailViewport, cmd = m.detailViewport.Update(msg)
@@ -826,6 +969,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.dialog != nil {
+		if m.dialog.surface == client.SurfaceNativeDefaults {
+			// This inspection has no text editor. Paste/component messages must
+			// not change an invisible chooser or the suspended human draft.
+			return m, nil
+		}
 		kind := "list"
 		if m.dialog.kind == client.EnterText {
 			kind = "modal"
@@ -909,6 +1057,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 	m.launchTitle.Blur()
 	m.searchInput.Blur()
 	m.navigator.list.FilterInput.Blur()
+	m.agentbox.query.Blur()
 	if m.dialog != nil {
 		m.dialog.list.FilterInput.Blur()
 	}
@@ -919,7 +1068,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 		return nil
 	}
 	if m.dialog != nil {
-		if m.dialog.details || m.dialog.finishFocused || m.dialog.settingsForm != nil {
+		if m.dialog.details || m.dialog.finishFocused || m.dialog.settingsForm != nil || m.dialog.surface == client.SurfaceNativeDefaults {
 			return nil
 		}
 		if m.dialog.requestForm != nil {
@@ -947,7 +1096,7 @@ func (m *Model) restoreFocus() tea.Cmd {
 	}
 	if m.mode == "agentbox" {
 		if m.agentbox.searching {
-			return m.agentbox.query.Focus()
+			return m.componentCmd("agentbox-search", m.agentbox.serial, m.agentbox.query.Focus())
 		}
 		if !m.agentbox.reply || m.preservedDraft != "" {
 			return nil
@@ -958,6 +1107,9 @@ func (m *Model) restoreFocus() tea.Cmd {
 		m.navigator.focused = true
 	}
 	if m.navigator.focused && m.navigationVisible() {
+		if !m.navigator.editing {
+			return nil
+		}
 		return m.componentCmd("navigator", m.navigator.serial, m.navigator.list.FilterInput.Focus())
 	}
 	if m.activityFocused || m.contextFocused || m.transcriptFocus || m.detail != "" || m.preservedDraft != "" {
@@ -977,9 +1129,15 @@ func (m *Model) quit() tea.Cmd {
 }
 
 func (m *Model) execute(name, args string) tea.Cmd {
+	m.cancelNavigatorPreview()
 	if m.session == nil {
 		m.problem = "No session selected"
 		return nil
+	}
+	if name == "requests" {
+		if handled, command := m.explicitRequestPresentation(); handled {
+			return command
+		}
 	}
 	if name == "switch" || name == "env" || name == "threads" {
 		return m.executeBrowser(name, args)
@@ -1045,10 +1203,11 @@ func (m *Model) send() tea.Cmd {
 // sendText submits canonical bytes through Session.Send, including exact drafts
 // outside the textarea. Oversized legacy drafts remain reviewable but unsendable.
 func (m *Model) sendText(text string) tea.Cmd {
-	return m.sendTextWithDelivery(text, "")
+	return m.sendTextWithDelivery(text, m.nextDelivery)
 }
 
 func (m *Model) sendTextWithDelivery(text, delivery string) tea.Cmd {
+	m.cancelNavigatorPreview()
 	if !utf8.ValidString(text) || len(text) > maxInputBytes || strings.Count(text, "\n") >= maxInputLines {
 		m.problem = "Draft limit is 64 KiB / 9,999 lines; edit before sending"
 		return nil
@@ -1073,6 +1232,7 @@ func (m *Model) sendTextWithDelivery(text, delivery string) tea.Cmd {
 	m.actionBusy = true
 	m.actionName = "send"
 	m.beginCommandNotice("send")
+	deliverySerial := m.deliverySerial
 	return func() tea.Msg {
 		defer close(done)
 		defer cancel()
@@ -1082,11 +1242,12 @@ func (m *Model) sendTextWithDelivery(text, delivery string) tea.Cmd {
 		} else {
 			err = session.SendWithDelivery(ctx, text, delivery)
 		}
-		return actionMsg{generation: generation, id: id, name: "send", err: err}
+		return actionMsg{generation: generation, id: id, name: "send", err: err, delivery: delivery, deliverySerial: deliverySerial}
 	}
 }
 
 func (m *Model) stop() tea.Cmd {
+	m.cancelNavigatorPreview()
 	if m.session == nil {
 		m.problem = "No conversation selected"
 		return nil

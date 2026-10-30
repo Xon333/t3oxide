@@ -34,6 +34,10 @@ func CommandCatalog() []CommandSpec {
 		{Name: "requests", Description: "Review exact pending T3 approvals and questions"},
 		{Name: "new", Description: "New conversation using native defaults in an existing project"},
 		{Name: "new-same", Description: "New conversation carrying only the current project"},
+		{Name: "destination", Description: "Pin, change or reset the next New environment/project"},
+		{Name: "native-defaults", Description: "Inspect project/environment defaults, inheritance and native Settings route"},
+		{Name: "batch-receipts", Description: "Review acknowledged tasks, saved actions and remaining human drafts"},
+		{Name: "recover", Description: "May already be sent — Review saved action before same-ID reconciliation"},
 		{Name: "retry-launch", Description: "Reconcile an uncertain native launch using its original identity"},
 		{Name: "pending", Description: "Inspect saved operation IDs and original intent"},
 		{Name: "retry", Description: "Explicit same-ID retry; /retry stop for Stop lane"},
@@ -176,6 +180,14 @@ func (a *Session) invoke(ctx context.Context, name, args string) (Result, error)
 		return a.NewConversation(ctx, args, false, false)
 	case "new-same":
 		return a.NewConversation(ctx, args, true, false)
+	case "destination":
+		return a.EditCreationDestination(ctx)
+	case "native-defaults":
+		return a.EditNativeDefaults(ctx, "", "")
+	case "batch-receipts":
+		return a.ReviewBatchReceipts(ctx)
+	case "recover":
+		return a.ReviewSavedAction(ctx)
 	case "retry-launch":
 		return a.RetryLaunch(ctx)
 	default:

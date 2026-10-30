@@ -67,7 +67,8 @@ func TestUnifiedNavigatorStableProjectHighlightHasNonColourSelection(t *testing.
 	m.navigator.focused = true
 	m.resizeNavigator()
 	view := m.navigator.list.View()
-	if !strings.Contains(ansi.Strip(view), "[L]") || !strings.Contains(ansi.Strip(view), ">") {
+	selected := m.navigator.list.SelectedItem().(navigatorItem)
+	if !strings.Contains(ansi.Strip(view), projectBubble(selected.thread.Project, selected.kind)) || !strings.Contains(ansi.Strip(view), ">") {
 		t.Fatal("selection/source cue relies only on color")
 	}
 	a := projectAccent("env-a", "project-a", "violet")

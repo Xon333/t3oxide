@@ -47,6 +47,10 @@ func (m *Model) resizeDialog() {
 	// the query, current selection or portable completion control.
 	m.modalWidth = max(1, min(76, m.width-8))
 	m.modalHeight = max(1, min(22, m.height-4))
+	if m.dialog != nil && m.dialog.surface == client.SurfaceNativeDefaults {
+		m.modalWidth = max(1, min(112, m.width-8))
+		m.modalHeight = max(1, m.height-4)
+	}
 	if m.width <= 60 {
 		m.modalWidth = max(1, m.width-4)
 	}
@@ -61,7 +65,11 @@ func (m *Model) resizeDialog() {
 	if m.browserPage || m.launchPage {
 		// Full-page allocation pays for the modal's border and horizontal padding.
 		m.modalWidth = max(1, min(m.modalWidth, m.workspaceWidth()-4))
-		m.modalHeight = max(1, min(22, surfaceHeight-2))
+		limit := 22
+		if m.dialog != nil && m.dialog.surface == client.SurfaceNativeDefaults {
+			limit = surfaceHeight
+		}
+		m.modalHeight = max(1, min(limit, surfaceHeight-2))
 	}
 	m.detailViewport.SetWidth(m.modalWidth)
 	helpHeight := 1
@@ -84,6 +92,9 @@ func (m *Model) resizeDialog() {
 	if m.dialog != nil && m.detail == "" {
 		if m.dialog.details {
 			m.questionViewport.SetHeight(max(1, m.modalHeight-helpHeight))
+		} else if m.dialog.surface == client.SurfaceNativeDefaults {
+			m.resizeNativeDefaults(m.modalWidth, m.modalHeight-helpHeight)
+			return
 		} else if m.dialog.settingsForm != nil {
 			m.modalHeight = min(m.modalHeight, m.modelSettingsPreferredHeight())
 			return
@@ -176,8 +187,9 @@ func (m *Model) View() tea.View {
 		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · Ctrl+Q exits"), m.width, m.height))
 	}
 	if m.browserPage || m.launchPage {
+		content := m.fullSurfaceView()
 		m.recordWorkspaceHits()
-		return m.terminalView(m.fullSurfaceView())
+		return m.terminalView(content)
 	}
 	if m.mode == "agentbox" {
 		return m.agentboxView()
@@ -231,8 +243,8 @@ func (m *Model) View() tea.View {
 		body = lipgloss.JoinHorizontal(lipgloss.Top, body, "  ", m.contextView(28, m.bodyHeight))
 	}
 	label := "Message"
-	if m.status.Delivery != "" && m.status.Delivery != "auto" {
-		label += " · " + m.status.Delivery
+	if m.busyComposer() || m.nextDelivery != "" || m.status.Delivery != "" && m.status.Delivery != "auto" {
+		label += " · " + m.deliveryLabel()
 	}
 	if m.status.NextModel != "" {
 		label = "Next send · " + m.status.NextModel
@@ -353,7 +365,9 @@ func (m *Model) feedbackVisible() bool {
 }
 
 func (m *Model) modalView() string {
-	return m.modalLayout().content
+	surface := m.modalLayout()
+	m.captureModalFrame(surface, false)
+	return surface.content
 }
 
 func (m *Model) modalLayout() renderedSurface {
@@ -387,6 +401,11 @@ func (m *Model) modalLayout() renderedSurface {
 	}
 	if d.details {
 		return renderedSurface{content: framed(d.title, padBlock(m.questionViewport.View(), w, max(1, h-helpHeight))+localHelp, w, p, true)}
+	}
+	if d.surface == client.SurfaceNativeDefaults {
+		surface := m.nativeDefaultsLayout(w, h-helpHeight)
+		surface.content += localHelp
+		return m.frameSurface(d.title, surface, w)
 	}
 	if d.kind == client.EnterText {
 		surface := m.textFormSurface(w, h-helpHeight)
@@ -448,7 +467,7 @@ func (m *Model) modalLayout() renderedSurface {
 
 func (m *Model) pickerSelectionView(width int) string {
 	d := m.dialog
-	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" {
+	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" || d.surface == client.SurfaceNativeDefaults {
 		return ""
 	}
 	if item, ok := d.list.SelectedItem().(choiceItem); ok {
@@ -508,6 +527,8 @@ func (m *Model) dialogHelp(width int, fullSurface bool) string {
 		pairs = []string{dismiss, "back", copyKey, "copy", "↑/↓", "scroll"}
 	case d != nil && d.details:
 		pairs = []string{info + "/" + dismiss, "back", "↑/↓", "scroll"}
+	case d != nil && d.surface == client.SurfaceNativeDefaults:
+		pairs = []string{"↑/↓", "scroll", "Tab", "actions", "Enter", "select", dismiss, "back"}
 	case d != nil && (d.settingsForm != nil || d.requestForm != nil):
 		pairs = m.formDialogHelpPairs()
 	case d != nil && d.launch != nil:

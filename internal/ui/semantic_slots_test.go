@@ -94,7 +94,7 @@ func TestSemanticSlotsRendererRoleBoundaries(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, tc := range []struct{ text, color string }{
-				{"Context", p.accent}, {"Reference", p.secondary}, {"inline_token", p.secondary},
+				{"Context", p.fg}, {"Reference", p.fg}, {"inline_token", p.fg},
 				{"streaming", p.operation}, {"you", p.muted}, {"Agent", p.muted},
 				{"T3 notice", p.muted}, {"T3 error", p.error},
 			} {
@@ -109,6 +109,9 @@ func TestSemanticSlotsRendererRoleBoundaries(t *testing.T) {
 			out, err = r.render(context.Background(), renderRequest{snapshot: &wire.Snapshot{Items: rows}, theme: theme, width: 100})
 			if err != nil || strings.Contains(ansi.Strip(out), "streaming") || rows[1].Kind != "assistant_message" || !strings.Contains(ansi.Strip(out), "inline_token") {
 				t.Fatalf("styling changed source authority/text or retained stale streaming: %v", err)
+			}
+			for _, tc := range []struct{ text, color string }{{"Context", p.accent}, {"Reference", p.secondary}, {"inline_token", p.secondary}} {
+				assertSemanticSlotText(t, out, tc.text, tc.color)
 			}
 		})
 	}

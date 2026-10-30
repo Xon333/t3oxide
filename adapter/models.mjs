@@ -78,11 +78,13 @@ export function runtimeDetails(p) {
     sessionReportedModel: clip(session?.model ?? '', 256).text || null,
   };
 }
-export function modelView(snapshot, threadId) {
+export function modelView(snapshot, threadId, identities) {
   const result = view(snapshot, threadId), p = snapshot.projection;
+  const current = optionalSelection(p.thread.modelSelection);
   return { ...result, activity: activityPage(p.visibleTurnItems, {sequence: snapshot.snapshotSequence,
     cursor: snapshot.historyCursor, hasMore: snapshot.hasMoreHistory}),
-    modelSelection: optionalSelection(p.thread.modelSelection),
+    modelSelection: current,
+    ...(current ? {providerIdentity:structuredClone(identities?.get(current.instanceId) ?? providerIdentity(null,current.instanceId))} : {}),
     lineage: lineage(p.thread.lineage), runtimeDetails: runtimeDetails(p) };
 }
 
@@ -106,6 +108,18 @@ function descriptor(raw) {
     });
     if (typeof raw.currentValue === 'string' && seen.has(raw.currentValue)) result.currentValue = raw.currentValue;
   }
+  return result;
+}
+
+// Native instance identity is routing metadata, not proof of a person/account.
+// Only an explicitly reported auth label is surfaced; no email/config scraping.
+export function providerIdentity(provider, instanceId) {
+  const result = {instanceId:identifier(instanceId, 'provider instance'),
+    driver:clip(provider?.driver,64).text,
+    label:clip(provider?.displayName ?? provider?.name ?? provider?.title ?? instanceId,256).text,
+    accountLabel:clip(provider?.auth?.label,256).text,
+    accountReportedAt:clip(provider?.checkedAt,64).text};
+  if (!Number.isFinite(Date.parse(result.accountReportedAt))) result.accountReportedAt='';
   return result;
 }
 
@@ -140,6 +154,7 @@ export function catalog(config, p) {
     } catch { more = true; } // Never expose a truncated identity as a selectable model.
   }
   return { threadId: p.thread.id, current, instanceId: current.instanceId,
+    providerIdentity:providerIdentity(provider,current.instanceId),
     providerLabel: clip(provider.displayName ?? provider.name ?? provider.title ?? current.instanceId, 256).text,
     requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange === true,
     available, models, more };

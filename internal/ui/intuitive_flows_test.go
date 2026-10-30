@@ -112,7 +112,7 @@ func TestIntuitiveFlowLaunchActionArrowsClampAndEditorsOwnArrows(t *testing.T) {
 				if m.dialog.launch.focus != i+2 {
 					t.Fatalf("Right failed to focus action %q", actions[i])
 				}
-				if view := ansi.Strip(m.View().Content); !strings.Contains(view, "["+actionLabel(actions[i])+"]") {
+				if view := ansi.Strip(m.View().Content); !strings.Contains(view, "["+m.launchActionLabel(actions[i])+"]") {
 					t.Fatalf("focused wrapped action %q is hidden:\n%s", actions[i], view)
 				}
 				assertIntuitiveNoReply(t, reply)

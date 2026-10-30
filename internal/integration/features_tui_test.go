@@ -77,7 +77,7 @@ func TestBubbleTeaFeaturesModelPickersAndExplicitChildNavigation(t *testing.T) {
 	}
 	r.send("/threads\x1d")
 	waitNavigatorQuery(t, r, "Filter loaded")
-	if strings.Contains(r.views.text(), "[F] child") {
+	if strings.Contains(r.views.text(), "[FI◇] child") {
 		t.Fatal("subagents expanded before an explicit source action")
 	}
 	r.send("Alpha")
@@ -88,7 +88,7 @@ func TestBubbleTeaFeaturesModelPickersAndExplicitChildNavigation(t *testing.T) {
 	waitNavigatorQuery(t, r, "Alpha")
 	r.send("\x15")
 	waitNavigatorQuery(t, r, "Filter loaded")
-	r.waitText("[F] child")
+	r.waitText("[FI◇] child")
 	r.send("child")
 	waitNavigatorQuery(t, r, "child")
 	r.send("\r")
@@ -103,7 +103,7 @@ func TestBubbleTeaFeaturesModelPickersAndExplicitChildNavigation(t *testing.T) {
 	r.modalReady("More · Conversations")
 	r.send("Type · forks\r")
 	waitWorkspaceFrame(t, r, func(view string) bool {
-		return strings.Contains(view, "[F] fork") && !strings.Contains(view, "[F] Alpha") && !strings.Contains(view, "[F] Beta")
+		return strings.Contains(view, "[FI◇] fork") && !strings.Contains(view, "[FI◇] Alpha") && !strings.Contains(view, "[FI◇] Beta")
 	}, "fork-only native metadata")
 	r.send("\r")
 	r.waitText("Initial Markdown for fork")

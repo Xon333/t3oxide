@@ -35,7 +35,7 @@ func threadStatusBadge(row client.Thread) statusBadge {
 	}
 	switch status {
 	case "completed":
-		return statusBadge{"+ Done", "operation"}
+		return statusBadge{"+ Completed", "operation"}
 	case "interrupted", "stopped", "cancelled", "canceled":
 		return statusBadge{"x Stopped", "warning"}
 	}

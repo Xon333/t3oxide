@@ -60,6 +60,21 @@ func (a *Session) InboxSources() []InboxSource {
 // InboxReadProgress publishes each independent source as soon as it completes.
 // publish may be called concurrently and must return promptly or respect ctx.
 func (a *Session) InboxReadProgress(ctx context.Context, query string, cursors map[string]int, publish func(InboxSource)) (InboxPage, error) {
+	return a.inboxReadProgress(ctx, query, cursors, publish, false)
+}
+
+// InboxSearchProgress uses the same bounded, progressive metadata admission
+// lane for an explicit native message search. It never subscribes a result or
+// changes an attachment, and an incomplete native result stays incomplete.
+func (a *Session) InboxSearchProgress(ctx context.Context, query string, publish func(InboxSource)) (InboxPage, error) {
+	query = strings.TrimSpace(query)
+	if len(query) < 2 || len(query) > 200 {
+		return InboxPage{}, errors.New("server search requires 2–200 bytes")
+	}
+	return a.inboxReadProgress(ctx, query, nil, publish, true)
+}
+
+func (a *Session) inboxReadProgress(ctx context.Context, query string, cursors map[string]int, publish func(InboxSource), serverSearch bool) (InboxPage, error) {
 	if ctx == nil || a == nil || a.manager == nil {
 		return InboxPage{}, errors.New("inbox needs a configured client")
 	}
@@ -93,7 +108,7 @@ func (a *Session) InboxReadProgress(ctx context.Context, query string, cursors m
 				source.Error = "invalid inbox page cursor"
 				return
 			}
-			result, enabled, err := a.inboxMetadata(ctx, env, query, cursor)
+			result, enabled, err := a.inboxMetadataRead(ctx, env, query, cursor, serverSearch)
 			source.Page, source.NativeWorkflows = result, enabled
 			if err != nil {
 				source.Error = err.Error()
@@ -165,12 +180,17 @@ func inboxPageFromSources(sources []InboxSource) InboxPage {
 }
 
 func (a *Session) inboxMetadata(parent context.Context, env config.Environment, query string, cursor int) (ThreadPage, bool, error) {
+	return a.inboxMetadataRead(parent, env, query, cursor, false)
+}
+
+func (a *Session) inboxMetadataRead(parent context.Context, env config.Environment, query string, cursor int, serverSearch bool) (ThreadPage, bool, error) {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	a.mu.Lock()
 	conn := a.conn
 	reuse := a.environment != nil && a.environment.ID == env.ID && a.helloVerified && a.ready && conn != nil
 	enabled, navigation := a.features["nativeWorkflows"], a.features["threadNavigation"]
+	searchEnabled := a.features["serverSearch"]
 	a.mu.Unlock()
 	if !reuse {
 		var err error
@@ -194,9 +214,17 @@ func (a *Session) inboxMetadata(parent context.Context, env config.Environment, 
 		features, _ := hello["features"].(map[string]any)
 		enabled = boolValue(features["nativeWorkflows"])
 		navigation = boolValue(features["threadNavigation"])
+		searchEnabled = boolValue(features["serverSearch"])
 	}
 	n := NavigationState{Filter: "all", Expanded: map[string]bool{}, Lifecycle: "all", Cursor: cursor}
-	result, err := conn.Request(ctx, "list", listFields(query, n, navigation), "")
+	fields := listFields(query, n, navigation)
+	if serverSearch {
+		if !searchEnabled {
+			return ThreadPage{}, enabled, errors.New("native server conversation search is unavailable on this source")
+		}
+		fields["serverSearch"], fields["limit"] = true, 50
+	}
+	result, err := conn.Request(ctx, "list", fields, "")
 	if err != nil {
 		return ThreadPage{}, enabled, err
 	}
@@ -334,14 +362,22 @@ func InboxBucket(row InboxThread, now time.Time) string {
 	if v == nil {
 		return "unknown"
 	}
-	if v.PendingRequestCount > 0 {
+	if v.PendingRequestCount > 0 || v.PendingChildRequest {
 		return "needs"
 	}
 	status := strings.ToLower(row.Thread.Status)
-	switch status {
-	case "preparing", "starting", "running", "active", "responding", "waiting":
+	if v.Working != nil && *v.Working {
 		return "working"
-	case "queued":
+	}
+	if v.Working == nil {
+		// Older adapters omit derived membership. Retain their explicit run
+		// state fallback without overriding a newer native false projection.
+		switch status {
+		case "preparing", "starting", "running", "active", "responding", "waiting":
+			return "working"
+		}
+	}
+	if status == "queued" {
 		return "queued"
 	}
 	if v.QueuedCount > 0 {

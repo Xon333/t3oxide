@@ -45,10 +45,11 @@ func (m *Model) keyMap() appKeyMap {
 	}
 	normal := m.detail == "" && m.dialog == nil && !m.searching && !m.browserPage && !m.launchPage
 	if !normal {
-		for _, b := range []*key.Binding{&k.Threads, &k.Requests, &k.Model, &k.Effort, &k.Speed, &k.Parent, &k.Focus, &k.FocusBack, &k.Edit, &k.Clear, &k.Recall, &k.Literal, &k.Send, &k.Steer, &k.New, &k.NewSame, &k.Settings, &k.Refresh, &k.Filter, &k.FocusNavigation, &k.FocusComposer} {
+		for _, b := range []*key.Binding{&k.Threads, &k.Model, &k.Effort, &k.Speed, &k.Parent, &k.Focus, &k.FocusBack, &k.Edit, &k.Clear, &k.Recall, &k.Literal, &k.Send, &k.Steer, &k.New, &k.NewSame, &k.Settings, &k.Refresh, &k.Filter, &k.FocusNavigation, &k.FocusComposer} {
 			b.SetEnabled(false)
 		}
 	}
+	k.Requests.SetEnabled(k.Requests.Enabled() && m.detail == "" && m.dialog == nil && !m.browserPage && !m.launchPage)
 	k.Error.SetEnabled(k.Error.Enabled() && (m.problem != "" || m.streamProblem != ""))
 	k.Clear.SetEnabled(k.Clear.Enabled() && m.currentDraft() != "")
 	return k
@@ -89,7 +90,7 @@ func (m *Model) helpMap() contextHelp {
 			active = append(active, m.actionBinding("browser.search"), m.actionBinding("browser.filter"))
 		}
 	case m.searching:
-		active = []key.Binding{bind("Enter", "find", "enter"), k.Dismiss}
+		active = []key.Binding{bind("Enter", "find", "enter"), k.Requests, k.Dismiss}
 	case m.agentboxOwnsKeys():
 		active = []key.Binding{m.actionBinding("agentbox.open"), m.actionBinding("agentbox.reply"), m.actionBinding("agentbox.file"), m.actionBinding("agentbox.diff"), m.actionBinding("agentbox.inbox")}
 	case m.mode == "agentbox" && m.agentbox.reply:

@@ -39,27 +39,28 @@ type Row struct {
 }
 
 type Metadata struct {
-	Activity       *ActivityPage          `json:"activity,omitempty"`
-	ModelSelection *config.ModelSelection `json:"modelSelection,omitempty"`
-	Lineage        *Lineage               `json:"lineage,omitempty"`
-	RuntimeDetails *RuntimeDetails        `json:"runtimeDetails,omitempty"`
-	ThreadID       string                 `json:"threadId"`
-	Title          string                 `json:"title"`
-	ProjectID      *string                `json:"projectId,omitempty"`
-	Workspace      *string                `json:"workspace,omitempty"`
-	Model          string                 `json:"model"`
-	Mode           *string                `json:"mode,omitempty"`
-	Status         string                 `json:"status"`
-	ActiveRunID    *string                `json:"activeRunId,omitempty"`
-	Requests       []map[string]any       `json:"requests"`
-	HasMore        bool                   `json:"hasMore"`
-	HistoryCursor  *string                `json:"historyCursor,omitempty"`
-	Limited        bool                   `json:"limited"`
-	Sequence       *int64                 `json:"sequence,omitempty"`
-	ObservedAt     *string                `json:"observedAt,omitempty"`
-	State          string                 `json:"state"`
-	Live           bool                   `json:"live"`
-	Historical     bool                   `json:"historical"`
+	ProviderIdentity *ProviderIdentity      `json:"providerIdentity,omitempty"`
+	Activity         *ActivityPage          `json:"activity,omitempty"`
+	ModelSelection   *config.ModelSelection `json:"modelSelection,omitempty"`
+	Lineage          *Lineage               `json:"lineage,omitempty"`
+	RuntimeDetails   *RuntimeDetails        `json:"runtimeDetails,omitempty"`
+	ThreadID         string                 `json:"threadId"`
+	Title            string                 `json:"title"`
+	ProjectID        *string                `json:"projectId,omitempty"`
+	Workspace        *string                `json:"workspace,omitempty"`
+	Model            string                 `json:"model"`
+	Mode             *string                `json:"mode,omitempty"`
+	Status           string                 `json:"status"`
+	ActiveRunID      *string                `json:"activeRunId,omitempty"`
+	Requests         []map[string]any       `json:"requests"`
+	HasMore          bool                   `json:"hasMore"`
+	HistoryCursor    *string                `json:"historyCursor,omitempty"`
+	Limited          bool                   `json:"limited"`
+	Sequence         *int64                 `json:"sequence,omitempty"`
+	ObservedAt       *string                `json:"observedAt,omitempty"`
+	State            string                 `json:"state"`
+	Live             bool                   `json:"live"`
+	Historical       bool                   `json:"historical"`
 }
 
 type Snapshot struct {
@@ -431,6 +432,7 @@ type Store struct {
 	mu       sync.RWMutex
 	selected string
 	snapshot *Snapshot
+	epoch    uint64
 	needs    bool
 }
 
@@ -438,6 +440,7 @@ func (s *Store) Select(threadID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.selected = threadID
+	s.epoch++
 	s.snapshot = nil
 	s.needs = false
 }
@@ -478,6 +481,7 @@ func (s *Store) Apply(event string, raw json.RawMessage) (changed bool, err erro
 			return false, nil
 		}
 		s.snapshot = view
+		s.epoch++
 		s.needs = false
 		return true, nil
 	case "delta":
@@ -528,6 +532,7 @@ func (s *Store) Apply(event string, raw json.RawMessage) (changed bool, err erro
 			return false, errors.New("resulting view exceeds frame budget")
 		}
 		s.snapshot = candidate
+		s.epoch++
 		return true, nil
 	default:
 		return false, errors.New("unsupported transcript event")
@@ -541,6 +546,10 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 	n := *s
 	n.Metadata.Activity = s.Metadata.Activity.Clone()
 	// Extension pointers belong to the immutable snapshot, never shared with UI callers.
+	if s.Metadata.ProviderIdentity != nil {
+		copy := *s.Metadata.ProviderIdentity
+		n.Metadata.ProviderIdentity = &copy
+	}
 	if s.Metadata.ModelSelection != nil {
 		v := s.Metadata.ModelSelection.Clone()
 		n.Metadata.ModelSelection = &v
@@ -553,9 +562,19 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 		n.Metadata.Lineage = &l
 	}
 	if s.Metadata.RuntimeDetails != nil {
-		b, _ := json.Marshal(s.Metadata.RuntimeDetails)
-		n.Metadata.RuntimeDetails = nil
-		_ = json.Unmarshal(b, &n.Metadata.RuntimeDetails)
+		r := *s.Metadata.RuntimeDetails
+		r.RunID, r.RunMessageID = clonePtr(r.RunID), clonePtr(r.RunMessageID)
+		r.ProviderThreadID, r.ProviderSessionID = clonePtr(r.ProviderThreadID), clonePtr(r.ProviderSessionID)
+		r.ProviderReportedAt, r.SessionReportedModel = clonePtr(r.ProviderReportedAt), clonePtr(r.SessionReportedModel)
+		if r.RunModelSelection != nil {
+			v := r.RunModelSelection.Clone()
+			r.RunModelSelection = &v
+		}
+		if r.ProviderReportedSelection != nil {
+			v := r.ProviderReportedSelection.Clone()
+			r.ProviderReportedSelection = &v
+		}
+		n.Metadata.RuntimeDetails = &r
 	}
 	n.Items = append([]Row(nil), s.Items...)
 	for i := range n.Items {
@@ -570,11 +589,7 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 	n.Metadata.HistoryCursor = clonePtr(n.Metadata.HistoryCursor)
 	n.Metadata.Sequence = clonePtr(n.Metadata.Sequence)
 	n.Metadata.ObservedAt = clonePtr(n.Metadata.ObservedAt)
-	b, _ := json.Marshal(s.Metadata.Requests)
-	n.Metadata.Requests = nil // Unmarshal must not reuse the store's maps/slice.
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.UseNumber()
-	_ = dec.Decode(&n.Metadata.Requests)
+	n.Metadata.Requests = CloneRequestValues(s.Metadata.Requests)
 	return &n
 }
 func clonePtr[T any](p *T) *T {
