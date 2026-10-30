@@ -79,6 +79,9 @@ func (m *Model) cycleWorkspace(forward bool) tea.Cmd {
 	}
 	next := panes[(index+delta)%len(panes)]
 	m.navigator.focused = next == "navigator"
+	if current == "navigator" && next != "navigator" {
+		m.applyNavigatorOrder()
+	}
 	m.transcriptFocus = next == "transcript"
 	m.contextFocused = next == "context"
 	m.activityFocused = next == "activity"
@@ -135,8 +138,11 @@ func (m *Model) toolbarActions() []struct{ label, action string } {
 	if m.status.ActiveRunID != "" {
 		actions = append(actions, struct{ label, action string }{"Stop", "stop"})
 	}
-	if m.status.PendingAction || m.status.PendingStop {
-		actions = append(actions, struct{ label, action string }{"Saved", "pending"})
+	if m.hasSavedActions() {
+		actions = append(actions, struct{ label, action string }{"Saved", "recover"})
+	}
+	if m.busyComposer() {
+		actions = append(actions, struct{ label, action string }{"Send", "send"}, struct{ label, action string }{strings.ToUpper(m.selectedDelivery()[:1]) + m.selectedDelivery()[1:] + " ▾", "delivery-menu"})
 	}
 	if m.snapshot != nil && m.snapshot.Metadata.Historical {
 		actions = append(actions, struct{ label, action string }{"Latest", "latest"})
@@ -177,8 +183,8 @@ func (m *Model) openContext() tea.Cmd {
 	if m.status.Activity {
 		items = append(items, choiceItem{title: "Activity", command: "activity"})
 	}
-	if m.status.PendingAction || m.status.PendingStop {
-		items = append(items, choiceItem{title: "Saved operations", command: "pending"})
+	if m.hasSavedActions() {
+		items = append(items, choiceItem{title: "Review saved action", command: "recover"})
 	}
 	m.openLocal("Conversation context", "context", items)
 	m.dialog.description = strings.Join(m.contextFacts(), "\n")
@@ -294,6 +300,10 @@ func (m *Model) contextKey(msg tea.KeyPressMsg) tea.Cmd {
 // source-bound Settings, Requests and Stop flows.
 func (m *Model) toolbarAction(action string) tea.Cmd {
 	switch action {
+	case "send":
+		return m.send()
+	case "delivery-menu":
+		return m.openDeliveryMenu()
 	case "commands":
 		return m.openPalette()
 	case "context":
@@ -310,10 +320,14 @@ func mainSeparator(theme string, height int) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(p.muted)).Render(strings.TrimSuffix(strings.Repeat("│\n", max(1, height)), "\n"))
 }
 
+func (m *Model) hasSavedActions() bool {
+	return m.status.PendingAction || m.status.PendingStop || m.session != nil && m.session.HasSavedActions()
+}
+
 func (m *Model) operationLine() string {
 	var parts []string
-	if m.status.PendingAction {
-		parts = append(parts, "Saved action")
+	if m.hasSavedActions() {
+		parts = append(parts, "May already be sent — Review saved action")
 	}
 	if m.status.PendingStop {
 		parts = append(parts, "Saved Stop")

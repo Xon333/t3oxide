@@ -130,6 +130,9 @@ func listFields(query string, n NavigationState, enabled bool) map[string]any {
 
 // browserMetadata never subscribes to detail or changes the active attachment.
 func (a *Session) browserMetadata(ctx context.Context, env config.Environment, query string) (ThreadPage, bool, error) {
+	return a.browserMetadataRead(ctx, env, query, false)
+}
+func (a *Session) browserMetadataRead(ctx context.Context, env config.Environment, query string, serverSearch bool) (ThreadPage, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	a.mu.Lock()
@@ -159,7 +162,11 @@ func (a *Session) browserMetadata(ctx context.Context, env config.Environment, q
 		features, _ := hello["features"].(map[string]any)
 		navigation = boolValue(features["threadNavigation"])
 	}
-	result, err := conn.Request(ctx, "list", listFields(query, a.manager.navigation(env.EnvironmentID), navigation), "")
+	fields := listFields(query, a.manager.navigation(env.EnvironmentID), navigation)
+	if serverSearch {
+		fields["serverSearch"], fields["cursor"], fields["limit"] = true, 0, 50
+	}
+	result, err := conn.Request(ctx, "list", fields, "")
 	if err != nil {
 		return ThreadPage{}, navigation, err
 	}

@@ -592,12 +592,36 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) launchActions() []string {
 	var actions []string
-	for _, action := range []string{"create", "cancel", "model", "effort", "tier", "workspace", "defaults", "project", "environment"} {
+	for _, action := range []string{"create", "cancel", "model", "effort", "tier", "workspace", "defaults", "native-defaults", "pin-destination", "destination", "project", "environment"} {
 		if slices.Contains(m.dialog.launch.review.Actions, action) {
 			actions = append(actions, action)
 		}
 	}
 	return append(actions, "editor")
+}
+
+func (m *Model) launchActionLabel(action string) string {
+	if action == "create" {
+		// The pinned native initialMessage schema accepts every nonempty
+		// string, including whitespace. Display the exact dispatch semantics.
+		if m.launchInput().Message != "" {
+			return "Create & send"
+		}
+		return "Create thread"
+	}
+	if action == "native-defaults" {
+		return "Native defaults"
+	}
+	if action == "destination" {
+		return "Change destination"
+	}
+	if action == "pin-destination" {
+		return "Pin destination"
+	}
+	if action == "defaults" {
+		return "Reset this launch"
+	}
+	return actionLabel(action)
 }
 
 func (m *Model) refreshLaunchDetails() {

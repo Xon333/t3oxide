@@ -175,7 +175,7 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 		// A negative reply to a retry cannot disprove an earlier acceptance.
 		// Only a definitely rejected first attempt may release the local lane.
 		if savedID == "" && !wire.IsUncertain(err) {
-			if clearErr := a.manager.State.ClearPending(env.EnvironmentID, stopLane, id); clearErr != nil {
+			if clearErr := a.manager.State.RejectPending(env.EnvironmentID, stopLane, id); clearErr != nil {
 				err = errors.Join(err, clearErr)
 			}
 		}

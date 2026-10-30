@@ -17,6 +17,10 @@ type InboxMetadata struct {
 	Settled             bool             `json:"settled"`
 	SnoozedUntil        string           `json:"snoozedUntil"`
 	PinnedAt            string           `json:"pinnedAt"`
+	PinOrderKey         string           `json:"pinOrderKey,omitempty"`
+	Working             *bool            `json:"working,omitempty"`
+	LatestUserMessageAt string           `json:"latestUserMessageAt,omitempty"`
+	PendingChildRequest bool             `json:"pendingChildRequest,omitempty"`
 	RunID               string           `json:"runId"`
 	QueuedCount         int              `json:"queuedCount"`
 	PendingRequestCount int              `json:"pendingRequestCount"`
@@ -97,7 +101,7 @@ func DecodeInboxMetadata(raw json.RawMessage) (*InboxMetadata, error) {
 		return nil, errors.New("native inbox metadata exceeds budget")
 	}
 	var v InboxMetadata
-	if json.Unmarshal(raw, &v) != nil || !nativeRevisionValid(v.NativeRevision) || !nativeDate(v.UpdatedAt, false) || !nativeDate(v.SnoozedUntil, true) || !nativeDate(v.PinnedAt, true) || v.QueuedCount < -1 || v.QueuedCount > 1000000 || v.PendingRequestCount < 0 || v.PendingRequestCount > 1 || len(v.Workspace) > 4096 || v.Workspace != "" && !strings.HasPrefix(v.Workspace, "/") || strings.ContainsAny(v.Workspace, "\x00\n\r") || len(v.Branch) > 512 || len(v.PendingRequestType) > 64 || (v.PendingRequestCount == 1) != (v.PendingRequestID != "") {
+	if json.Unmarshal(raw, &v) != nil || !nativeRevisionValid(v.NativeRevision) || !nativeDate(v.UpdatedAt, false) || !nativeDate(v.SnoozedUntil, true) || !nativeDate(v.PinnedAt, true) || len(v.PinOrderKey) > 256 || !nativeDate(v.LatestUserMessageAt, true) || v.QueuedCount < -1 || v.QueuedCount > 1000000 || v.PendingRequestCount < 0 || v.PendingRequestCount > 1 || len(v.Workspace) > 4096 || v.Workspace != "" && !strings.HasPrefix(v.Workspace, "/") || strings.ContainsAny(v.Workspace, "\x00\n\r") || len(v.Branch) > 512 || len(v.PendingRequestType) > 64 || (v.PendingRequestCount == 1) != (v.PendingRequestID != "") {
 		return nil, errors.New("invalid native inbox metadata")
 	}
 	for _, id := range []string{v.RunID, v.PendingRequestID} {

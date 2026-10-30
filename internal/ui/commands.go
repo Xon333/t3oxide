@@ -37,9 +37,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if msg.String() == "ctrl+c" {
 		if m.detail != "" {
-			m.detail = ""
-			m.resize()
-			return m.restoreFocus()
+			return m.closeDetail()
 		}
 		if m.dialog != nil {
 			return m.cancelDialog()
@@ -61,17 +59,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.copyText("detail")
 		}
 		if key.Matches(msg, k.Dismiss) {
-			m.detail = ""
-			m.resize()
-			return m.restoreFocus()
+			return m.closeDetail()
 		}
 		switch msg.String() {
 		case "tab", "shift+tab":
 			return m.leaveActivityDetail()
 		case "esc", "q":
-			m.detail = ""
-			m.resize()
-			return m.restoreFocus()
+			return m.closeDetail()
 		}
 		var cmd tea.Cmd
 		m.detailViewport, cmd = m.detailViewport.Update(msg)
@@ -96,6 +90,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 		}
 		return nil
+	}
+	// Requests is an explicit attention action in both workspaces and their
+	// search editors. It may promote a deferred read without waiting for idle.
+	if key.Matches(msg, k.Requests) {
+		return m.execute("requests", "")
 	}
 	// Find temporarily owns the keyboard while retaining its invoking pane
 	// for Escape. Those pane flags must not route edits behind the search.
@@ -397,6 +396,10 @@ func (m *Model) slash(text string) tea.Cmd {
 
 func (m *Model) dispatch(name, args string) tea.Cmd {
 	switch name {
+	case "delivery-menu":
+		return m.openDeliveryMenu()
+	case "next-delivery":
+		return m.stageDelivery(args)
 	case "mode":
 		return m.setMode(args)
 	case "inbox", "file", "file-many", "review":

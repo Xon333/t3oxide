@@ -191,6 +191,11 @@ func (m *Model) openPrompt(p *client.Prompt) {
 	m.composer.Blur()
 	m.refreshDialogDetails()
 	m.resize()
+	if q.Surface == client.SurfaceNativeDefaults {
+		// A new read/scope is a new inspection. Never open its values at a
+		// retained offset that hides the authoritative scope and provenance.
+		m.questionViewport.GotoTop()
+	}
 }
 
 func (m *Model) cancelDialog() tea.Cmd {
@@ -479,6 +484,9 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.questionViewport.GotoBottom()
 		}
 		return nil
+	}
+	if m.dialog.surface == client.SurfaceNativeDefaults {
+		return m.nativeDefaultsKey(msg)
 	}
 	if m.dialog.kind == client.EnterText {
 		switch msg.String() {
@@ -775,18 +783,32 @@ func (m *Model) beginSearch() tea.Cmd {
 	return m.restoreFocus()
 }
 func (m *Model) refreshSearch(move bool) {
+	if m.transcriptSearch != nil && m.transcriptSearch.content != m.transcript {
+		m.transcriptSearch = nil
+	}
 	if m.searchTerm == "" {
 		m.searchLines = nil
 		m.searchIndex = -1
 		m.viewport.StyleLineFunc = nil
 		return
 	}
-	term := strings.ToLower(m.searchTerm)
-	m.searchLines = nil
-	for index, line := range strings.Split(safeText(m.transcript), "\n") {
-		if strings.Contains(strings.ToLower(line), term) {
-			m.searchLines = append(m.searchLines, index)
+	if m.transcriptSearch != nil && m.transcriptSearch.term == m.searchTerm {
+		m.searchLines = m.transcriptSearch.matches
+	} else {
+		var lines []string
+		if m.transcriptSearch != nil {
+			lines = m.transcriptSearch.lowerLines
+		} else {
+			// Compatibility for direct component/test content installation.
+			// Production content always arrives prepared from the render lane.
+			lines = strings.Split(strings.ToLower(safeText(m.transcript)), "\n")
 		}
+		m.searchLines = findTranscriptLines(lines, m.searchTerm)
+		m.searchScans++
+		if m.transcriptSearch == nil {
+			m.transcriptSearch = &preparedTranscript{content: m.transcript, lowerLines: lines}
+		}
+		m.transcriptSearch.term, m.transcriptSearch.matches = m.searchTerm, m.searchLines
 	}
 	if len(m.searchLines) == 0 {
 		m.searchIndex = -1

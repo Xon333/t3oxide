@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -25,21 +26,41 @@ type State struct {
 	lock   *os.File
 	closed bool
 	saved  savedState
+	// View reads never wait behind draft/journal fsync. This immutable identity
+	// summary is published only after the existing state owner commits.
+	presentation atomic.Pointer[statePresentation]
 	// Retain the compatibility baseline (including recovered attempts) until
 	// the main transaction succeeds, even if a prepared sidecar write succeeded.
 	promptCommitted    []PromptEntry
 	promptSidecarDirty bool
 }
 
+type statePresentation struct {
+	hasPending  bool
+	destination *CreationDestination
+}
+
+func (s *State) publishPresentation() {
+	p := &statePresentation{hasPending: len(s.saved.Pending) != 0 || len(s.saved.PendingStops) != 0}
+	if s.saved.CreationDestination != nil {
+		copy := *s.saved.CreationDestination
+		p.destination = &copy
+	}
+	s.presentation.Store(p)
+}
+
 type savedState struct {
-	PromptHistory  []PromptEntry             `json:"promptHistory,omitempty"`
-	Drafts         map[string]string         `json:"drafts"`
-	Pending        map[string]map[string]any `json:"pending"`
-	PendingStops   map[string]map[string]any `json:"pendingStops"`
-	ModelOverrides map[string]ModelOverride  `json:"modelOverrides,omitempty"`
-	ModelPresets   map[string][]ModelPreset  `json:"modelPresets,omitempty"`
-	BrowserPrefs   *BrowserPreferences       `json:"browserPreferences,omitempty"`
-	LaunchDrafts   map[string]LaunchDraft    `json:"launchDrafts,omitempty"`
+	PromptHistory       []PromptEntry             `json:"promptHistory,omitempty"`
+	Drafts              map[string]string         `json:"drafts"`
+	Pending             map[string]map[string]any `json:"pending"`
+	PendingStops        map[string]map[string]any `json:"pendingStops"`
+	ModelOverrides      map[string]ModelOverride  `json:"modelOverrides,omitempty"`
+	ModelPresets        map[string][]ModelPreset  `json:"modelPresets,omitempty"`
+	BrowserPrefs        *BrowserPreferences       `json:"browserPreferences,omitempty"`
+	LaunchDrafts        map[string]LaunchDraft    `json:"launchDrafts,omitempty"`
+	CreationDestination *CreationDestination      `json:"creationDestination,omitempty"`
+	BatchReceipts       map[string]BatchReceipt   `json:"batchReceipts,omitempty"`
+	ReviewPositions     []ReviewPosition          `json:"reviewPositions,omitempty"`
 }
 
 func DefaultStatePath() string { return filepath.Join(DefaultDirectory(), "go-drafts.json") }
@@ -60,13 +81,14 @@ func OpenState(path string) (*State, error) {
 		lock.Close()
 		return nil, errors.New("another Go client owns this drafts/recovery file")
 	}
-	s := &State{path: path, lock: lock, saved: savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}, LaunchDrafts: map[string]LaunchDraft{}}}
+	s := &State{path: path, lock: lock, saved: savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}, LaunchDrafts: map[string]LaunchDraft{}, BatchReceipts: map[string]BatchReceipt{}}}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err = s.loadPromptSidecar(nil); err != nil {
 			s.Close()
 			return nil, err
 		}
+		s.publishPresentation()
 		return s, nil
 	}
 	if err != nil {
@@ -107,6 +129,7 @@ func OpenState(path string) (*State, error) {
 		s.Close()
 		return nil, err
 	}
+	s.publishPresentation()
 	return s, nil
 }
 
@@ -179,6 +202,25 @@ func (s *State) ImportLegacy(path string) error {
 }
 
 func validateState(v savedState) error {
+	if v.CreationDestination != nil {
+		if err := v.CreationDestination.validate(); err != nil {
+			return err
+		}
+	}
+	if len(v.BatchReceipts) > maxBatchReceipts {
+		return errors.New("batch receipt limit exceeded")
+	}
+	for id, receipt := range v.BatchReceipts {
+		if id != receipt.ID {
+			return errors.New("batch receipt key mismatch")
+		}
+		if err := validateBatchReceipt(receipt); err != nil {
+			return err
+		}
+	}
+	if err := validateReviewPositions(v.ReviewPositions); err != nil {
+		return err
+	}
 	if err := validatePromptHistory(v.PromptHistory); err != nil {
 		return err
 	}
@@ -306,10 +348,22 @@ func (s *State) SavePending(env string, stop bool, record map[string]any) error 
 		}
 	}
 	lane[env] = cloneRecord(record)
+	if err := updateBatchReceipt(&next, record, BatchNeedsRecovery); err != nil {
+		return err
+	}
 	return s.commit(next)
 }
 
 func (s *State) ClearPending(env string, stop bool, id string) error {
+	return s.clearPending(env, stop, id, false)
+}
+
+// RejectPending retires only a definitely rejected first attempt. It is distinct
+// from a human clearing local recovery without a native outcome receipt.
+func (s *State) RejectPending(env string, stop bool, id string) error {
+	return s.clearPending(env, stop, id, true)
+}
+func (s *State) clearPending(env string, stop bool, id string, rejected bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := cloneState(s.saved)
@@ -319,6 +373,20 @@ func (s *State) ClearPending(env string, stop bool, id string) error {
 	}
 	if old := lane[env]; old != nil && old["id"] != id {
 		return errors.New("saved operation changed; refusing to clear another action")
+	}
+	if old := lane[env]; old != nil && rejected {
+		if err := updateBatchReceipt(&next, old, BatchRemainingDraft); err != nil {
+			return err
+		}
+	} else if old != nil {
+		if b, ok := old["batchDraft"].(map[string]any); ok {
+			if id, ok := b["receiptId"].(string); ok {
+				if receipt, exists := next.BatchReceipts[id]; exists {
+					receipt.PauseReason = "Local retry record was explicitly cleared. Native outcome remains unreported; inspect the original operation in T3."
+					next.BatchReceipts[id] = receipt
+				}
+			}
+		}
 	}
 	delete(lane, env)
 
@@ -345,6 +413,9 @@ func (s *State) Acknowledge(env string, stop bool, id, thread, message string) e
 	}
 	if old["op"] == "launch-project" {
 		if err := advanceBatchDraft(&next, old); err != nil {
+			return err
+		}
+		if err := updateBatchReceipt(&next, old, BatchAcknowledged); err != nil {
 			return err
 		}
 	}
@@ -422,6 +493,7 @@ func (s *State) commit(next savedState) error {
 		return err
 	}
 	s.saved = next
+	s.publishPresentation()
 	if checkpoint {
 		s.promptCommitted = append([]PromptEntry(nil), next.PromptHistory...)
 		// Main publication has succeeded. Finalization is optional: the durable
@@ -478,8 +550,16 @@ func cloneRecord(v map[string]any) map[string]any {
 	return copied
 }
 func cloneState(v savedState) savedState {
-	n := savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}, LaunchDrafts: map[string]LaunchDraft{}}
+	n := savedState{Drafts: map[string]string{}, Pending: map[string]map[string]any{}, PendingStops: map[string]map[string]any{}, ModelOverrides: map[string]ModelOverride{}, ModelPresets: map[string][]ModelPreset{}, LaunchDrafts: map[string]LaunchDraft{}, BatchReceipts: map[string]BatchReceipt{}}
 	n.PromptHistory = append([]PromptEntry(nil), v.PromptHistory...)
+	if v.CreationDestination != nil {
+		copy := *v.CreationDestination
+		n.CreationDestination = &copy
+	}
+	for id, receipt := range v.BatchReceipts {
+		n.BatchReceipts[id] = receipt.Clone()
+	}
+	n.ReviewPositions = append([]ReviewPosition(nil), v.ReviewPositions...)
 	for k, x := range v.Drafts {
 		n.Drafts[k] = x
 	}

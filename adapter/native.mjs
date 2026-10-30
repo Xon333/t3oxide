@@ -1,7 +1,7 @@
 // Independently authored bounded client projection over verified T3 protocol-2
 // handlers. Native T3 owns projects, worktrees, runs, queues and visibility.
 import { LIMIT, clip, hash, identifier, requireThat, text } from './core.mjs';
-import { catalog, selection, sameSelection, validateChoice } from './models.mjs';
+import { catalog, selection, sameSelection, validateChoice, providerIdentity } from './models.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
 const optionalID = value => value == null ? '' : identifier(value);
@@ -80,7 +80,7 @@ export function pullRequests(t) {
   }
   return result;
 }
-export function inboxMetadata(t) {
+export function inboxMetadata(t, extra = {}) {
   // Unknown older shells stay readable but cannot offer a revision-bound action.
   if (typeof t.updatedAt !== 'string' || !Number.isFinite(Date.parse(t.updatedAt))) return undefined;
   const latest = t.latestVisibleMessage;
@@ -88,7 +88,9 @@ export function inboxMetadata(t) {
     ? {role:latest.role, ...clip(latest.text, 1024), updatedAt:clip(latest.updatedAt,64).text} : null;
   return {nativeRevision:nativeRevision(t), updatedAt:t.updatedAt,
     settled:t.settledOverride === 'settled', snoozedUntil:clip(t.snoozedUntil,64).text,
-    pinnedAt:clip(t.pinnedAt,64).text, runId:optionalID(t.activeRunId ?? t.latestRunId),
+    pinnedAt:clip(t.pinnedAt,64).text, pinOrderKey:clip(t.pinOrderKey,256).text,
+    latestUserMessageAt:clip(t.latestUserAuthoredMessageAt ?? t.latestUserMessageAt,64).text,
+    ...extra, runId:optionalID(t.activeRunId ?? t.latestRunId),
     queuedCount:Number.isSafeInteger(t.queuedRunCount) && t.queuedRunCount >= 0 ? t.queuedRunCount : -1,
     // The shell offers one pending-request summary, not a complete count/form.
     pendingRequestCount:t.pendingRuntimeRequest ? 1 : 0,
@@ -170,6 +172,47 @@ export function resolveDefaults(shell, config, projectId, projectFile = null, is
     modelSelection:selected, runtimeMode, interactionMode:'default', workspaceMode:envMode,
     catalog:modelCatalog};
 }
+// The pinned server.updateSettings patch replaces project entries and has no
+// CAS/revision or operation ID. A preflight reread cannot close that race. Keep
+// writes disabled until a versioned native contract supplies both concurrency
+// and exact-operation recovery; never invent such an RPC or copy app storage.
+export const DEFAULTS_WRITE_REASON = 'Native server.updateSettings has no revision/CAS or durable operation ID; concurrent field reset and uncertain-write reconciliation are not safe here. Use native T3 Settings.';
+export function nativeDefaultsReport(shell, config, projectId, scope='project') {
+  requireThat(['project','environment'].includes(scope), 'Invalid native defaults scope.');
+  const project = shell.projects?.find(p => p.id === projectId && !p.deletedAt);
+  requireThat(project && safePath(project.workspaceRoot), 'Selected project is unavailable.', 'stale');
+  const settings = config?.settings;
+  requireThat(settings && Array.isArray(config.providers), 'Native settings are unavailable.', 'unsupported');
+  const overrides = settings.projectSettingsOverrides?.[project.id] ?? {};
+  const keys = ['defaultModelSelection','defaultRuntimeMode','defaultThreadEnvMode'];
+  const fields = keys.map(key => {
+    const override = scope === 'project' && Object.hasOwn(overrides,key) && overrides[key] !== undefined;
+    const legacy = scope === 'project' && !override && !settings.projectSettingsFolded &&
+      ['defaultModelSelection','defaultThreadEnvMode'].includes(key) && project[key] != null;
+    const value = scope === 'project' ? effectiveProjectSetting(settings,project,key) : settings[key];
+    const normalize = v => key === 'defaultModelSelection' ? (v == null ? null : selection(v)) :
+      v == null ? null : text(v,64);
+    return {key,source:override?'project':legacy?'legacy-project':'environment',overridden:override || legacy,
+      value:normalize(value),inheritedValue:normalize(settings[key])};
+  });
+  const stored = fields[0].value;
+  const provider = stored && config.providers.find(p => p.instanceId === stored.instanceId);
+  const enabled = provider && provider.enabled !== false && provider.installed !== false &&
+    provider.availability !== 'unavailable' && ['ready','warning'].includes(provider.status) &&
+    provider.auth?.status !== 'unauthenticated' &&
+    (scope !== 'project' || (overrides.providerInstances?.[provider.instanceId]?.enabled ??
+      settings.providerInstances?.[provider.instanceId]?.enabled) !== false);
+  const modelAvailable = stored === null || Boolean(enabled && provider.models?.some(m => m.slug === stored.model));
+  const result = {projectId:project.id,projectTitle:clip(project.title,512).text,scope,fields,
+    revision:hash({projectId:project.id,scope,fields}),writeSupported:false,writeReason:DEFAULTS_WRITE_REASON,
+    settingsRoute:scope==='project'?'Native T3 Settings > select this environment and project > Defaults':'Native T3 Settings > select this environment > Defaults',
+    storedModelSelection:stored,modelAvailable,
+    modelUnavailableReason:modelAvailable?'':'Saved native instance/model is unavailable; it remains selected and no substitute was made.',
+    ...(stored?{providerIdentity:providerIdentity(provider,stored.instanceId)}:{}),desktopLocal:'unreported'};
+  requireThat(Buffer.byteLength(JSON.stringify(result)) <= 64*1024, 'Native defaults exceed the display budget.', 'too_large');
+  return result;
+}
+
 export function launchProjectCommand(a, defaults) {
   requireThat(a.threadId === a.newThreadId, 'New thread identity mismatch.', 'identity_mismatch');
   requireThat(a.workspaceRoot === defaults.workspaceRoot, 'Native project root changed; review the launch again.', 'stale');
@@ -230,7 +273,7 @@ export function reviewResult(t, project, result) {
     requireThat(['working-tree','branch-range'].includes(source.kind) && typeof source.diff==='string',
       'Unsupported native review source.', 'incompatible');
     const value=clip(source.diff,Math.max(0,budget)); budget-=Buffer.byteLength(value.text);
-    truncated ||= value.truncated || source.truncated === true;
+    truncated ||= value.truncated || source.truncated === true || (source.files?.length ?? 0) > 400;
     sections.push({kind:source.kind,title:clip(source.title,256).text,diff:value.text,
       hash:clip(source.diffHash,128).text,truncated:value.truncated || source.truncated===true});
     for (const file of (source.files ?? []).slice(0,400)) {

@@ -61,8 +61,13 @@ export function messageRow(row) {
     ...clip(body), streaming: item.streaming === true,
     attachmentCount: Array.isArray(item.attachments) ? item.attachments.length : 0 };
 }
-function fitRow(row) {
-  while (Buffer.byteLength(JSON.stringify(row)) + 3 > LIMIT.view) {
+function encodedRow(row, encodings) {
+  if (!encodings) return JSON.stringify(row);
+  if (!encodings.has(row)) encodings.set(row, JSON.stringify(row));
+  return encodings.get(row);
+}
+function fitRow(row, encodings) {
+  while (Buffer.byteLength(encodedRow(row, encodings)) + 3 > LIMIT.view) {
     requireThat(row.text.length > 0, 'Message metadata exceeds the view budget.', 'too_large');
     row = { ...row, ...clip(row.text, Math.floor(Buffer.byteLength(row.text) / 2)), truncated: true };
   }
@@ -92,12 +97,12 @@ export function historyAnchor(row, sequence) {
   return Buffer.from(JSON.stringify({ v: 1, seq: sequence, st: row.sourceThreadId,
     si: row.itemId, p: row.position ?? 0 })).toString('base64url');
 }
-export function trimView(v) {
+export function trimView(v, encodings) {
   const budget = v.historical ? HISTORY_BUDGET : latestBudget;
   let bytes = 2; const kept = [];
   for (const candidate of [...v.items].reverse()) {
-    const row = fitRow(candidate);
-    const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
+    const row = fitRow(candidate, encodings);
+    const cost = Buffer.byteLength(encodedRow(row, encodings)) + 1;
     if (kept.length >= budget.items || kept.length && bytes + cost > budget.view) break;
     kept.unshift(row); bytes += cost;
   }

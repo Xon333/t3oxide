@@ -70,7 +70,18 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 		if id != m.navigator.serial || !m.navigator.focused || !m.navigationVisible() || m.dialog != nil || m.detail != "" {
 			return nil
 		}
+		previous := m.navigator.list.FilterInput.Value()
 		m.navigator.list.FilterInput, cmd = m.navigator.list.FilterInput.Update(message)
+		m.applyNavigatorFilter(previous)
+		id = m.navigator.serial
+	case "agentbox-search":
+		if id != m.agentbox.serial || m.mode != "agentbox" || !m.agentbox.searching || m.agentbox.reply || m.searching || m.dialog != nil || m.detail != "" {
+			return nil
+		}
+		previous := m.agentbox.query.Value()
+		m.agentbox.query, cmd = m.agentbox.query.Update(message)
+		m.applyInboxQuery(previous)
+		id = m.agentbox.serial
 	case "composer":
 		if m.preservedDraft != "" || !m.composer.Focused() {
 			return nil

@@ -33,7 +33,7 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 	// Select the exact visible palette title, then use the integrated metadata
 	// navigator at every width without changing the detailed attachment.
-	r.send("\x10")
+	r.send("\x00") // Terminal Ctrl+Space arrives as NUL; Tea must open Commands.
 	r.modalReady("Commands")
 	r.send("Conversations\r")
 	waitNavigatorQuery(t, r, "Filter loaded")
@@ -101,7 +101,7 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 	r.waitText("second line")
 	r.send("\t")
 	r.send("\x01\x0b" + title + "\r") // Replace the prefilled title using its native editor.
-	r.waitText("[Create]")
+	r.waitText("[Create & send]")
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
 		t.Fatal("finishing the title dispatched before explicit Create")
 	}
@@ -143,6 +143,7 @@ func TestIntuitiveHistoryKeepsVerifiedRequestsVisibleAndReviewable(t *testing.T)
 			}
 			r, _ := startAppTUI(t, session)
 			r.waitText("Initial Markdown for Alpha")
+			dismissInitialAutomaticRequestAttention(t, r, f)
 			r.program.Send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 			r.waitText("Awaiting input (2)")
 			r.send("/earlier\x1d")
@@ -155,6 +156,8 @@ func TestIntuitiveHistoryKeepsVerifiedRequestsVisibleAndReviewable(t *testing.T)
 			before := f.requestCounts()
 			r.send("\x12")
 			r.modalReady("Pending T3 requests")
+			r.send("\r")
+			r.modalReady("T3 approval")
 			r.send("\x1b")
 			r.waitText("Earlier page for thread-a")
 			r.waitText("Ctrl+R requests")

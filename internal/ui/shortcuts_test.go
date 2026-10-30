@@ -37,6 +37,39 @@ func TestShortcutDefaultsHaveNoDispatchCollision(t *testing.T) {
 	}
 }
 
+func TestCommandsDefaultUsesPortableSpaceAndPreservesOverrides(t *testing.T) {
+	m := testModel(t)
+	for _, context := range shortcutContexts {
+		binding := m.actionBindingFor("palette", context)
+		if binding.Help().Key != "Ctrl+Space" || !key.Matches(keyPress(tea.KeySpace, tea.ModCtrl), binding) || key.Matches(keyPress('p', tea.ModSuper), binding) {
+			t.Fatalf("%s: Commands default must advertise Ctrl+Space without claiming Terminal Print: %v", context, binding.Help())
+		}
+	}
+	m.composer.SetValue("keep exact draft")
+	m.composer.CursorEnd()
+	m.Update(keyPress(tea.KeySpace, tea.ModCtrl))
+	if m.dialog == nil || m.dialog.local != "palette" || m.currentDraft() != "keep exact draft" {
+		t.Fatal("Ctrl+Space failed to open Commands without changing the draft")
+	}
+	a, _ := shortcutDefinition("palette")
+	c := &ShortcutConfig{Version: 1, Bindings: map[string]map[string][]string{"composer": {"palette": {"ctrl+alt+k"}}}}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	keys := c.keysFor(a, "composer")
+	if len(keys) != 1 || keys[0] != "ctrl+alt+k" {
+		t.Fatalf("explicit contextual override changed: %v", keys)
+	}
+	c.Bindings = map[string]map[string][]string{"global": {"palette": {"ctrl+alt+k"}}}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	keys = c.keysFor(a, "composer")
+	if len(keys) != 2 || keys[0] != "ctrl+alt+k" || keys[1] != "ctrl+p" {
+		t.Fatalf("global override or contextual fallback changed: %v", keys)
+	}
+}
+
 func TestCommandActionsRetainControlFallbacksInTheirContexts(t *testing.T) {
 	c := &ShortcutConfig{Version: 1}
 	for _, context := range shortcutContexts {
@@ -102,6 +135,7 @@ func TestShortcutLabelsPreferConditionalCommandOnMac(t *testing.T) {
 // These are real upstream byte-decoder fixtures, not physical keyboard tests.
 func TestTerminalByteDecoderKeepsAmbiguousKeysSafe(t *testing.T) {
 	for _, tc := range []struct{ bytes, name string }{
+		{"\x00", "ctrl+space"},
 		{"\r", "enter"}, {"\t", "tab"}, {"\x1d", "ctrl+]"}, {"\x1c", "ctrl+\\"},
 		{"\x1b[13;9u", "super+enter"}, {"\x1b[13;5u", "ctrl+enter"}, {"\x1b[13;7u", "ctrl+alt+enter"},
 		{"\x1bh", "alt+h"}, {"\x1b\x08", "ctrl+alt+h"}, {"\x1b[1;7D", "ctrl+alt+left"}, {"\x1b[49;7u", "ctrl+alt+1"},
@@ -116,6 +150,9 @@ func TestTerminalByteDecoderKeepsAmbiguousKeysSafe(t *testing.T) {
 		m.composer.SetValue("line")
 		m.composer.CursorEnd()
 		m.Update(tea.KeyPressMsg(press))
+		if tc.bytes == "\x00" && (m.dialog == nil || m.dialog.local != "palette" || m.currentDraft() != "line") {
+			t.Fatal("terminal Ctrl+Space/NUL failed to open Commands with the draft intact")
+		}
 		if tc.name == "enter" && (m.currentDraft() != "line\n" || m.problem != "") {
 			t.Fatal("legacy Enter encoded as an unsafe send")
 		}

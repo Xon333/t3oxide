@@ -83,6 +83,33 @@ func nativeFixtureShellThread(p object) object {
 
 func (f *fixture) nativeRPC(s *fixtureSocket, frame object) bool {
 	tag, _ := frame["tag"].(string)
+	if tag == "orchestration.searchThreads" {
+		payload, _ := frame["payload"].(object)
+		query, _ := payload["query"].(string)
+		limit, _ := payload["limit"].(float64)
+		f.mu.Lock()
+		if len(query) < 2 || len(query) > 200 || limit < 1 || limit > 50 {
+			f.violations = append(f.violations, "native search exceeded its query/result bounds")
+		}
+		matches := []any{}
+		for id, p := range f.threads {
+			items, _ := p["visibleTurnItems"].([]any)
+			for _, value := range items {
+				item := value.(object)["item"].(object)
+				text, _ := item["text"].(string)
+				if strings.Contains(strings.ToLower(text), strings.ToLower(query)) {
+					matches = append(matches, object{"threadId": id, "projectId": p["thread"].(object)["projectId"], "source": "assistant", "snippet": "Synthetic matching message", "messageCreatedAt": nil})
+					break
+				}
+			}
+			if len(matches) >= int(limit) {
+				break
+			}
+		}
+		f.mu.Unlock()
+		_ = s.send(object{"_tag": "Exit", "requestId": frame["id"], "exit": object{"_tag": "Success", "value": object{"matches": matches}}})
+		return true
+	}
 	if tag != "vcs.listRefs" && tag != "review.getDiffPreview" {
 		return false
 	}

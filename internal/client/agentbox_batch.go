@@ -6,14 +6,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/Xon333/t3oxide/internal/wire"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Xon333/t3oxide/internal/config"
 )
 
 type batchLaunchKey struct{}
-type batchLaunchDraft struct{ Environment, Source, Before, Consumed string }
+type batchLaunchDraft struct {
+	Environment, Source, Before, Consumed, ReceiptID string
+	ItemIndex                                        int
+}
 
 func batchLaunchContext(ctx context.Context) *batchLaunchDraft {
 	b, _ := ctx.Value(batchLaunchKey{}).(*batchLaunchDraft)
@@ -28,7 +33,11 @@ func batchLaunchFormSource(ctx context.Context, source string) string {
 }
 func bindBatchLaunch(ctx context.Context, fields map[string]any) {
 	if b := batchLaunchContext(ctx); b != nil {
-		fields["batchDraft"] = map[string]any{"environment": b.Environment, "source": b.Source, "before": b.Before, "consumed": b.Consumed}
+		binding := map[string]any{"environment": b.Environment, "source": b.Source, "before": b.Before, "consumed": b.Consumed}
+		if b.ReceiptID != "" {
+			binding["receiptId"], binding["itemIndex"] = b.ReceiptID, b.ItemIndex
+		}
+		fields["batchDraft"] = binding
 	}
 }
 
@@ -110,14 +119,54 @@ func (a *Session) FileMany(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	var receipt config.BatchReceipt
+	firstItem := 0
+	// An explicitly reopened, unchanged remainder continues the same receipt;
+	// acknowledged tasks are not refiled and no background continuation exists.
+	for _, saved := range a.manager.State.BatchReceipts() {
+		if saved.EnvironmentID != env.EnvironmentID || saved.Source != source {
+			continue
+		}
+		index := 0
+		for index < len(saved.Items) && saved.Items[index].State == config.BatchAcknowledged {
+			index++
+		}
+		if index == len(saved.Items) || saved.Original[saved.Items[index].Start:] != answer.Text {
+			continue
+		}
+		safe := true
+		for _, item := range saved.Items[index:] {
+			if item.State != config.BatchRemainingDraft || item.OperationID != "" {
+				safe = false
+			}
+		}
+		if safe {
+			receipt = saved
+			firstItem = index
+			break
+		}
+	}
+	if receipt.ID == "" {
+		receipt = config.BatchReceipt{ID: wire.NewID(), EnvironmentID: env.EnvironmentID, Source: source, Original: answer.Text, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		offset := 0
+		for _, task := range tasks {
+			receipt.Items = append(receipt.Items, config.BatchReceiptItem{Start: offset, End: offset + len(task.Consumed), State: config.BatchRemainingDraft})
+			offset += len(task.Consumed)
+		}
+		if err = a.manager.State.BeginBatchReceipt(receipt); err != nil {
+			return Result{}, fmt.Errorf("nothing filed: preserve batch receipt: %w", err)
+		}
+	} else if err = a.manager.State.PauseBatchReceipt(receipt.ID, ""); err != nil {
+		return Result{}, err
+	}
 	remaining := answer.Text
 	var last *Session
 	var filed []string
 	finish := func(message string) Result {
-		return Result{Next: last, Text: message, DetailTitle: "Filed native tasks", Detail: strings.Join(filed, "\n")}
+		return Result{Next: last, Text: message, DetailTitle: "Batch receipt", Detail: a.batchReceiptDetail(receipt.ID)}
 	}
-	for _, task := range tasks {
-		binding := &batchLaunchDraft{Environment: env.EnvironmentID, Source: source, Before: remaining, Consumed: task.Consumed}
+	for index, task := range tasks {
+		binding := &batchLaunchDraft{Environment: env.EnvironmentID, Source: source, Before: remaining, Consumed: task.Consumed, ReceiptID: receipt.ID, ItemIndex: firstItem + index}
 		input := LaunchInput{Title: task.Title, Message: task.Message}
 		itemCtx := context.WithValue(ctx, batchLaunchKey{}, binding)
 		result, launchErr := a.newConversationInEnvironment(itemCtx, task.Title, "", true, env.ID, &input)
@@ -129,9 +178,19 @@ func (a *Session) FileMany(ctx context.Context) (Result, error) {
 			if len(filed) > 0 {
 				prefix = "Already filed native threads: " + strings.Join(filed, "; ") + ". "
 			}
-			return Result{}, fmt.Errorf("%sList paused; remaining human text is saved. %w", prefix, launchErr)
+			pause := "Paused after error; inspect the original operation before continuing. Remaining items are drafts."
+			if a.manager.State.Pending(env.EnvironmentID, false) != nil {
+				pause = "May already be sent — Review saved action. Further filing paused; remaining items are drafts."
+			}
+			if saveErr := a.manager.State.PauseBatchReceipt(receipt.ID, pause); saveErr != nil {
+				launchErr = errors.Join(launchErr, saveErr)
+			}
+			return Result{DetailTitle: "Batch receipt", Detail: a.batchReceiptDetail(receipt.ID)}, fmt.Errorf("%sList paused; remaining human text is saved. %w", prefix, launchErr)
 		}
 		if result.Next == nil {
+			if err := a.manager.State.PauseBatchReceipt(receipt.ID, "Paused before dispatch. Current and later items remain human drafts."); err != nil {
+				return finish("List paused; receipt update failed."), err
+			}
 			return finish(fmt.Sprintf("Filed %d task(s); remaining list saved.", len(filed))), nil
 		}
 		if last != nil {
@@ -147,6 +206,9 @@ func (a *Session) FileMany(ctx context.Context) (Result, error) {
 			expected = ""
 		}
 		if a.manager.State.Draft(env.EnvironmentID, source) != expected {
+			if err := a.manager.State.PauseBatchReceipt(receipt.ID, "Newer human edits were preserved; review the edited list before any further filing."); err != nil {
+				return finish("List changed; receipt update failed."), err
+			}
 			return finish(fmt.Sprintf("Filed %d task(s); the list changed and needs review.", len(filed))), nil
 		}
 		remaining = expected

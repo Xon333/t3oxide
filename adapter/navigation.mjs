@@ -1,6 +1,6 @@
 // Bounded thread navigation, derived only from T3's authoritative lineage.
 import { clip, identifier, LIMIT, requireThat } from './core.mjs';
-import { lineage } from './models.mjs';
+import { lineage, providerIdentity } from './models.mjs';
 import { inboxMetadata } from './native.mjs';
 
 export function threadType(thread) {
@@ -9,6 +9,37 @@ export function threadType(thread) {
   if (l.relationshipToParent === 'subagent') return 'subagent';
   if (l.relationshipToParent === 'fork') return 'fork';
   return l.parentThreadId === null ? 'main' : 'unknown';
+}
+
+// Membership follows the pinned native shell presentation + threadInbox rules.
+// Background work is significant only when native data says it holds completion.
+export function nativeWorking(t, childApproval=false) {
+  const holds = (t.pendingBackgroundTasks ?? []).some(task => task?.awaited===true ||
+    ['subagent','background_task'].includes(task?.kind));
+  const status = holds && t.status!=='failed' ? 'idle' : t.activityRunStatus ?? t.status;
+  const active = ['preparing','queued','starting','running','waiting'].includes(status);
+  const running = ['preparing','starting','running'].includes(status);
+  const request = t.pendingRuntimeRequest;
+  const attention = request && request.kind !== 'auth_refresh' &&
+    (request.kind !== 'user_input' || request.blocking !== false || !running);
+  if (attention || childApproval || !active && status!=='idle') return false;
+  if (!t.latestRunId && !t.activeProviderThreadId && !holds) return false;
+  const settledRun = t.latestRunId && !['preparing','queued','starting','running','waiting'].includes(t.status) && t.activeRunId!==t.latestRunId;
+  return !(t.interactionMode==='plan' && t.hasActionableProposedPlan && settledRun);
+}
+function childRequestParents(threads) {
+  const byID=new Map(threads.map(t=>[t.id,t])), pending=new Set();
+  for (const t of threads) {
+    const live = t.activityRunStatus === undefined ? ['preparing','starting','running','waiting'].includes(t.status) : t.activityRunStatus !== null;
+    if (threadType(t)!=='subagent' || !t.pendingRuntimeRequest ||
+        t.creationSource==='provider' || !live || ['user_input','auth_refresh'].includes(t.pendingRuntimeRequest.kind)) continue;
+    const seen=new Set([t.id]); let parent=lineage(t.lineage)?.parentThreadId;
+    while(parent && !seen.has(parent) && !pending.has(parent)) {
+      seen.add(parent); pending.add(parent);
+      const p=byID.get(parent); parent=p && threadType(p)==='subagent' ? lineage(p.lineage)?.parentThreadId : null;
+    }
+  }
+  return pending;
 }
 
 export function threadList(shell, query = '', options = {}) {
@@ -20,6 +51,7 @@ export function threadList(shell, query = '', options = {}) {
   expanded.forEach(id => identifier(id));
   const open = new Set(expanded);
   const projects = new Map(shell.projects.map(p => [p.id, p.title]));
+  const pendingChildRequests=childRequestParents(shell.threads.filter(t=>!t.deletedAt && !t.archivedAt));
   const q = String(query).trim().toLocaleLowerCase().slice(0, 200);
   const activeOnly = options.activeOnly === true;
   const scoped = activeOnly || options.lifecycle !== undefined;
@@ -119,13 +151,17 @@ export function threadList(shell, query = '', options = {}) {
   more ||= scoped && cursor + page.length < nodes.length;
   for (const {t, depth} of page) {
     const l = lineage(t.lineage), parent = all.get(l?.parentThreadId);
+    const inbox = inboxMetadata(t,{working:nativeWorking(t,pendingChildRequests.has(t.id)),pendingChildRequest:pendingChildRequests.has(t.id)});
+    const instanceId = t.providerInstanceId == null && t.modelSelection?.instanceId == null ? '' : identifier(t.providerInstanceId ?? t.modelSelection.instanceId,'provider instance');
     const row = { id: t.id, title: clip(t.title,512).text,
       ...(typeof t.updatedAt==='string' ? {updatedAt:clip(t.updatedAt,64).text} : {}),
-      ...(inboxMetadata(t) ? {inbox:inboxMetadata(t)} : {}),
+      ...(inbox ? {inbox} : {}),
       ...(t.projectId == null ? {} : { projectId: identifier(t.projectId, 'project id') }),
       project: clip(projects.get(t.projectId) ?? '',256).text,
       status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text,
       model: clip(t.modelSelection?.model ?? '',256).text,
+      providerInstanceId:instanceId,
+      ...(instanceId ? {providerIdentity:structuredClone(options.providerIdentities?.get(instanceId) ?? providerIdentity(null,instanceId))} : {}),
       lineage: l, threadType: threadType(t), parentTitle: clip(parent?.title ?? '',512).text,
       childCount: scoped ? (q || lifecycle !== 'active' ? knownCounts : childCounts).get(t.id) ?? 0 : (children.get(t.id) ?? []).length,
       ...(scoped ? {workingChildCount: childCounts.get(t.id) ?? 0, knownChildCount: knownCounts.get(t.id) ?? 0,

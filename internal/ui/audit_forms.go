@@ -351,15 +351,18 @@ func (m *Model) cancelForm() tea.Cmd {
 	if d != nil && d.prompt != nil {
 		answer := client.Answer{Action: "cancel", Cancelled: true}
 		if d.requestForm != nil {
-			if !m.saveRequestAnswer() {
-				return nil
-			}
+			// Cancellation is always available, even when an unsent answer is
+			// invalid. Retain valid transient progress without making validation
+			// a condition for closing the native request's local presentation.
+			m.saveRequestAnswer()
 			answer.RequestAction = "cancel"
 			answer.RequestProgress = d.requestForm.progress()
 		}
 		d.prompt.Respond(answer)
 	}
+	m.suppressVisibleRequest()
 	m.dialog = nil
+	m.restoreRequestReturn()
 	if len(m.localBack) > 0 {
 		return m.popLocalSurface()
 	}

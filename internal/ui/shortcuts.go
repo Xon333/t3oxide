@@ -42,14 +42,14 @@ func workspaceNavigatorKeys(reading, composer, navigator []string) map[string][]
 var shortcutActions = []shortcutAction{
 	{"stop", "stop", "Stop/hold", map[string][]string{"global": {"ctrl+s"}}},
 	{"quit", "quit", "exit", map[string][]string{"global": {"ctrl+q"}}},
-	{"palette", "", "commands", map[string][]string{"global": {"ctrl+space", "ctrl+@", "f3", "super+p"}, "composer": {"ctrl+p"}, "reading": {"ctrl+p"}, "navigator": {"ctrl+p"}, "activity": {"ctrl+p"}, "context": {"ctrl+p"}, "form": {"ctrl+p"}, "search": {"ctrl+p"}, "detail": {"ctrl+p"}, "agentbox": {"ctrl+p"}}},
+	{"palette", "", "commands", map[string][]string{"global": {"ctrl+space", "ctrl+@", "f3"}, "composer": {"ctrl+p"}, "reading": {"ctrl+p"}, "navigator": {"ctrl+p"}, "activity": {"ctrl+p"}, "context": {"ctrl+p"}, "form": {"ctrl+p"}, "search": {"ctrl+p"}, "detail": {"ctrl+p"}, "agentbox": {"ctrl+p"}}},
 	{"help", "help", "help", map[string][]string{"global": {"ctrl+alt+h", "f1", "super+h"}, "reading": {"?"}, "activity": {"?"}, "context": {"?"}, "agentbox": {"?"}}},
 	{"info", "info", "Info", map[string][]string{"global": {"ctrl+l", "f2", "super+i"}}},
 	{"error", "error", "error", map[string][]string{"global": {"f8"}}},
 	{"mode", "mode", "mode", map[string][]string{"global": {"ctrl+alt+b", "shift+super+b"}}},
 	{"switch", "switch", "conversations", map[string][]string{"composer": {"ctrl+o", "f6", "super+o"}, "reading": {"ctrl+o", "f6", "super+o"}, "navigator": {"ctrl+o", "super+o"}, "activity": {"ctrl+o", "f6", "super+o"}, "context": {"ctrl+o", "f6", "super+o"}}},
 	{"environments", "env", "environments", workspaceNavigatorKeys([]string{"ctrl+e"}, nil, []string{"ctrl+alt+e"})},
-	{"requests", "requests", "requests", workspaceKeys([]string{"ctrl+r"}, []string{"ctrl+r"})},
+	{"requests", "requests", "requests", map[string][]string{"composer": {"ctrl+r"}, "reading": {"ctrl+r"}, "navigator": {"ctrl+r"}, "activity": {"ctrl+r"}, "context": {"ctrl+r"}, "search": {"ctrl+r"}, "agentbox": {"ctrl+r"}}},
 	{"search", "search", "find in page", map[string][]string{"reading": {"ctrl+f", "/", "super+f"}, "navigator": {"ctrl+alt+f", "super+f"}, "activity": {"ctrl+f", "/", "super+f"}, "context": {"ctrl+f", "/", "super+f"}}},
 	{"sidebar", "sidebar", "activity pane", workspaceNavigatorKeys([]string{"ctrl+b", "ctrl+alt+a", "super+b"}, []string{"ctrl+alt+a", "super+b"}, []string{"ctrl+alt+a", "super+b"})},
 	{"model", "model", "model", workspaceKeys([]string{"alt+m", "ctrl+alt+m", "super+m"}, []string{"ctrl+alt+m", "super+m"})},
@@ -107,7 +107,7 @@ var shortcutActions = []shortcutAction{
 	{"agentbox.choice-2", "", "choice 2", map[string][]string{"agentbox": {"2"}}},
 	{"agentbox.choice-3", "", "choice 3", map[string][]string{"agentbox": {"3"}}},
 	{"agentbox.search", "", "search", map[string][]string{"agentbox": {"/"}}},
-	{"agentbox.refresh", "refresh", "refresh", map[string][]string{"agentbox": {"ctrl+r"}}},
+	{"agentbox.refresh", "refresh", "refresh", map[string][]string{"agentbox": {"ctrl+alt+r"}}},
 	{"agentbox.focus-next", "", "focus", map[string][]string{"agentbox": {"tab"}}},
 	{"agentbox.focus-previous", "", "focus back", map[string][]string{"agentbox": {"shift+tab"}}},
 	{"agentbox.page-next", "", "next page", map[string][]string{"agentbox": {"pgdown"}}},
@@ -174,6 +174,11 @@ func (c *ShortcutConfig) keysFor(a shortcutAction, context string) []string {
 				return slices.Clone(override)
 			}
 		}
+	}
+	if a.id == "palette" && context != "global" {
+		// Commands advertises its portable global default before contextual
+		// Ctrl+P fallbacks. Explicit context overrides above still own their keys.
+		return append(slices.Clone(global), active...)
 	}
 	keys := slices.Clone(active)
 	if context == "global" {

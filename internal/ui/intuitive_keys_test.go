@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -17,11 +16,11 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 		name, draft, label     string
 		reading, opens, legacy bool
 	}{
-		{"empty-composer", "", "Ctrl+P", false, true, false},
-		{"nonempty-composer", "first\nsecond", "Ctrl+P", false, true, false},
-		{"reading-with-draft", "first\nsecond", "Ctrl+P", true, true, false},
+		{"empty-composer", "", "Ctrl+Space", false, true, false},
+		{"nonempty-composer", "first\nsecond", "Ctrl+Space", false, true, false},
+		{"reading-with-draft", "first\nsecond", "Ctrl+Space", true, true, false},
 		{"legacy-nonempty-composer", "first\nsecond", "Ctrl+Space", false, false, true},
-		{"legacy-reading-with-draft", "first\nsecond", "Ctrl+P", true, true, true},
+		{"legacy-reading-with-draft", "first\nsecond", "Ctrl+Space", true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testModel(t)
@@ -33,9 +32,6 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 				m.Update(keyPress(tea.KeyTab, tea.ModShift))
 			}
 			k := m.keyMap()
-			if runtime.GOOS == "darwin" {
-				tc.label = "Cmd+P*"
-			}
 			if k.Palette.Help().Key != tc.label || key.Matches(keyPress('p', tea.ModCtrl), k.Palette) != tc.opens {
 				t.Fatalf("palette help/dispatch disagree: %#v", k.Palette.Help())
 			}

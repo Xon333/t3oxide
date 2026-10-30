@@ -257,6 +257,9 @@ func (m *Model) focusRequestForm() tea.Cmd {
 }
 func (m *Model) requestFormKey(msg tea.KeyPressMsg) tea.Cmd {
 	defer m.resizeDialog()
+	if m.guardAutomaticRequestKey(msg) {
+		return nil
+	}
 	d := m.dialog
 	f := d.requestForm
 	q := f.questions[f.index]
@@ -420,6 +423,9 @@ func (m *Model) requestFormLayout(width, height int) renderedSurface {
 		}
 	}
 	heading := fmt.Sprintf("Question %d/%d · %s · %s", f.index+1, len(f.questions), required, kind)
+	if m.attention.automatic && !m.attention.armed {
+		heading = "Tab or click to choose · Esc closes"
+	}
 	question := ansi.Hardwrap(safeText(q.Question), width, true)
 	rows := []string{}
 	if q.Header != "" {

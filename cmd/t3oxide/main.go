@@ -23,7 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.8.2-bubbletea"
+var version = "0.9.0-bubbletea"
 
 const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 
@@ -32,7 +32,8 @@ Examples:
   t3oxide --env m1 --thread THREAD_ID        open a specific conversation
 
 In the TUI:
-  Ctrl+O conversations · Ctrl+P commands · /edit · /recall · /help
+  Ctrl+O conversations · Ctrl+Space commands · /edit · /recall · /help
+  Ctrl+P is a Commands fallback; /keyboard legacy retains editor Ctrl+P.
   Ctrl+S Stop + queue hold · Ctrl+C keeps draft · Ctrl+Q exits
   /retry [stop] reuses the saved operation ID; local exit leaves T3 running.
 

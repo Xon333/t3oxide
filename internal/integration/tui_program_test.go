@@ -435,9 +435,8 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	r, _ := startAppTUI(t, a)
 	r.waitText("Alpha")
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "awaiting input (2)") })
-	r.send("/requests\x1d")
-	r.modalReady("Pending T3 requests")
-	r.send("\r")
+	r.modalReady("T3 approval") // attached first request now presents automatically
+	r.send("\t")                // deliberate focus; old queued Enter cannot select a permission
 	r.modalReady("Once")
 	r.send("\r")
 	r.waitText("✓ Once")
@@ -452,8 +451,8 @@ func TestBubbleTeaProgramAnswersActualT3ApprovalAndQuestions(t *testing.T) {
 	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "awaiting input (1)") })
 	// The host projection can arrive before the program consumes actionDone.
 	// Wait for its empty composer before typing another slash command.
-	r.waitEmptyComposer()
-	r.send("/requests\x1d")
+	r.modalReady("T3 questions")
+	r.send("\t") // enter the automatically presented text form explicitly
 	r.modalReady("Choice")
 	r.send("Continue\t")
 	r.waitText("[Next]")
@@ -526,23 +525,42 @@ func (f *fixture) waitRequest(t *testing.T, requestID string) object {
 func TestBubbleTeaStopShortcutWorksDuringRequestModalAndPreservesComposer(t *testing.T) {
 	f := newFixture(t)
 	f.addRequests()
-	m, _ := newAppManager(t, f)
+	m, state := newAppManager(t, f)
 	a, err := m.NewSession("fixture", "thread-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	r, _ := startAppTUI(t, a)
 	r.waitText("Alpha")
-	awaitStatus(t, a, func(s client.Status) bool { return strings.Contains(s.State, "running") })
-	r.send("Unsent composer while stopping")
+	awaitStatus(t, a, func(s client.Status) bool {
+		return s.Connected && s.Writable && s.Requests == 2 && strings.Contains(s.State, "running")
+	})
+	// An explicit Requests key can promote a pending automatic form or open
+	// the ordinary chooser, depending on when initial native offers arrive.
+	// Close both exact automatic presentations first, leaving both native
+	// requests pending, then exercise the deliberate chooser -> form route.
+	dismissInitialAutomaticRequestAttention(t, r, f)
+	const draft = "Unsent composer while stopping"
+	r.send(draft)
 	deadline := time.Now().Add(3 * time.Second)
-	for a.Draft() != "Unsent composer while stopping" && time.Now().Before(deadline) {
+	// Observe the existing asynchronous draft owner's commit, without making
+	// the independently admitted Stop wait for a new persistence operation.
+	for (a.Draft() != draft || state.Draft("env-a", "thread-a") != draft) && time.Now().Before(deadline) {
 		time.Sleep(15 * time.Millisecond)
+	}
+	if a.Draft() != draft || state.Draft("env-a", "thread-a") != draft {
+		t.Fatal("request presentation did not restore and persist the exact composer owner")
 	}
 	// The request review owns the ordinary action path. The global Stop key
 	// must still use its independent request and must not answer this modal.
 	r.send("\x12")
 	r.modalReady("Pending T3 requests")
+	r.send("\r")
+	r.modalReady("T3 approval")
+	r.waitText("Approve the fixture?")
+	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
+		t.Fatal("opening the exact approval form answered a request or sent the draft")
+	}
 	r.send("\x13")
 	deadline = time.Now().Add(4 * time.Second)
 	var stop object
@@ -559,10 +577,10 @@ func TestBubbleTeaStopShortcutWorksDuringRequestModalAndPreservesComposer(t *tes
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if stop == nil || stop["holdQueue"] != true || stop["runId"] != "run-thread-a" {
+	if stop == nil || stop["holdQueue"] != true || stop["runId"] != "run-thread-a" || stop["threadId"] != "thread-a" {
 		t.Fatalf("Ctrl+S did not send the reviewed Stop with queue hold: %#v\n%s", stop, r.output.text())
 	}
-	if a.Draft() != "Unsent composer while stopping" {
+	if a.Draft() != draft || state.Draft("env-a", "thread-a") != draft || a.Status().EnvironmentID != "env-a" || a.Status().ThreadID != "thread-a" {
 		t.Fatal("Stop shortcut altered the composer draft")
 	}
 	if effects, dispatches := f.counts(); effects != 1 || dispatches != 1 {

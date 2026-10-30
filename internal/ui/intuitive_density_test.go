@@ -126,7 +126,7 @@ func TestIntuitiveDensityAuthoritativeRequestsAndRealFeedback(t *testing.T) {
 	if strings.Count(view, "Awaiting input (3)") != 1 || strings.Contains(view, "request(s)") || m.feedbackVisible() || m.feedbackView(80) != "" {
 		t.Fatalf("request count acquired duplicate feedback:\n%s", view)
 	}
-	for _, want := range []string{"running", "Saved action", "Saved Stop", "Draft not saved", "Ctrl+O  Browser"} {
+	for _, want := range []string{"running", "Review saved action", "Saved Stop", "Draft not saved", "Ctrl+O  Browser"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("authoritative state missing %q", want)
 		}

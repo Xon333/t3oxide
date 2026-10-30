@@ -14,6 +14,7 @@ import (
 func TestWorkspaceToolbarCommandsReturnToInvokingPane(t *testing.T) {
 	m := navigatorFixture(t, 120, 35)
 	m.navigator.focused = true
+	m.navigator.editing = true
 	m.restoreFocus()
 	draft, target, snapshot := m.currentDraft(), m.status.ThreadID, m.snapshot
 	m.View()
@@ -53,7 +54,7 @@ func TestWorkspaceCompactRecoveryActionsMatchRenderedHitZones(t *testing.T) {
 					t.Fatalf("invalid cell width: %q", line)
 				}
 			}
-			for _, action := range []string{"requests", "stop", "pending"} {
+			for _, action := range []string{"requests", "stop", "recover"} {
 				found := false
 				for _, z := range m.hitZones {
 					if z.action == "toolbar" && z.args == action {

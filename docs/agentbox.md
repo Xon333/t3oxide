@@ -12,7 +12,7 @@ An empty first message files an empty native thread. A nonempty first message st
 
 ## Inbox and decisions
 
-The inbox defaults to **Needs you**. `V` or Commands changes view; `/` searches bounded native metadata. Filters narrow environment, project and minimum presentation priority. Additional native pages remain explicit. Every row keeps environment/project/thread identity and the native revision; duplicate thread IDs across environments cannot alias.
+The inbox defaults to **Needs you**. `V` or Commands changes view; `/` filters loaded metadata locally. With no matching rows, **Search server conversations** or Enter explicitly searches bounded native message content across configured sources. This switches the presentation to All while retaining environment, project and minimum priority filters. Healthy sources appear progressively, and pending, failed and incomplete sources remain visible. Native message matches remain visible even when the query is absent from their titles. Editing the query retires old results and returns to local filtering without another read; Enter with loaded matches or Refresh explicitly reloads metadata. Additional native pages remain explicit. Every row keeps environment/project/thread identity and the native revision; duplicate thread IDs across environments cannot alias.
 
 | View | Evidence |
 | --- | --- |
@@ -20,7 +20,7 @@ The inbox defaults to **Needs you**. `V` or Commands changes view; `/` searches 
 | Working | Reported active/preparing/starting/running state. |
 | Queued | A native queued state or explicitly reported queued count. No local filed draft is presented as an accepted native queue. |
 | Later | Native `snoozedUntil` in the future. |
-| Done | Native settled visibility after active work/requests are accounted for. This does not mean changes were merged. |
+| Reviewed | Native settled visibility after active work/requests are accounted for. This does not mean changes were merged. The native enum remains `done`; `/inbox reviewed` is the displayed command. |
 | All | Every loaded eligible native task row, including states outside the current decision view. |
 | Unknown | Missing native inbox projection. Open the conversation for exact available state; absence does not mean success or Inbox Zero. |
 
@@ -58,4 +58,8 @@ Switching modes retains the existing attachment, composer/caret/selection, form 
 
 AgentBox-inspired behavior is independently authored. Pinned upstream source and tests were inspected for behavior, but no GPL code, tests, worker instructions or artwork were copied or translated into this source tree. Existing t3oxide and third-party notices are retained, with the native adapter adaptation scope updated; this source snapshot does not add a blanket license.
 
-Thread status badges use the same labels as Developer: Active, Waiting, Failed, Blocked, Queued, Done, Stopped, Idle and Unknown. Failed work remains visible as Failed even with a pending request; the decision pane separately shows the request count. Native review/snooze disposition is separate from run completion. The badges retain selection highlighting and use text as well as color.
+Thread status badges use the same labels as Developer: Active, Waiting, Failed, Blocked, Queued, Completed, Stopped, Idle and Unknown. Failed work remains visible as Failed even with a pending request; the decision pane separately shows the request count. Native review/snooze disposition is separate from run completion. The badges retain selection highlighting and use text as well as color.
+
+After a successful Reviewed or Later action, the current attachment stays open with an acknowledgement. **Next** deliberately opens the next eligible source-qualified item in the frozen list order. **Back to inbox** leaves the acknowledgement. A failure or uncertain result keeps the current item and its recovery cue. Ordinary Up/Down selection does not attach a conversation.
+
+The reply composer has a separate **Send** control and **Auto / Queue / Steer** intent menu. Choosing intent stages one message; it does not submit or change the saved delivery setting. Auto means **T3 decides** until native evidence reports an outcome. A late acknowledgement cannot clear a newer draft or override.

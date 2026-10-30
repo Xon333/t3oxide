@@ -1,9 +1,7 @@
 package client
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -21,11 +19,7 @@ func (a *Session) observeRequestsLocked(s *wire.Snapshot) {
 	}
 	// Keep offers separate from snapshots exposed to readers, including the
 	// retained page used during reconnect. Wire requests are JSON values.
-	data, _ := json.Marshal(s.Metadata.Requests)
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	a.liveRequests = nil
-	_ = decoder.Decode(&a.liveRequests)
+	a.liveRequests = wire.CloneRequestValues(s.Metadata.Requests)
 	a.liveRequestThread = s.Metadata.ThreadID
 	if a.requestCancel != nil && !containsRequest(a.liveRequests, a.requestID, a.requestRevision) {
 		a.requestCancel()
@@ -83,6 +77,38 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 		}
 		selected = requests[i]
 	}
+	return a.reviewRequest(ctx, selected, thread)
+}
+
+// ReviewRequest presents one exact attached offer without reopening a dismissed
+// sibling. It is used by the guarded automatic attention presentation.
+func (a *Session) ReviewRequest(ctx context.Context, id, revision string) error {
+	a.mu.Lock()
+	thread := a.thread
+	var selected map[string]any
+	for _, request := range a.requestOffersLocked() {
+		if stringValue(request["id"]) == id && stringValue(request["revision"]) == revision {
+			selected = request
+			break
+		}
+	}
+	a.mu.Unlock()
+	if selected == nil {
+		return errors.New("request changed; reopen Requests")
+	}
+	return a.reviewRequest(ctx, selected, thread)
+}
+
+func (a *Session) reviewRequest(ctx context.Context, selected map[string]any, thread string) error {
+	if ctx == nil {
+		return errors.New("request review needs an active context")
+	}
+	a.mu.Lock()
+	environment := ""
+	if a.environment != nil {
+		environment = a.environment.EnvironmentID
+	}
+	a.mu.Unlock()
 	if !boolValue(selected["supported"]) {
 		return fmt.Errorf("request unavailable here: %s", stringValue(selected["limitation"]))
 	}
@@ -135,7 +161,7 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 			allowed[decision] = true
 			choices = append(choices, Choice{ID: decision, Label: stringValue(o["label"]), Description: stringValue(o["warning"])})
 		}
-		answer, err := a.asker.Ask(requestCtx, Question{Kind: ChooseOne, Title: "T3 approval", Prompt: stringValue(selected["prompt"]), Choices: choices, ConfirmChoice: true})
+		answer, err := a.asker.Ask(requestCtx, Question{EnvironmentID: environment, ThreadID: thread, RequestID: id, RequestRevision: revision, Kind: ChooseOne, Title: "T3 approval", Prompt: stringValue(selected["prompt"]), Choices: choices, ConfirmChoice: true})
 		if err != nil {
 			return err
 		}
@@ -157,6 +183,7 @@ func (a *Session) ReviewRequests(ctx context.Context) error {
 		}
 		progress := &RequestProgress{Index: 0, Answers: map[string]any{}}
 		answer, err := a.asker.Ask(requestCtx, Question{
+			EnvironmentID: environment, ThreadID: thread, RequestID: id, RequestRevision: revision,
 			Kind: EnterText, Title: "T3 questions", Prompt: stringValue(selected["prompt"]),
 			RequestQuestions: requestQuestions, RequestProgress: progress,
 		})

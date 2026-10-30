@@ -56,7 +56,7 @@ func (m *Model) operationView(width int) string {
 	text := m.operationLine()
 	if ansi.StringWidth(text) > width && m.durableProblem() {
 		var parts []string
-		if m.status.PendingAction {
+		if m.hasSavedActions() {
 			parts = append(parts, "Saved action")
 		}
 		if m.status.PendingStop {
@@ -83,6 +83,10 @@ func (m *Model) operationView(width int) string {
 func (m *Model) conversationDetailText() string {
 	loc := m.status.Location
 	parts := []string{m.attachedTargetStatus()}
+	if m.session != nil {
+		destination, policy := m.session.CreationDestinationHint()
+		parts = append(parts, "New destination policy: "+policy, "New profile: "+reported(destination.ProfileID), "New environment ID: "+reported(destination.EnvironmentID), "New project ID: "+reported(destination.ProjectID))
+	}
 	if m.status.Context != "" {
 		parts = append(parts, m.status.Context)
 	}
@@ -108,6 +112,10 @@ func (m *Model) conversationDetailText() string {
 			parts = append(parts, "Provider reported model: unavailable")
 		}
 	}
+	if m.snapshot != nil {
+		parts = append(parts, providerIdentityLines(m.snapshot.Metadata.ProviderIdentity)...)
+	}
+	parts = append(parts, "Saved delivery: "+reported(m.status.Delivery), "Next-send delivery: "+m.deliveryLabel())
 	if m.status.ThreadID != "" && !m.status.Writable {
 		parts = append(parts, "Read only: conversation mutations are unavailable.")
 	}
@@ -124,8 +132,8 @@ func (m *Model) conversationDetailText() string {
 		}
 		parts = append(parts, "Acknowledged confirms receipt only. A response requires matching message and run evidence from T3.")
 	}
-	if m.status.PendingAction || m.status.PendingStop {
-		parts = append(parts, "Saved operations: review the original target and payload in Commands → Saved operations. Reconnect never retries them.")
+	if m.hasSavedActions() {
+		parts = append(parts, "May already be sent. Review the original target, payload and ID in Commands → Review saved action (all environments). Reconnect never retries them.")
 	}
 	return strings.Join(parts, "\n")
 }

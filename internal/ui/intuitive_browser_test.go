@@ -300,7 +300,7 @@ func TestIntuitiveLaunchFocusedCreateVisibleWithFeedback(t *testing.T) {
 	m.Update(keyPress(tea.KeyTab))
 	m.Update(keyPress(tea.KeyEnter))
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "[Create]") || !strings.Contains(view, "Draft save failed") || !strings.Contains(view, "Ctrl+S") {
+	if !strings.Contains(view, "[Create & send]") || !strings.Contains(view, "Draft save failed") || !strings.Contains(view, "Ctrl+S") {
 		t.Fatalf("focused control/feedback/footer was clipped:\n%s", view)
 	}
 }

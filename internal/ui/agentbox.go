@@ -28,6 +28,8 @@ type agentboxState struct {
 	minimumPriority                                      int
 	query                                                textinput.Model
 	searching, loaded, loading, decision, reply, summary bool
+	serverSearch                                         bool
+	readQuery                                            string
 	serial                                               uint64
 	cancel                                               context.CancelFunc
 	cursors                                              map[string]int
@@ -41,6 +43,8 @@ type agentboxState struct {
 	rankBusy                                             bool
 	followLaunch                                         bool
 	pendingSources                                       map[string]bool
+	ack                                                  *inboxAcknowledgement
+	reorderNow                                           bool
 }
 
 type inboxUndo struct {
@@ -77,6 +81,7 @@ type inboxMutationMsg struct {
 	receipt  client.InboxActionReceipt
 	previous *inboxUndo
 	undo     bool
+	order    []string
 }
 type inboxRankMsg struct {
 	previous config.InboxPreferences
@@ -140,6 +145,11 @@ func (m *Model) loadInbox(force bool) tea.Cmd {
 	m.agentbox.serial++
 	serial, session := m.agentbox.serial, m.session
 	query := m.agentbox.query.Value()
+	serverSearch := m.agentbox.serverSearch
+	if serverSearch {
+		query = strings.TrimSpace(query)
+	}
+	m.agentbox.readQuery = query
 	cursors := map[string]int{}
 	for id, cursor := range m.agentbox.cursors {
 		cursors[id] = cursor
@@ -156,12 +166,19 @@ func (m *Model) loadInbox(force bool) tea.Cmd {
 	work := func() tea.Msg {
 		defer cancel()
 		defer close(updates)
-		page, err := session.InboxReadProgress(ctx, query, cursors, func(source client.InboxSource) {
+		publish := func(source client.InboxSource) {
 			select {
 			case updates <- source:
 			case <-ctx.Done():
 			}
-		})
+		}
+		var page client.InboxPage
+		var err error
+		if serverSearch {
+			page, err = session.InboxSearchProgress(ctx, query, publish)
+		} else {
+			page, err = session.InboxReadProgress(ctx, query, cursors, publish)
+		}
 		prefs, prefErr := session.InboxPreferences()
 		return inboxMsg{serial: serial, page: page, prefs: prefs, err: err, prefsErr: prefErr}
 	}
@@ -229,12 +246,14 @@ func (m *Model) inboxLoaded(msg inboxMsg) tea.Cmd {
 
 func (m *Model) filterInbox() {
 	a := &m.agentbox
+	previous := a.rows
+	query := strings.ToLower(strings.TrimSpace(a.query.Value()))
 	a.rows = nil
 	for _, row := range a.page.Rows {
 		bucket := client.InboxBucket(row, time.Now())
 		// Keep the exact row owning the live reply visible while its lifecycle
 		// changes. Leaving reply reapplies the filter; no editor is retargeted.
-		keepReply := a.reply && a.selected == row.Target.Key() && m.inboxAttached(row)
+		keepReply := (a.reply || a.ack != nil && a.ack.row.Target.Key() == row.Target.Key()) && a.selected == row.Target.Key() && m.inboxAttached(row)
 		if !keepReply && a.view != "all" && a.view != bucket {
 			continue
 		}
@@ -247,9 +266,31 @@ func (m *Model) filterInbox() {
 		if client.InboxPriority(a.prefs, row.Target) < a.minimumPriority {
 			continue
 		}
+		if !keepReply && !a.serverSearch && query != "" && !strings.Contains(strings.ToLower(row.Thread.Title+" "+row.Thread.Project+" "+row.Environment+" "+row.Target.ProfileID), query) {
+			continue
+		}
 		a.rows = append(a.rows, row)
 	}
 	client.InboxRank(a.rows, a.prefs)
+	if a.ack != nil {
+		found := false
+		for _, row := range a.rows {
+			if row.Target.Key() == a.ack.row.Target.Key() {
+				a.ack.row = row
+				found = true
+				break
+			}
+		}
+		if !found && a.selected == a.ack.row.Target.Key() {
+			a.rows = append(a.rows, a.ack.row)
+		}
+	}
+	if !a.reorderNow && m.mode == "agentbox" {
+		a.rows = freezeInboxRows(previous, a.rows)
+	}
+	if !a.loading {
+		a.reorderNow = false
+	}
 	for _, row := range a.rows {
 		if row.Target.Key() == a.selected {
 			return
@@ -306,9 +347,8 @@ func (m *Model) stepInbox(delta int) tea.Cmd {
 	index := max(0, min(len(m.agentbox.rows)-1, m.inboxIndex()+delta))
 	m.agentbox.selected = m.agentbox.rows[index].Target.Key()
 	m.agentbox.review = nil
-	if m.agentbox.decision {
-		return m.openInboxThread(false)
-	}
+	m.agentbox.decision = false
+	m.agentbox.ack = nil
 	return nil
 }
 
@@ -364,13 +404,17 @@ func (m *Model) agentboxKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			m.agentbox.searching = false
 			return true, m.restoreFocus()
 		case msg.String() == "enter":
+			if m.inboxServerSearchOffered() {
+				return true, m.searchInboxServer()
+			}
 			m.agentbox.searching = false
 			m.agentbox.cursors = map[string]int{}
 			return true, tea.Batch(m.loadInbox(true), m.restoreFocus())
 		}
-		var cmd tea.Cmd
-		m.agentbox.query, cmd = m.agentbox.query.Update(msg)
-		return true, cmd
+		return true, m.updateComponent("agentbox-search", m.agentbox.serial, msg)
+	}
+	if msg.String() == "enter" && m.inboxServerSearchOffered() {
+		return true, m.searchInboxServer()
 	}
 	for _, item := range []struct{ id, action string }{
 		{"agentbox.previous", "previous"}, {"agentbox.next", "next"}, {"agentbox.open", "open"}, {"agentbox.reply", "reply"}, {"agentbox.file", "file"}, {"agentbox.review", "mark-reviewed"}, {"agentbox.later", "later-menu"}, {"agentbox.summary", "summary"}, {"agentbox.undo", "undo"}, {"agentbox.inbox", "back"}, {"agentbox.view", "views"}, {"agentbox.priority", "priority"}, {"agentbox.diff", "diff"}, {"agentbox.developer", "developer"},
@@ -384,7 +428,7 @@ func (m *Model) agentboxKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	if key.Matches(msg, m.actionBinding("agentbox.search")) {
 		m.agentbox.searching = true
-		return true, m.agentbox.query.Focus()
+		return true, m.componentCmd("agentbox-search", m.agentbox.serial, m.agentbox.query.Focus())
 	}
 	if key.Matches(msg, m.actionBinding("agentbox.focus-next"), m.actionBinding("agentbox.focus-previous")) {
 		m.agentbox.decision = !m.agentbox.decision
@@ -440,9 +484,14 @@ func (m *Model) agentboxAction(name, args string) tea.Cmd {
 	if args == "needs-you" {
 		args = "needs"
 	}
+	if args == "reviewed" {
+		args = "done"
+	}
 	switch args {
 	case "needs", "working", "queued", "later", "later-view", "done", "all", "unknown":
 		m.agentbox.view = strings.TrimSuffix(args, "-view")
+		m.agentbox.ack = nil
+		m.agentbox.reorderNow = true
 		m.agentbox.reply = false
 		m.agentbox.decision = false
 		m.filterInbox()
@@ -456,6 +505,8 @@ func (m *Model) agentboxAction(name, args string) tea.Cmd {
 	case "reply":
 		return m.openInboxThread(true)
 	case "back":
+		m.agentbox.ack = nil
+		m.agentbox.reorderNow = true
 		m.agentbox.reply = false
 		m.agentbox.decision = false
 		m.filterInbox()
@@ -466,7 +517,10 @@ func (m *Model) agentboxAction(name, args string) tea.Cmd {
 	case "views":
 		return m.inboxViews()
 	case "refresh":
+		m.agentbox.reorderNow = true
 		return m.loadInbox(true)
+	case "next-acknowledged":
+		return m.nextAcknowledgedInbox()
 	case "diff":
 		return m.loadInboxReview()
 	case "mark-reviewed":
@@ -492,6 +546,8 @@ func (m *Model) agentboxAction(name, args string) tea.Cmd {
 		return m.inboxPages()
 	case "info":
 		return m.inboxInfo()
+	case "server-search":
+		return m.searchInboxServer()
 	}
 	if value, ok := strings.CutPrefix(args, "priority:"); ok {
 		n, err := strconv.Atoi(value)
@@ -556,6 +612,7 @@ func (m *Model) inboxAdoptLaunch(name string) {
 	m.agentbox.followLaunch = true
 	m.agentbox.reply = false
 	m.agentbox.query.SetValue("")
+	m.agentbox.serverSearch = false
 	m.agentbox.environment, m.agentbox.project = "", ""
 	m.agentbox.minimumPriority = 0
 	m.agentbox.cursors = map[string]int{}
@@ -576,7 +633,7 @@ func (m *Model) fileInboxWork() tea.Cmd {
 
 func (m *Model) inboxViews() tea.Cmd {
 	items := []list.Item{}
-	for _, view := range []struct{ id, label string }{{"needs", "Needs you"}, {"working", "Working"}, {"queued", "Queued"}, {"later-view", "Later"}, {"done", "Done"}, {"all", "All"}, {"unknown", "Unknown / unavailable"}} {
+	for _, view := range []struct{ id, label string }{{"needs", "Needs you"}, {"working", "Working"}, {"queued", "Queued"}, {"later-view", "Later"}, {"done", "Reviewed"}, {"all", "All"}, {"unknown", "Unknown / unavailable"}} {
 		items = append(items, choiceItem{title: view.label, command: "inbox", args: view.id})
 	}
 	items = append(items, choiceItem{title: "Environment, project, priority", command: "inbox", args: "filters"}, choiceItem{title: "More / previous native pages", command: "inbox", args: "pages"}, choiceItem{title: "Refresh", command: "inbox", args: "refresh"}, choiceItem{title: "Info", command: "inbox", args: "info"})

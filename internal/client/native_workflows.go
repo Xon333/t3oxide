@@ -29,6 +29,15 @@ type nativeLaunchDefaults struct {
 func (a *Session) creationEnvironment(ctx context.Context) (config.Environment, error) {
 	profile := a.manager.CreationProfile
 	if profile == "" {
+		if pin, ok := a.CreationDestination(); ok {
+			env, err := a.navigatorEnvironment(pin.ProfileID)
+			if err != nil || env.EnvironmentID != pin.EnvironmentID {
+				return config.Environment{}, errors.New("pinned creation destination is unavailable or changed; change or reset Creation destination before New")
+			}
+			return env, nil
+		}
+	}
+	if profile == "" {
 		for _, env := range a.manager.Environments {
 			if env.DefaultForNew {
 				if profile != "" {
@@ -64,9 +73,13 @@ func (a *Session) creationEnvironment(ctx context.Context) (config.Environment, 
 	return a.navigatorEnvironment(answer.ChoiceIDs[0])
 }
 func nativeConnection(ctx context.Context, env config.Environment) (*wire.Connection, error) {
+	conn, _, err := nativeConnectionCapabilities(ctx, env)
+	return conn, err
+}
+func nativeConnectionCapabilities(ctx context.Context, env config.Environment) (*wire.Connection, map[string]any, error) {
 	conn, err := wire.Start(ctx, env)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	hello, err := conn.Request(ctx, "hello", nil, "")
 	if err == nil && (stringValue(hello["environmentId"]) != env.EnvironmentID || numberValue(hello["protocol"]) != 1 || numberValue(hello["orchestrationProtocol"]) != 2) {
@@ -78,9 +91,9 @@ func nativeConnection(ctx context.Context, env config.Environment) (*wire.Connec
 	}
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return conn, nil
+	return conn, features, nil
 }
 func closeNativeConnection(conn *wire.Connection) {
 	conn.Close()
@@ -275,6 +288,11 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 	if err != nil {
 		return Result{}, err
 	}
+	if projectID == "" && explicitProfile == "" && a.manager.CreationProfile == "" {
+		if pin, ok := a.CreationDestination(); ok && pin.ProfileID == env.ID && pin.EnvironmentID == env.EnvironmentID {
+			projectID = pin.ProjectID
+		}
+	}
 	conn, err := nativeConnection(ctx, env)
 	if err != nil {
 		return Result{}, err
@@ -346,7 +364,7 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 			location.Workspace = "New worktree from " + d.WorkspaceStrategy.BaseRef + " · " + d.WorkspaceRoot
 		}
 		actions := launchActions(&d.Catalog, &selected, true)
-		actions = append(actions, "workspace", "defaults", "project", "environment")
+		actions = append(actions, "workspace", "defaults", "native-defaults", "pin-destination", "destination", "project", "environment")
 		bound := d
 		boundSelection := selected.Clone()
 		store := func(in LaunchInput) error {
@@ -372,6 +390,20 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 			return Result{}, nil
 		}
 		switch answer.Action {
+		case "destination":
+			if _, err = a.EditCreationDestination(ctx); err != nil {
+				return Result{}, err
+			}
+			closeNativeConnection(conn)
+			return a.newConversationInEnvironment(ctx, input.Title, "", isolated, "", &input)
+		case "pin-destination":
+			if err = a.PinCreationDestination(env.ID, env.EnvironmentID, project.ID); err != nil {
+				return Result{}, err
+			}
+		case "native-defaults":
+			if _, err = a.EditNativeDefaults(ctx, env.ID, project.ID); err != nil {
+				return Result{}, err
+			}
 		case "project":
 			closeNativeConnection(conn)
 			return a.newConversationInEnvironment(ctx, input.Title, "", isolated, env.ID, &input)
@@ -488,7 +520,7 @@ func (a *Session) performProjectLaunch(ctx context.Context, conn *wire.Connectio
 	result, err := conn.Request(ctx, "launch-project", fields, id)
 	if err != nil {
 		if !retry && !wire.IsUncertain(err) {
-			if clear := a.manager.State.ClearPending(env.EnvironmentID, false, id); clear != nil {
+			if clear := a.manager.State.RejectPending(env.EnvironmentID, false, id); clear != nil {
 				err = errors.Join(err, clear)
 			}
 		}

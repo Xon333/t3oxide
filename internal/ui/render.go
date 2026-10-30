@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/glamour/v2"
 	gansi "charm.land/glamour/v2/ansi"
 	gstyles "charm.land/glamour/v2/styles"
@@ -24,22 +25,43 @@ type rowSignature struct {
 	streaming, truncated bool
 	attachmentCount      int64
 }
+
+// The body and its shell have different invalidation domains. Attachment,
+// role and truncation changes must not invoke the Markdown parser again.
+// An overflow entry keeps only its bounded source signature, never its output.
 type cachedRow struct {
 	signature rowSignature
+	bodyText  string
+	plain     bool
+	body      string
 	rendered  string
 	lines     int
+	overflow  bool
+	reading   *rowReadingMap
+}
+type transcriptInputRow struct {
+	key       string
+	signature rowSignature
+}
+type renderCounters struct {
+	body, rich, plain, assembly uint64
 }
 type renderedRow struct {
 	key          string
 	start, lines int
+	plain        bool
+	reading      *rowReadingMap
 }
 
 // A reading position belongs to an authoritative item, rather than a line in
 // the concatenated page. Keep the desired offset even when a reflow temporarily
 // makes that item shorter; restoring the earlier layout can then restore it.
 type readingAnchor struct {
-	key    string
-	offset int
+	key                 string
+	offset              int
+	plain, sourceMapped bool
+	sourceOffset        int
+	sourceHash          [32]byte
 }
 
 type renderPageIdentity struct {
@@ -62,6 +84,11 @@ type transcriptRenderer struct {
 	markdown *glamour.TermRenderer
 	cache    map[string]cachedRow
 	rows     []renderedRow
+	layout   transcriptLayout
+	inputs   []transcriptInputRow
+	content  string
+	complete bool
+	counters renderCounters
 }
 type renderRequest struct {
 	generation, revision, serial uint64
@@ -70,18 +97,19 @@ type renderRequest struct {
 	width                        int
 	theme                        string
 	reset, follow                bool
+	searchTerm                   string
 }
 type renderedMsg struct {
-	request renderRequest
-	content string
-	err     error
-	rows    []renderedRow
+	request  renderRequest
+	content  string
+	err      error
+	rows     []renderedRow
+	prepared *preparedTranscript
 }
 
 // render is used by one asynchronous Tea command at a time. Its cache is
 // bounded by the currently displayed authoritative page, not conversation age.
 func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (string, error) {
-	r.rows = nil
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -91,15 +119,14 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 	width := max(1, req.width)
 	layout := newTranscriptLayout(width)
 	p := colors(req.theme)
-	if r.width != width || r.theme != req.theme || r.markdown == nil {
+	if r.layout != layout || r.theme != req.theme || r.markdown == nil {
 		formatter := "terminal16m"
 		if req.theme == "terminal" {
 			formatter = "terminal16"
 		}
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithStyles(transcriptMarkdownStyle(p)),
-			// Bound native table layout before it allocates padded cells. The
-			// final ANSI hardwrap also contains tabs and wide code/diff tokens.
+			// Keep the native table bound before padded cells are allocated.
 			glamour.WithWordWrap(layout.bodyWidth),
 			glamour.WithChromaFormatter(formatter),
 		)
@@ -107,9 +134,18 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 			return "", err
 		}
 		r.markdown = renderer
-		r.width, r.theme = width, req.theme
+		r.layout, r.theme = layout, req.theme
 		r.cache = make(map[string]cachedRow)
+		r.complete = false
 	}
+	r.width = width
+	// Control revisions and an equivalent outer width do not reassemble the
+	// page. Exact structured signatures deliberately avoid delimiter/hash aliases.
+	if r.complete && sameTranscriptRows(r.inputs, req.snapshot) {
+		return r.content, nil
+	}
+	r.complete = false
+	r.rows = nil
 	next := make(map[string]cachedRow, min(len(req.snapshot.Items), wire.MaxRows))
 	limitNotice := layout.wrap(p.subtle().Render("Display limit · Details in full T3"))
 	var out strings.Builder
@@ -121,31 +157,62 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		signature := rowSignature{kind: row.Kind, text: row.Text, role: agentRole(req.snapshot, row), streaming: row.Streaming, truncated: row.Truncated, attachmentCount: row.AttachmentCount}
+		signature := transcriptSignature(req.snapshot, row)
 		cached, ok := r.cache[row.Key]
 		if !ok || cached.signature != signature {
-			source := safeText(row.Text)
-			body, err := r.markdown.Render(source)
-			if err != nil {
-				body = p.plain().Render(source)
+			plain := row.Streaming && (row.Kind == "assistant" || row.Kind == "assistant_message")
+			body := cached.body
+			if !ok || cached.overflow || cached.bodyText != row.Text || cached.plain != plain {
+				source := safeText(row.Text)
+				r.counters.body++
+				if plain {
+					r.counters.plain++
+					body = p.plain().Render(source)
+				} else {
+					r.counters.rich++
+					var err error
+					body, err = r.markdown.Render(source)
+					if err != nil {
+						body = p.plain().Render(source)
+					}
+				}
+				// Glamour itself is not cancellable. Check immediately after its bounded
+				// conversion, before sanitation/wrapping, and before publication.
+				if err := ctx.Err(); err != nil {
+					return "", err
+				}
+				body = trimBlankLines(safeRenderedMarkdown(body))
+				if strings.TrimSpace(ansi.Strip(body)) == "" {
+					body = p.subtle().Render("(no text)")
+				}
 			}
-			body = trimBlankLines(safeRenderedMarkdown(body))
-			if strings.TrimSpace(ansi.Strip(body)) == "" {
-				body = p.subtle().Render("(no text)")
-			}
+			decoratedBody := body
 			if row.Truncated {
-				body += "\n\n" + p.subtle().Render("Message shortened · Details in full T3")
+				decoratedBody += "\n\n" + p.subtle().Render("Message shortened · Details in full T3")
 			}
-			rendered := layout.message(row, body, p, signature.role)
-			cached = cachedRow{signature: signature, rendered: rendered, lines: strings.Count(rendered, "\n") + 1}
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			rendered := layout.message(row, decoratedBody, p, signature.role)
+			cached = cachedRow{signature: signature, bodyText: row.Text, plain: plain, body: body, rendered: rendered, lines: strings.Count(rendered, "\n") + 1}
+			// Intrinsic overflow is independent of prefix budget. Retain a bounded
+			// negative entry so a changing badge or neighbouring row cannot repeat it.
+			if len(rendered)+len("\n\n")+len(limitNotice) > maxRenderedBytes {
+				cached = cachedRow{signature: signature, bodyText: row.Text, plain: plain, overflow: true}
+			} else {
+				cached.reading = prepareRowReading(row.Text, rendered)
+			}
 		}
 		separator := ""
 		if out.Len() > 0 {
 			separator = "\n\n"
 		}
-		// Reserve the notice before accepting a row so the byte cap is strict,
-		// including row spacing, ANSI styles, and the final notice itself.
-		if out.Len()+len(separator)+len(cached.rendered)+len("\n\n")+len(limitNotice) > maxRenderedBytes {
+		if cached.overflow || out.Len()+len(separator)+len(cached.rendered)+len("\n\n")+len(limitNotice) > maxRenderedBytes {
+			if cached.overflow {
+				next[row.Key] = cached
+			}
+			// A remaining-budget rejection is not intrinsic: dropping earlier rows
+			// makes the same row eligible again on a subsequent authoritative page.
 			if out.Len() > 0 {
 				out.WriteString("\n\n")
 			}
@@ -153,27 +220,80 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 			break
 		}
 		next[row.Key] = cached
-		r.rows = append(r.rows, renderedRow{key: row.Key, start: line, lines: cached.lines})
-		line += cached.lines + 1 // two newlines between the last and next row
+		r.rows = append(r.rows, renderedRow{key: row.Key, start: line, lines: cached.lines, plain: cached.plain, reading: cached.reading})
+		line += cached.lines + 1
 		out.WriteString(separator)
 		out.WriteString(cached.rendered)
 	}
-	r.cache = next
 	if len(req.snapshot.Items) == 0 {
 		out.WriteString(layout.wrap(p.subtle().Render("No messages on this page.\nUse the composer when Latest is synchronized.")))
 	}
-	return out.String(), nil
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	r.cache = next
+	r.inputs = captureTranscriptRows(req.snapshot)
+	r.content = out.String()
+	r.counters.assembly++
+	r.complete = true
+	return r.content, nil
+}
+
+func transcriptSignature(snapshot *wire.Snapshot, row wire.Row) rowSignature {
+	return rowSignature{kind: row.Kind, text: row.Text, role: agentRole(snapshot, row), streaming: row.Streaming, truncated: row.Truncated, attachmentCount: row.AttachmentCount}
+}
+
+func sameTranscriptRows(inputs []transcriptInputRow, snapshot *wire.Snapshot) bool {
+	if snapshot == nil || len(inputs) != min(len(snapshot.Items), wire.MaxRows) {
+		return false
+	}
+	for i, input := range inputs {
+		row := snapshot.Items[i]
+		if input.key != row.Key || input.signature != transcriptSignature(snapshot, row) {
+			return false
+		}
+	}
+	return true
+}
+
+func captureTranscriptRows(snapshot *wire.Snapshot) []transcriptInputRow {
+	rows := make([]transcriptInputRow, min(len(snapshot.Items), wire.MaxRows))
+	for i := range rows {
+		rows[i] = transcriptInputRow{key: snapshot.Items[i].Key, signature: transcriptSignature(snapshot, snapshot.Items[i])}
+	}
+	return rows
+}
+
+// Prepared content is single-owner: the render command constructs it, then
+// transfers it to Update. No mutable viewport or line slice is shared with the
+// live UI while work runs. This retains Bubbles' maintained viewport and moves
+// its full-page width scan plus search sanitation off the event loop.
+type preparedTranscript struct {
+	content    string
+	viewport   viewport.Model
+	lowerLines []string
+	term       string
+	matches    []int
+}
+
+func prepareTranscript(content string, width int, term string) *preparedTranscript {
+	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(1))
+	v.SoftWrap = false
+	v.FillHeight = true
+	v.SetContent(content)
+	lines := strings.Split(strings.ToLower(safeText(content)), "\n")
+	return &preparedTranscript{content: content, viewport: v, lowerLines: lines, term: term, matches: findTranscriptLines(lines, term)}
 }
 
 func anchorAt(rows []renderedRow, line int) readingAnchor {
 	for _, row := range rows {
 		if line < row.start+row.lines {
-			return readingAnchor{key: row.key, offset: max(0, line-row.start)}
+			return rowAnchor(row, max(0, line-row.start))
 		}
 	}
 	if len(rows) > 0 {
 		row := rows[len(rows)-1]
-		return readingAnchor{key: row.key, offset: row.lines - 1}
+		return rowAnchor(row, row.lines-1)
 	}
 	return readingAnchor{}
 }
@@ -184,6 +304,14 @@ func remapAnchor(anchor readingAnchor, old, next []renderedRow) (readingAnchor, 
 		index[row.key] = row
 	}
 	if row, ok := index[anchor.key]; ok {
+		// Plain streaming to rich final layout can change line heights. If
+		// exact source bytes survived, follow its prepared source position.
+		// Replacements/shrink use the established row-offset fallback.
+		if anchor.plain && !row.plain && anchor.sourceMapped && row.reading != nil && anchor.sourceHash == row.reading.hash {
+			if mapped := lineAtSource(row.reading.offsets, anchor.sourceOffset); mapped >= 0 {
+				anchor = rowAnchor(row, mapped)
+			}
+		}
 		return anchor, row.start + min(anchor.offset, row.lines-1)
 	}
 	// Prefer the closest surviving neighbour, breaking ties toward the next

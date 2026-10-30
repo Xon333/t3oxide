@@ -59,6 +59,18 @@ type RuntimeDetails struct {
 }
 
 func decodeExtensions(o object, m *Metadata) error {
+	if raw := o["providerIdentity"]; len(raw) > 0 && string(raw) != "null" {
+		if len(raw) > 8192 {
+			return fieldError("providerIdentity")
+		}
+		m.ProviderIdentity = &ProviderIdentity{}
+		if json.Unmarshal(raw, m.ProviderIdentity) != nil {
+			return fieldError("providerIdentity")
+		}
+		if err := m.ProviderIdentity.Validate(); err != nil {
+			return err
+		}
+	}
 	if raw := o["activity"]; len(raw) > 0 && string(raw) != "null" {
 		page, err := DecodeActivityPage(raw)
 		if err != nil {

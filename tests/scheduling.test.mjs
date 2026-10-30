@@ -30,14 +30,14 @@ class Output extends Writable {
     await tick();
   }
 }
-async function session(t, createBackend) {
+async function session(t, createBackend, instrumentation = {}) {
   const dir = await mkdtemp(join(tmpdir(),'t3oxide-scheduling-'));
   const token = join(dir,'token'), config = join(dir,'host.json');
   await writeFile(token,'fixture-token',{mode:0o600});
   await writeFile(config,JSON.stringify({baseUrl:'http://127.0.0.1:1',environmentId:'env-a',tokenFile:token,allowWrites:true}),{mode:0o600});
   const input = new PassThrough(), output = new Output(), failures = [];
   let emit, closed = 0;
-  const handle = await run(['--config',config], {input,output,onFailure:e=>failures.push(e),
+  const handle = await run(['--config',config], {input,output,onFailure:e=>failures.push(e),...instrumentation,
     createBackend(c, callback) {
       emit = callback;
       const b = createBackend(c, callback), close = b.close?.bind(b);
@@ -64,6 +64,23 @@ test('run routes Stop around a stalled read, retaining protocol and operation ID
   assert.equal(h.reply('read-id'),undefined); assert.equal(h.reply('send-id'),undefined);
   read.resolve({threads:[]}); await tick();
   assert.equal(started.at(-1)[0],'send'); assert.ok(h.reply('send-id').result);
+});
+
+test('optional output instrumentation reports bounded queue and callback stages without packet content',async t=>{
+  const trace=[];
+  const h=await session(t,()=>({probe:async()=>({protocol:1})}),{trace:entry=>trace.push(entry)});
+  h.output.blocked=true;
+  h.emit('view',{revision:1,privateText:'synthetic hidden text'});
+  h.emit('delta',{baseRevision:1,revision:2,privateText:'synthetic hidden text'});
+  h.send('hello','private-operation-id');await tick();
+  assert.equal(Math.max(...trace.map(e=>e.queuedFrames)),2);
+  assert.ok(trace.some(e=>e.stage==='operation-admitted'));
+  assert.ok(!trace.some(e=>e.stage==='output-write-complete'));
+  await h.output.release();await tick();
+  assert.equal(trace.filter(e=>e.stage==='output-write-complete').length,3);
+  assert.deepEqual(h.output.packets.map(p=>p.event??p.id),['view','delta','private-operation-id']);
+  assert.ok(!JSON.stringify(trace).includes('synthetic hidden text'));
+  assert.ok(!JSON.stringify(trace).includes('private-operation-id'));
 });
 
 test('run with durable T3 act dispatches Stop before a stalled send ACK; other mutations stay ordered', async t => {

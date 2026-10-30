@@ -33,32 +33,41 @@ import (
 type object = map[string]any
 
 type fixture struct {
-	t               *testing.T
-	mu              sync.Mutex
-	server          *httptest.Server
-	profile         config.Environment
-	environmentID   string
-	sequence        int64
-	threads         map[string]object
-	sockets         map[*fixtureSocket]struct{}
-	receipts        map[string]object
-	commands        map[string]object
-	dispatches      []string
-	effects         int
-	dropAck         map[string]bool
-	dropMessages    bool
-	dropSelections  bool
-	catalog         object
-	catalogReads    int
-	violations      []string
-	requests        map[string]int
-	nextSendAck     *fixtureAckHold
-	nextLaunchAck   *fixtureAckHold
-	activityItems   map[string]object
-	activityHistory map[string][]any
-	nativeContract  bool
-	projects        []any
-	shellHold       <-chan struct{}
+	t                *testing.T
+	mu               sync.Mutex
+	server           *httptest.Server
+	profile          config.Environment
+	environmentID    string
+	sequence         int64
+	threads          map[string]object
+	sockets          map[*fixtureSocket]struct{}
+	receipts         map[string]object
+	commands         map[string]object
+	dispatches       []string
+	effects          int
+	dropAck          map[string]bool
+	dropMessages     bool
+	dropSelections   bool
+	catalog          object
+	catalogReads     int
+	violations       []string
+	requests         map[string]int
+	nextSendAck      *fixtureAckHold
+	nextLaunchAck    *fixtureAckHold
+	activityItems    map[string]object
+	activityHistory  map[string][]any
+	nativeContract   bool
+	projects         []any
+	shellHold        <-chan struct{}
+	activeShellHolds int
+	subscriptionHold <-chan struct{}
+	events           []fixtureStoredEvent
+}
+
+type fixtureStoredEvent struct {
+	thread   string
+	sequence int64
+	item     object
 }
 
 type fixtureAckHold struct {
@@ -150,7 +159,7 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 	if r.URL.Path == "/.well-known/t3/environment" {
 		jsonResponse(w, object{"environmentId": f.environmentID, "orchestrationProtocolVersion": 2,
-			"serverVersion": "0.0.0-go-fixture", "capabilities": object{"serverResolvedCommandContext": true}})
+			"serverVersion": "0.0.0-go-fixture", "capabilities": object{"serverResolvedCommandContext": true, "threadPinning": true}})
 		return
 	}
 	if r.URL.Path == "/ws" {
@@ -171,6 +180,10 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 		hold := f.shellHold
 		f.mu.Unlock()
 		if hold != nil {
+			f.mu.Lock()
+			f.activeShellHolds++
+			f.mu.Unlock()
+			defer func() { f.mu.Lock(); f.activeShellHolds--; f.mu.Unlock() }()
 			select {
 			case <-hold:
 			case <-r.Context().Done():
@@ -401,10 +414,29 @@ func (f *fixture) rpc(s *fixtureSocket, frame object) {
 			f.violation("unbounded subscription requested")
 		}
 		f.mu.Lock()
+		hold := f.subscriptionHold
+		f.mu.Unlock()
+		if hold != nil {
+			<-hold
+		}
+		f.mu.Lock()
 		s.subscription = rid
 		s.thread, _ = payload["threadId"].(string)
+		after, _ := payload["afterSequence"].(float64)
+		items := []any{}
+		// Match pinned native ws.ts: replay the persisted afterSequence range
+		// before synchronized, then publish the live tail. The first bounded
+		// companion frame can correctly arrive before subscription admission.
+		for _, event := range f.events {
+			if event.thread == s.thread && event.sequence > int64(after) && event.sequence <= f.sequence {
+				items = append(items, event.item)
+			}
+		}
+		items = append(items, object{"kind": "synchronized"})
+		// Hold fixture publication order through replay+marker. Real T3 owns
+		// its persisted event high-water/catch-up implementation.
+		_ = s.send([]any{object{"_tag": "Chunk", "requestId": rid, "values": items}})
 		f.mu.Unlock()
-		_ = s.send([]any{object{"_tag": "Chunk", "requestId": rid, "values": []any{object{"kind": "synchronized"}}}})
 		return
 	}
 	if frame["tag"] != "orchestration.dispatchCommand" && frame["tag"] != "orchestration.launchThread" {
@@ -508,11 +540,12 @@ func (f *fixture) broadcast(thread, kind string, payload object, sequence int64)
 		f.sequence++
 		sequence = f.sequence
 	}
+	item := object{"kind": "event", "sequence": sequence, "event": object{"threadId": thread, "type": kind, "payload": clone(payload)}}
+	f.events = append(f.events, fixtureStoredEvent{thread: thread, sequence: sequence, item: item})
 	frames := map[*fixtureSocket]object{}
 	for s := range f.sockets {
 		if s.subscription != "" {
-			frames[s] = object{"_tag": "Chunk", "requestId": s.subscription, "values": []any{object{"kind": "event", "sequence": sequence,
-				"event": object{"threadId": thread, "type": kind, "payload": payload}}}}
+			frames[s] = object{"_tag": "Chunk", "requestId": s.subscription, "values": []any{item}}
 		}
 	}
 	f.mu.Unlock()

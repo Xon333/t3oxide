@@ -122,23 +122,25 @@ func (m *Manager) Close() error {
 }
 
 type Thread struct {
-	UpdatedAt         string              `json:"updatedAt,omitempty"`
-	Inbox             *wire.InboxMetadata `json:"inbox,omitempty"`
-	ID                string              `json:"id"`
-	Title             string              `json:"title"`
-	Project           string              `json:"project"`
-	ProjectID         string              `json:"projectId,omitempty"`
-	Status            string              `json:"status"`
-	Model             string              `json:"model"`
-	Lineage           *wire.Lineage       `json:"lineage,omitempty"`
-	ParentTitle       string              `json:"parentTitle,omitempty"`
-	ChildCount        int                 `json:"childCount,omitempty"`
-	Depth             int                 `json:"depth,omitempty"`
-	Expanded          bool                `json:"expanded,omitempty"`
-	ContextOnly       bool                `json:"contextOnly,omitempty"`
-	WorkingChildCount int                 `json:"workingChildCount,omitempty"`
-	KnownChildCount   int                 `json:"knownChildCount,omitempty"`
-	LoadedChildCount  int                 `json:"loadedChildCount,omitempty"`
+	ProviderIdentity   *wire.ProviderIdentity `json:"providerIdentity,omitempty"`
+	ProviderInstanceID string                 `json:"providerInstanceId,omitempty"`
+	UpdatedAt          string                 `json:"updatedAt,omitempty"`
+	Inbox              *wire.InboxMetadata    `json:"inbox,omitempty"`
+	ID                 string                 `json:"id"`
+	Title              string                 `json:"title"`
+	Project            string                 `json:"project"`
+	ProjectID          string                 `json:"projectId,omitempty"`
+	Status             string                 `json:"status"`
+	Model              string                 `json:"model"`
+	Lineage            *wire.Lineage          `json:"lineage,omitempty"`
+	ParentTitle        string                 `json:"parentTitle,omitempty"`
+	ChildCount         int                    `json:"childCount,omitempty"`
+	Depth              int                    `json:"depth,omitempty"`
+	Expanded           bool                   `json:"expanded,omitempty"`
+	ContextOnly        bool                   `json:"contextOnly,omitempty"`
+	WorkingChildCount  int                    `json:"workingChildCount,omitempty"`
+	KnownChildCount    int                    `json:"knownChildCount,omitempty"`
+	LoadedChildCount   int                    `json:"loadedChildCount,omitempty"`
 }
 
 // Session is one attachment to a selected T3 environment and conversation.
@@ -176,6 +178,8 @@ type Session struct {
 	navigating                 bool
 	scrollGoal                 string
 	uiRevision                 uint64
+	projectedStoreEpoch        uint64
+	projectionFull             bool
 	requestCancel              context.CancelFunc
 	requestID, requestRevision string
 	requestGeneration          uint64
@@ -526,6 +530,7 @@ func (a *Session) applyPacket(packet wire.Packet) error {
 			s := a.store.Snapshot()
 			a.mu.Lock()
 			a.retained = s
+			a.projectionFull = packet.Event == "view"
 			a.cachedHistory = false
 			if s.Metadata.Live && a.helloVerified && a.ready {
 				a.connectionState = "connected"
@@ -571,22 +576,36 @@ func (a *Session) snapshot() *wire.Snapshot {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.retained
+	return wire.CloneSnapshot(a.retained)
 }
 
 func (a *Session) renderEvent() Event {
-	s := a.store.Snapshot()
-	current := s != nil
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	s, epoch, current := a.store.SnapshotSince(a.projectedStoreEpoch)
+	changed := epoch != a.projectedStoreEpoch || a.uiRevision == 0
+	a.projectedStoreEpoch = epoch
 	if s == nil {
 		s = a.retained
 	}
 	a.uiRevision++
-	event := Event{Revision: a.uiRevision, Snapshot: s, Status: a.statusLocked(s), Error: a.lastError}
-	// A reconnect keeps the old page readable, but that cached page cannot
-	// complete the new watch/navigation request or consume its scroll goal.
-	if current && a.scrollGoal == s.Metadata.State {
+	event := Event{Revision: a.uiRevision, Status: a.statusLocked(s), Error: a.lastError}
+	if changed {
+		// A store clone is already private to this event. A retained fallback
+		// needs its own copy so readers cannot change reconnect/recovery state.
+		if current {
+			event.Snapshot = s
+		} else {
+			event.Snapshot = wire.CloneSnapshot(s)
+		}
+	}
+
+	// A reconnect keeps the old page readable, but a retained page or control
+	// wake cannot consume the new navigation goal. A newly accepted full
+	// bounded Latest page may reset/follow before its subscription marker;
+	// this changes reading position only, never Live/write authority.
+	firstBoundedLatest := changed && current && s != nil && a.projectionFull && a.scrollGoal == "live" && !s.Metadata.Historical && s.Metadata.State == "synchronizing"
+	if changed && current && s != nil && (a.scrollGoal == s.Metadata.State || firstBoundedLatest) {
 		event.ResetScroll = true
 		event.Follow = a.scrollGoal == "live"
 		a.scrollGoal = ""

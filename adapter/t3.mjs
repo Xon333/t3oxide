@@ -2,17 +2,17 @@
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
-import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, targetThread, trimView, validateDescriptor, view } from './core.mjs';
+import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, targetThread, text, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
 import { FEATURES, catalog, launchCommand, modelCommand, modelView, sameSelection } from './models.mjs';
 import { threadList } from './navigation.mjs';
 import { ACTIVITY_KINDS, ACTIVITY_LIMIT, activityDetail, activityItem, activityPage, trimActivity } from './activity.mjs';
-import { projectPage, resolveDefaults, launchProjectCommand, launchWorkspaceMatches, threadActionCommand, nativeRevision, reviewResult, effectiveProjectSetting, projectFileDefaults } from './native.mjs';
+import { projectPage, resolveDefaults, launchProjectCommand, launchWorkspaceMatches, threadActionCommand, nativeRevision, reviewResult, effectiveProjectSetting, projectFileDefaults, nativeDefaultsReport } from './native.mjs';
 
 // Coalesce useful frames without delaying every edit by a third of a second.
 // Structural reads have a separate sustained-rate ceiling: a burst can reveal
 // new content promptly without turning a busy stream into snapshot polling.
-export const SCHEDULING = Object.freeze({ frameMs: 80, structureMs: 120, refreshIntervalMs: 400 });
+export const SCHEDULING = Object.freeze({ frameMs: 80, structureMs: 120, refreshIntervalMs: 400, probeReceiptMs: 5000 });
 
 export async function readConfig(path) {
   const stat = await lstat(path);
@@ -35,19 +35,28 @@ export class T3 {
   constructor(config, emit, dependencies = {}) {
     this.config = config; this.emit = emit; this.fetch = dependencies.fetch ?? fetch;
     this.now = dependencies.now ?? (() => performance.now());
+    this.trace = typeof dependencies.trace === 'function' ? dependencies.trace : null;
     this.connectSocket = dependencies.connectSocket ?? connectSocket;
     this.journal = dependencies.journal ?? null;
-    this.rpc = null; this.descriptor = null; this.watchId = null;
+    this.rpc = null; this.descriptor = null; this.probeReceipt = null; this.watchId = null;
+    this.providerIdentities = new Map();
+    this.previewGeneration = 0; this.previewController = null;
     this.current = null; this.snapshotSequence = 0; this.lastStreamSequence = 0; this.generation = 0;
     this.subscription = null; this.wantConnection = false; this.closed = false;
     this.emitTimer = null; this.refreshTimer = null; this.retryTimer = null;
     this.nextRefreshAt = 0;
-    this.retryDelay = 1000; this.refreshing = false; this.refreshAgain = false;
+    this.retryDelay = 1000; this.refreshing = false; this.refreshAgain = false; this.refreshUrgent = false;
     this.duringRefresh = new Map(); this.epoch = 0; this.following = true;
     this.controllers = new Set(); this.receipts = new Map();
     this.synchronized = false;
     this.navigation = new AbortController(); this.revision = 0; this.sentView = null; this.forceSnapshot = false;
-    this.stats = { httpBytes: 0, snapshots: 0, rpcEvents: 0 };
+    this.sentRowJSON = new Map(); this.sentMetadataJSON = null;
+    this.stats = { httpBytes: 0, snapshots: 0, rpcEvents: 0, descriptors:0, tickets:0, sockets:0, frames:0, flushes:0, urgentRefreshes:0, rowSerializations:0 };
+  }
+  mark(stage, extra = {}) {
+    // Opt-in test instrumentation only. It never captures payloads, routes,
+    // thread/account identities, tokens, drafts or native configuration.
+    this.trace?.({stage,at:this.now(),generation:this.generation,epoch:this.epoch,...extra});
   }
   async http(path, method = 'GET', authenticated = true, signal) {
     const controller = new AbortController(); this.controllers.add(controller);
@@ -74,20 +83,48 @@ export class T3 {
       return JSON.parse(Buffer.concat(parts).toString('utf8'));
     } catch (error) {
       if (signal?.aborted) throw new Fault('cancelled', 'Navigation was superseded.');
-      if (error instanceof Fault) throw error;
+      if (error instanceof Fault) {
+        if (['authorization','identity_mismatch','incompatible'].includes(error.code)) {this.probeReceipt = null;this.providerIdentities.clear();}
+        throw error;
+      }
       throw new Fault('transport', 'Could not read the local T3 endpoint. No server was started or changed.');
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); this.controllers.delete(controller); }
   }
-  async probe() {
+  probeBinding() {
+    // The receipt contains no reusable transport or mutation admission. Include
+    // private credentials only in this in-memory digest, never in diagnostics.
+    return hash({environmentId:this.config.environmentId, baseUrl:this.config.baseUrl,
+      token:this.config.token, allowWrites:this.config.allowWrites, protocol:2});
+  }
+  async probe(cacheForConnect = true) {
+    this.probeReceipt = null;
+    const binding = this.probeBinding(), generation = this.generation;
+    if (this.providerIdentityBinding !== binding) this.providerIdentities.clear();
+    this.stats.descriptors++; this.mark('descriptor-start');
     const d = await this.http('/.well-known/t3/environment', 'GET', false);
-    this.descriptor = validateDescriptor(d, this.config.environmentId);
-    return { protocol: 1, adapterRevision: SOURCE, environmentId: d.environmentId,
-      serverVersion: d.serverVersion, orchestrationProtocol: d.orchestrationProtocolVersion,
+    const descriptor = validateDescriptor(d, this.config.environmentId);
+    requireThat(!this.closed && binding === this.probeBinding() && generation === this.generation,
+      'Environment configuration changed during verification.', 'cancelled');
+    this.descriptor = descriptor; this.mark('descriptor-ready');
+    const hello = { protocol: 1, adapterRevision: SOURCE, environmentId: d.environmentId,
+      serverVersion: d.serverVersion, orchestrationProtocol: d.orchestrationProtocolVersion, machineKind:this.machineKind(),
       features: { ...FEATURES, modelSelection: d.capabilities?.serverResolvedCommandContext === true,
         nativeWorkflows: d.capabilities?.serverResolvedCommandContext === true,
+        nativeDefaults: d.capabilities?.serverResolvedCommandContext === true,
+        nativeDefaultsWrite: false, threadPreview:true, serverSearch:true,
+        threadPinning:d.capabilities?.threadPinning === true,
         launchModelSelection: d.capabilities?.serverResolvedCommandContext === true,
         messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },
       writesEnabled: this.config.allowWrites === true && d.capabilities?.serverResolvedCommandContext === true };
+    if (cacheForConnect && !this.rpc) this.probeReceipt = {hello, descriptor, binding, generation, at:this.now()};
+    return hello;
+  }
+  consumeProbeReceipt(generation) {
+    const receipt = this.probeReceipt; this.probeReceipt = null;
+    if (!receipt || receipt.generation !== generation || receipt.binding !== this.probeBinding() ||
+        this.now() < receipt.at || this.now() - receipt.at > SCHEDULING.probeReceiptMs) return null;
+    this.descriptor = receipt.descriptor;
+    return receipt.hello;
   }
   async connect() {
     if (this.rpc) return;
@@ -95,32 +132,37 @@ export class T3 {
     this.wantConnection = true;
     this.connecting = (async () => {
       const generation = ++this.generation;
-      const hello = await this.probe();
+      const hello = this.consumeProbeReceipt(generation - 1) ?? await this.probe(false);
+      this.stats.tickets++; this.mark('ticket-start');
       const ticket = await this.http('/api/auth/websocket-ticket', 'POST');
+      this.mark('ticket-ready');
       requireThat(typeof ticket.ticket === 'string', 'Unsupported T3 ticket response.', 'incompatible');
       const url = new URL('/ws', this.config.baseUrl);
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       url.searchParams.set('wsTicket', ticket.ticket);
       url.searchParams.set('orchestrationProtocol', '2');
+      this.stats.sockets++; this.mark('socket-start');
       const rpc = await this.connectSocket(url.href, () => {
         if (generation === this.generation) this.disconnected();
       });
       if (this.closed || !this.wantConnection || generation !== this.generation) {
         rpc.close(); throw new Fault('disconnected', 'T3 connection ended before synchronization.');
       }
-      this.rpc = rpc;
+      this.rpc = rpc; this.mark('socket-ready');
       if (this.config.journalDirectory && !this.journal) {
         this.journal = new Journal(this.config.journalDirectory, journalScope(this.config));
       }
       this.emit('status', { state: 'connected', ...hello });
     })();
-    try { await this.connecting; } finally { this.connecting = null; }
+    try { await this.connecting; } catch (error) { this.probeReceipt = null; throw error; }
+    finally { this.connecting = null; }
   }
   disconnected() {
-    ++this.generation;
+    ++this.generation; this.probeReceipt = null;
+    this.providerIdentities.clear();
     this.rpc = null; this.subscription = null;
     this.cancelNavigation();
-    this.setState('unavailable'); this.emitView();
+    this.setState('unavailable'); this.emitView(false, true);
     if (this.closed || !this.wantConnection) return;
     this.emit('status', { state: 'reconnecting', message: 'T3 disconnected. Outstanding writes are not replayed automatically.' });
     if (this.retryTimer) return;
@@ -141,10 +183,65 @@ export class T3 {
       }
     }, delay + Math.floor(Math.random() * Math.min(500, delay / 4)));
   }
+  machineKind() {
+    const kind = this.descriptor?.platform?.machine;
+    return ['server','cloud','linux','desktop','laptop','mac-mini','mac-studio'].includes(kind) ? kind : 'unknown';
+  }
   async list(query = '', options = {}) {
-    // Metadata browsing needs no WebSocket, ticket or transcript subscription.
+    // Ordinary metadata browsing needs no WebSocket or transcript subscription.
     if (!this.descriptor) await this.probe();
-    return threadList(await this.http('/api/orchestration/shell'), query, { ...options, activeOnly: true });
+    const shell = await this.http('/api/orchestration/shell');
+    if (options.serverSearch === true) {
+      const q = text(query,800).trim();
+      requireThat(q.length >= 2 && q.length <= 200, 'Server search needs 2–200 characters.');
+      await this.connect();
+      const result = await this.rpc.call('orchestration.searchThreads',{query:q,limit:50}).promise;
+      requireThat(Array.isArray(result?.matches) && result.matches.length <= 50, 'Unsupported native search result.', 'incompatible');
+      const ids = new Map();
+      for (const match of result.matches) {
+        identifier(match.threadId,'search thread'); identifier(match.projectId,'search project');
+        requireThat(!ids.has(match.threadId) || ids.get(match.threadId) === match.projectId, 'Conflicting native search identity.', 'incompatible');
+        ids.set(match.threadId,match.projectId);
+      }
+      const projected = threadList({...shell,threads:shell.threads.filter(t => ids.get(t.id) === t.projectId)},'',
+        {...options,providerIdentities:this.providerIdentities,activeOnly:true,lifecycle:'all',cursor:0,limit:50});
+      // This native API returns a capped matches array and no exhaustive/next
+      // marker. Never relabel a zero or full page as a complete global search.
+      return {...projected,machineKind:this.machineKind(),query:q,serverSearch:true,
+        searchScope:'native recent message search',searchIncomplete:true};
+    }
+    return {...threadList(shell, query, { ...options, providerIdentities:this.providerIdentities, activeOnly: true }),machineKind:this.machineKind()};
+  }
+  cancelPreview() { ++this.previewGeneration; this.previewController?.abort(); this.previewController=null; }
+  async previewThread(a) {
+    identifier(a.threadId,'preview thread');
+    this.cancelPreview();
+    const generation=this.previewGeneration, controller=new AbortController(); this.previewController=controller;
+    try {
+      if (!this.descriptor) await this.probe();
+      requireThat(generation===this.previewGeneration && !this.closed, 'Preview was superseded.', 'cancelled');
+      const snapshot=await this.bounded(a.threadId,controller.signal);
+      requireThat(generation===this.previewGeneration && !this.closed, 'Preview was superseded.', 'cancelled');
+      const preview=modelView(snapshot,a.threadId,this.providerIdentities);
+      // No watch, seen mark, socket, request offer, journal or mutation authority.
+      preview.state='synchronizing'; preview.live=false; preview.historical=false; preview.revision=1;
+      preview.requests=[]; preview.activeRunId=null;
+      trimView(preview); trimActivity(preview.activity,preview.sequence);
+      const result={threadId:a.threadId,observedAt:preview.observedAt,available:true,readOnly:true,view:preview};
+      requireThat(Buffer.byteLength(JSON.stringify(result)) <= LIMIT.frame-8192, 'Preview exceeds the read-only display budget.', 'too_large');
+      return result;
+    } finally { if (generation===this.previewGeneration) this.previewController=null; }
+  }
+  async nativeDefaults(a) {
+    identifier(a.projectId,'settings project');
+    requireThat(['project','environment'].includes(a.scope ?? 'project'), 'Invalid native defaults scope.');
+    await this.connect();
+    const shell=await this.http('/api/orchestration/shell');
+    const config=await this.rpc.call('server.getConfig',{}).promise;
+    if (!config.settings) config.settings=await this.rpc.call('server.getSettings',{}).promise;
+    const report=nativeDefaultsReport(shell,config,a.projectId,a.scope ?? 'project');
+    this.rememberProvider(report.providerIdentity);
+    return report;
   }
   async models(threadId) {
     await this.connect();
@@ -190,6 +287,7 @@ export class T3 {
       defaults.workspaceStrategy={type:'worktree',baseRef:base.name};
     }
     defaults.revision=hash(defaults);
+    this.rememberProvider(defaults.catalog?.providerIdentity);
     return defaults;
   }
   async reviewThread(a) {
@@ -266,14 +364,26 @@ export class T3 {
   }
   async modelCatalog(p) {
     const config = await this.rpc.call('server.getConfig', {}).promise;
-    return catalog(config, p);
+    const result=catalog(config, p);this.rememberProvider(result.providerIdentity);return result;
+  }
+  rememberProvider(identity) {
+    if (!identity) return;
+    this.providerIdentityBinding=this.probeBinding();
+    // Keep only narrow labels explicitly returned by an already requested
+    // native catalog/defaults read. This never starts account discovery.
+    this.providerIdentities.delete(identity.instanceId);
+    this.providerIdentities.set(identity.instanceId,structuredClone(identity));
+    while (this.providerIdentities.size > 64) this.providerIdentities.delete(this.providerIdentities.keys().next().value);
+    if (this.current?.modelSelection?.instanceId === identity.instanceId) {
+      this.current.providerIdentity=structuredClone(identity);this.emitView();
+    }
   }
   async bounded(threadId, signal) {
-    this.stats.snapshots++;
+    this.stats.snapshots++; this.mark('bounded-start');
     const s = await this.http(`/api/orchestration/threads/${encodeURIComponent(threadId)}/bounded`, 'GET', true, signal);
     targetThread(s, threadId);
     requireThat(Number.isSafeInteger(s.snapshotSequence), 'Missing snapshot sequence.', 'incompatible');
-    return s;
+    this.mark('bounded-ready'); return s;
   }
   setState(state) {
     if (!this.current) return;
@@ -287,8 +397,8 @@ export class T3 {
     const subscription = this.subscription; this.subscription = null;
     subscription?.cancel();
     clearTimeout(this.refreshTimer); this.refreshTimer = null;
-    this.refreshing = false; this.refreshAgain = false; this.duringRefresh = new Map();
-    if (this.current?.live) { this.setState('unavailable'); this.emitView(); }
+    this.refreshing = false; this.refreshAgain = false; this.refreshUrgent = false; this.duringRefresh = new Map();
+    if (this.current?.live) { this.setState('unavailable'); this.emitView(false, true); }
   }
   async watch(threadId) {
     identifier(threadId); this.cancelNavigation();
@@ -302,16 +412,16 @@ export class T3 {
       if (epoch !== this.epoch || this.closed) return null;
       const snapshot = await this.bounded(threadId, signal);
       if (epoch !== this.epoch || this.closed) return null;
-      this.current = modelView(snapshot, threadId); this.following = true;
+      this.current = modelView(snapshot, threadId,this.providerIdentities); this.following = true;
       this.snapshotSequence = snapshot.snapshotSequence; this.lastStreamSequence = snapshot.snapshotSequence;
-      this.setState('synchronizing'); this.emitView(true);
+      this.setState('synchronizing'); this.emitView(true, true);
       const sub = this.rpc.call('orchestration.subscribeThread', { threadId,
         afterSequence: snapshot.snapshotSequence, requestCompletionMarker: true, acceptBoundedSnapshot: true },
         item => { if (epoch === this.epoch && this.following) this.onEvent(item); });
       this.subscription = sub;
       sub.promise.catch(e => {
         if (epoch === this.epoch && !this.closed) {
-          this.synchronized = false; this.setState('unavailable'); this.emitView();
+          this.synchronized = false; this.setState('unavailable'); this.emitView(false, true);
           this.emit('status', {state:'unavailable',message:e.message});
         }
       });
@@ -320,23 +430,32 @@ export class T3 {
       if (epoch === this.epoch && !this.closed) {
         // A failed Latest must leave the historical page explicitly historical.
         this.following = !historical;
-        this.setState('unavailable'); this.emitView();
+        this.setState('unavailable'); this.emitView(false, true);
       }
       throw error;
     }
   }
-  emitView(full = false) {
+  emitView(full = false, urgent = false) {
     if (this.closed) return;
     this.forceSnapshot ||= full;
+    if (urgent) { this.flushView(); return; }
     if (this.emitTimer) return;
     this.emitTimer = setTimeout(() => { this.emitTimer = null; this.flushView(); }, SCHEDULING.frameMs);
   }
   flushView() {
     clearTimeout(this.emitTimer); this.emitTimer = null;
     if (!this.current || this.closed) return;
-    trimView(this.current);
+    this.stats.flushes++; this.mark('flush-start');
+    // One exact row serialization per flush serves budget validation and
+    // comparison. Retain only the current bounded page's immutable copies.
+    const rowJSON = new Map();
+    trimView(this.current, rowJSON); this.stats.rowSerializations += rowJSON.size;
     trimActivity(this.current.activity, this.current.sequence);
-    const next = structuredClone(this.current), previous = this.sentView;
+    const {items:currentRows, ...currentMetadata} = this.current;
+    const previous = this.sentView, oldRows = new Map((previous?.items ?? []).map(row => [row.key, row]));
+    const nextRows = currentRows.map(row => this.sentRowJSON.get(row.key) === rowJSON.get(row) && oldRows.has(row.key)
+      ? oldRows.get(row.key) : JSON.parse(rowJSON.get(row)));
+    const next = {...structuredClone(currentMetadata), items:nextRows};
     const baseRevision = this.revision, revision = baseRevision + 1;
     const frameSize = (event, data) => Buffer.byteLength(JSON.stringify({v:1,environmentId:this.config.environmentId,event,data})) + 1;
     // Optional tool metadata must not displace exact messages or request
@@ -353,29 +472,31 @@ export class T3 {
       if (total > LIMIT.frame) delete next.activity;
     }
     const { items, revision: ignored, ...metadata } = next;
-    const oldRows = new Map((previous?.items ?? []).map(row => [row.key, row]));
-    const upserts = items.filter(row => JSON.stringify(row) !== JSON.stringify(oldRows.get(row.key)));
+    const nextRowJSON = new Map(currentRows.map(row => [row.key, rowJSON.get(row)]));
+    const upserts = items.filter(row => nextRowJSON.get(row.key) !== this.sentRowJSON.get(row.key));
     const keys = new Set(items.map(row => row.key));
     const removed = [...oldRows.keys()].filter(key => !keys.has(key));
     let full = this.forceSnapshot || !previous || previous.threadId !== next.threadId;
     this.forceSnapshot = false;
-    if (!full && JSON.stringify(next) === JSON.stringify(previous)) return;
+    const metadataJSON = JSON.stringify(metadata);
+    const sameOrder = previous?.items.length === items.length && items.every((row,i) => previous.items[i].key === row.key);
+    if (!full && upserts.length === 0 && removed.length === 0 && sameOrder && metadataJSON === this.sentMetadataJSON) return;
     const delta = {threadId:next.threadId,baseRevision,revision,upserts,removed,order:items.map(row=>row.key),metadata};
     // Delta order/removal keys can cost more than a full bounded replacement.
     if (!full && frameSize('delta', delta) > LIMIT.frame) full = true;
-    this.revision = revision;
+    this.revision = revision; this.stats.frames++; this.mark('frame-ready',{full,rows:items.length});
     if (full) this.emit('view', { ...next, revision });
     else this.emit('delta', delta);
-    this.sentView = next;
+    this.sentView = next; this.sentRowJSON = nextRowJSON; this.sentMetadataJSON = metadataJSON;
   }
   onEvent(item) {
     if (!this.following || this.closed) return;
     this.stats.rpcEvents++;
-    if (item.kind === 'synchronized') { this.synchronized = true; this.retryDelay = 1000; this.setState('live'); this.emitView(); return; }
+    if (item.kind === 'synchronized') { this.mark('subscription-synchronized'); this.synchronized = true; this.retryDelay = 1000; this.setState('live'); this.emitView(false, true); return; }
     if (item.kind === 'snapshot') {
       this.synchronized = false;
-      this.current = modelView(item,this.watchId); this.snapshotSequence = item.snapshotSequence; this.lastStreamSequence = item.snapshotSequence;
-      this.setState('synchronizing'); this.emitView(true); return;
+      this.current = modelView(item,this.watchId,this.providerIdentities); this.snapshotSequence = item.snapshotSequence; this.lastStreamSequence = item.snapshotSequence;
+      this.setState('synchronizing'); this.emitView(true, true); return;
     }
     if (item.kind !== 'event') return;
     requireThat(Number.isSafeInteger(item.sequence), 'Missing T3 event sequence.', 'incompatible');
@@ -414,26 +535,33 @@ export class T3 {
       if (event.type === 'turn-item.updated' && !['user_message','assistant_message','proposed_plan','approval_request','user_input_request','error','system_notice','notification','secret_request'].includes(payload?.type)) return;
       if (event.type === 'message.updated') return; // corresponding turn item supplies canonical visibility
     } else if (!/^(thread\.|run\.|run-attempt\.|provider-thread\.|provider-session\.|provider-turn\.|subagent\.|runtime-request\.|context-transfer\.|checkpoint.rollback)/.test(event.type)) return;
-    if (this.refreshing) { this.refreshAgain = true; return; }
-    this.scheduleRefresh();
+    const urgent = /^runtime-request\./u.test(event.type) || event.type === 'turn-item.updated' &&
+      ['approval_request','user_input_request','secret_request'].includes(payload?.type);
+    this.scheduleRefresh(urgent);
   }
-  scheduleRefresh() {
+  scheduleRefresh(urgent = false) {
     if (this.closed || !this.following) return;
+    this.refreshUrgent ||= urgent;
     if (this.refreshing) { this.refreshAgain = true; return; }
-    if (this.refreshTimer) return;
-    const delay = Math.max(SCHEDULING.structureMs, Math.min(SCHEDULING.refreshIntervalMs, this.nextRefreshAt - this.now()));
+    if (this.refreshTimer) {
+      if (!urgent) return;
+      clearTimeout(this.refreshTimer); this.refreshTimer = null;
+    }
+    const delay = this.refreshUrgent ? 0 : Math.max(SCHEDULING.structureMs, Math.min(SCHEDULING.refreshIntervalMs, this.nextRefreshAt - this.now()));
     this.refreshTimer = setTimeout(() => { this.refreshTimer = null; this.refresh().catch(e => { if (e.code !== 'cancelled') this.emit('status',{state:'unavailable',message:e.message}); }); }, delay);
   }
   async refresh() {
     if (this.refreshing || !this.watchId || !this.following) return;
     const epoch = this.epoch, id = this.watchId;
+    const urgent = this.refreshUrgent; this.refreshUrgent = false;
+    if (urgent) {this.stats.urgentRefreshes++;this.mark('request-refresh-start');}
     this.refreshing = true; this.refreshAgain = false; this.duringRefresh = new Map();
     this.nextRefreshAt = this.now() + SCHEDULING.refreshIntervalMs;
     const pendingUpdates = this.duringRefresh;
     try {
       const s = await this.bounded(id, this.navigation.signal);
       if (epoch !== this.epoch || this.closed || s.snapshotSequence < this.snapshotSequence) return;
-      const next = modelView(s,id);
+      const next = modelView(s,id,this.providerIdentities);
       next.state = this.synchronized ? 'live' : 'synchronizing'; next.live = next.state === 'live'; next.historical = false;
       for (const pending of pendingUpdates.values()) {
         if (pending.sequence <= s.snapshotSequence) continue;
@@ -445,15 +573,15 @@ export class T3 {
         const i = next.items.findIndex(r => r.key === pending.row.key);
         if (i >= 0) { next.items[i] = pending.row; next.sequence = Math.max(next.sequence, pending.sequence); }
       }
-      this.current = next; this.snapshotSequence = s.snapshotSequence; this.emitView();
+      this.current = next; this.snapshotSequence = s.snapshotSequence; this.emitView(false, urgent);
     } catch (error) {
-      if (epoch === this.epoch && !this.closed) { this.setState('unavailable'); this.emitView(); }
+      if (epoch === this.epoch && !this.closed) { this.setState('unavailable'); this.emitView(false, true); }
       throw error;
     } finally {
       pendingUpdates.clear();
       if (epoch === this.epoch) {
         this.refreshing = false;
-        if (this.refreshAgain) this.scheduleRefresh();
+        if (this.refreshAgain) this.scheduleRefresh(this.refreshUrgent);
       }
     }
   }
@@ -477,7 +605,7 @@ export class T3 {
         sequence, observedAt: new Date().toISOString() };
       this.setState('historical'); this.emitView(); return { threadId: id };
     } catch (error) {
-      if (epoch === this.epoch && !this.closed) { this.setState('unavailable'); this.emitView(); }
+      if (epoch === this.epoch && !this.closed) { this.setState('unavailable'); this.emitView(false, true); }
       throw error;
     }
   }
@@ -520,6 +648,8 @@ export class T3 {
           } else {
             const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
             if (op === 'thread-action') {
+              if (['pin','unpin'].includes(a.action)) requireThat(this.descriptor?.capabilities?.threadPinning === true,
+                'This server does not advertise native thread pinning. Use native T3 or update its verified adapter.', 'unsupported');
               const shell=await this.http('/api/orchestration/shell');
               receipt.payload=threadActionCommand(a,p,shell.threads?.find(t=>t.id===a.threadId));
             } else {
@@ -599,11 +729,11 @@ export class T3 {
     return receipt.promise;
   }
   close() {
-    this.closed = true; this.wantConnection = false; this.cancelNavigation();
+    this.closed = true; this.wantConnection = false; this.probeReceipt = null; this.cancelPreview(); this.cancelNavigation();
     for (const timer of [this.emitTimer,this.refreshTimer,this.retryTimer]) clearTimeout(timer);
     this.emitTimer = null; this.refreshTimer = null; this.retryTimer = null;
     this.subscription?.cancel(); this.rpc?.close(); this.rpc = null;
     for (const controller of this.controllers) controller.abort();
-    this.current = null; this.sentView = null; this.duringRefresh.clear(); this.receipts.clear();
+    this.current = null; this.sentView = null; this.sentRowJSON.clear(); this.sentMetadataJSON = null; this.duringRefresh.clear(); this.receipts.clear(); this.providerIdentities.clear();
   }
 }
