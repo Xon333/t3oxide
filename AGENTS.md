@@ -13,4 +13,7 @@ Choose affected checks: `scripts/check-go.sh` covers the primary Go client; `scr
 
 [Verification](docs/verification.md) separates compatibility and installed-instance results from source tests; update it when results change. Do not claim untested GUI behavior or resource savings. Historical acceptance neither prescribes a fleet topology nor authorizes access to another installation.
 
-After capability changes, run `scripts/check-capabilities.sh` on the canonical knowledge host and review only affected existing Personal records. The host-local `capability-records` helper owns location/dependencies; no vault checkout or private path belongs in this repository. A missing helper is an explicit pending knowledge update, not verified coverage.
+When an installed capability changes an enrolled action, review its affected
+records with `scripts/check-capabilities.sh`. Source edits/tests/research have
+no knowledge-host gate. The host-local helper owns paths/dependencies; report
+an actual pending record update without blocking unrelated source work.
