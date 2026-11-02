@@ -23,7 +23,7 @@ func durableInboxModel(t *testing.T) (*Model, client.InboxThread) {
 	native := *row.Thread.Inbox
 	next.Thread.Inbox = &native
 	m.agentbox.page = client.InboxPage{Rows: []client.InboxThread{row, next}, Sources: []client.InboxSource{{ProfileID: "profile", EnvironmentID: "host", NativeWorkflows: true}}}
-	m.agentbox.loaded, m.agentbox.loading, m.agentbox.view = true, false, "needs"
+	m.agentbox.loaded, m.agentbox.loading, m.agentbox.view = true, false, "finished"
 	m.agentbox.pendingSources = nil
 	m.agentbox.selected, m.agentbox.decision = row.Target.Key(), true
 	m.filterInbox()

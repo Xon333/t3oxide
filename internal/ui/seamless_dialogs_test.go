@@ -310,7 +310,7 @@ func TestSeamlessFullPageFormsKeepGlobalControlsAndExactDetails(t *testing.T) {
 				}
 				m.resize()
 				view := m.View().Content
-				for _, text := range []string{want, "Ctrl+S", "Ctrl+Q"} {
+				for _, text := range []string{want, shortcutHintText("Ctrl+S"), shortcutHintText("Ctrl+Q")} {
 					if !strings.Contains(ansi.Strip(view), text) {
 						t.Fatalf("full-page %s hid %q at %v:\n%s", kind, text, size, ansi.Strip(view))
 					}

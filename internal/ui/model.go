@@ -545,6 +545,47 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 		return m.inboxMutationFinished(msg)
 	case inboxRankMsg:
 		return m, m.inboxRankFinished(msg)
+	case inboxOpenedMsg:
+		result, ok := msg.message.(actionMsg)
+		if !ok || result.generation != m.generation || result.id != m.actionID {
+			return m, nil
+		}
+		if result.err == nil && client.CompletionReviewable(msg.row.Thread) {
+			m.agentbox.reading = msg.row.Target.Key()
+		}
+		return m.Update(msg.message)
+	case navigatorOpenedMsg:
+		result, ok := msg.message.(actionMsg)
+		if !ok || result.generation != m.generation || result.id != m.browserID {
+			return m, nil
+		}
+		refresh := false
+		if result.err == nil {
+			identity := msg.page.ProfileID + "\x00" + msg.thread
+			refresh = m.navigator.reading != "" && m.navigator.reading != identity
+			if refresh {
+				previous := m.navigator.reading
+				rows := m.navigator.ordered[:0]
+				for _, row := range m.navigator.ordered {
+					if row.identity() != previous {
+						rows = append(rows, row)
+					}
+				}
+				m.navigator.ordered = rows
+			}
+			m.navigator.reading = ""
+			for _, row := range msg.page.Page.Threads {
+				if row.ID == msg.thread && client.CompletionReviewable(row) {
+					m.navigator.reading = identity
+				}
+			}
+		}
+		next, cmd := m.Update(msg.message)
+		if refresh {
+			m.navigator.reorderNow = m.navigator.reading == ""
+			return next, tea.Batch(cmd, m.loadNavigator(m.navigator.profile, m.navigator.query, true))
+		}
+		return next, cmd
 	case navigatorMsg:
 		return m, m.navigatorLoaded(msg)
 	case tea.MouseClickMsg:

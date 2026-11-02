@@ -489,3 +489,11 @@ Native AppKit checks exercised text insertion/selection/copy, draft isolation, E
 For actual question-answer and Stop recovery, a helper was killed after the server accepted the command but before local acknowledgement. A fresh ordinary helper recovered the original authoritative receipt; another fresh helper returned the same receipt. The operation outcome was not inferred solely from current UI state.
 
 T3 services continued running during acceptance. Private host configuration and deployment receipts are intentionally excluded from this public record.
+
+### Navigation lifecycle source checks (2026-11-02)
+
+Working takes precedence over pinning; completed/unreviewed metadata belongs in Finished, with formal requests separate. Explicit open clears eligible finished work through the existing native revision-bound settle command and durable acknowledgement lane. Reading holds the drawn row; moving to another conversation refreshes the prior completion. Busy/request/queued states cannot auto-settle. Synthetic native-contract and Bubble Tea program tests cover this gesture without productive host mutations. Native terminal/GUI acceptance remains a separate owner check.
+
+The shared macOS shortcut formatter renders Apple modifier glyphs. Help defaults to Option-H (Control-Option-H remains an alias), with no Command-H alias; manual bindings still own dispatch and hints. The navigation footer uses registry hints and a down-arrow continuation cue.
+
+The default Command-N alias was removed after native acceptance of the prior candidate showed stock Ghostty intercepting it. New uses the existing context Control binding; explicit manual overrides remain available. No terminal configuration was changed.

@@ -49,7 +49,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if m.currentDraft() != "" {
 			m.dismissCompletion()
-			m.notice = "Draft kept · Ctrl+X clear · Ctrl+Q exit"
+			m.notice = "Draft kept · " + m.actionBinding("clear").Help().Key + " clear · " + m.actionBinding("quit").Help().Key + " exit"
 			return nil
 		}
 		return m.quit()

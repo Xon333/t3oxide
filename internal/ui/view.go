@@ -191,7 +191,7 @@ func (m *Model) View() tea.View {
 	if m.width < 20 || m.height < 8 {
 		m.hitZones = nil
 		m.layoutDirty = true
-		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · Ctrl+Q exits"), m.width, m.height))
+		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · "+m.actionBinding("quit").Help().Key+" exits"), m.width, m.height))
 	}
 	if m.browserPage || m.launchPage {
 		content := m.fullSurfaceView()
@@ -335,7 +335,7 @@ func (m *Model) terminalView(content string) tea.View {
 func (m *Model) bodyView() string {
 	p := colors(m.theme)
 	if m.transcript == "" {
-		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render(m.actionBinding("palette").Help().Key+"  Commands")
+		text := p.plain().Render(m.actionBinding("switch").Help().Key+"  Browser") + "\n" + p.plain().Render(m.actionBinding("palette").Help().Key+"  Commands")
 		if m.snapshot != nil {
 			text = p.subtle().Render("Preparing conversation…")
 		}
@@ -673,7 +673,7 @@ func (m *Model) sidebarView(width, height int) string {
 	if m.status.Writable {
 		access = "Writes enabled"
 	}
-	lines := []string{p.active().Render("Workspace"), "", fitLine(m.status.ProfileID, width), connected, access, "", "Ctrl+O  Browser", "/env    Environments", "Ctrl+R  Requests", optionKey("M") + "      Model", optionKey("E") + "      Effort", optionKey("S") + "      Speed", "/sidebar off"}
+	lines := []string{p.active().Render("Workspace"), "", fitLine(m.status.ProfileID, width), connected, access, "", m.actionBinding("switch").Help().Key + "  Browser", "/env    Environments", m.actionBinding("requests").Help().Key + "  Requests", optionKey("M") + "      Model", optionKey("E") + "      Effort", optionKey("S") + "      Speed", "/sidebar off"}
 	return padBlock(p.subtle().Render(strings.Join(lines, "\n")), width, height)
 }
 

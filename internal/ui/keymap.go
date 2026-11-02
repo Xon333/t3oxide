@@ -178,6 +178,6 @@ func (m *Model) helpText() string {
 		"RECOVERY\nCtrl+C dismisses locally and keeps the draft. "+composer("clear")+" clears it into /recall prompt history. Local exit leaves T3 running. Ctrl+S Stop has an independent lane; retries preserve the saved operation ID.",
 		"COMPOSER\nEnter inserts a newline. "+composer("send")+" sends or executes a recognized single-line command. "+composer("send-literal")+" sends literal text, including a slash command. "+composer("steer")+" explicitly steers without changing the selected delivery preference. Request Submit remains a separate explicit form action.",
 		"CONTROLS\n"+composer("palette")+" opens Commands from the composer. /keyboard legacy retains previous-line Ctrl+P editing; /keyboard modern restores its Commands shortcut. Ctrl+G selects all inside editors. /info (also /details), /new, /new-same, /review, /mode, /shortcuts and /help remain discoverable in Commands.",
-		"TERMINAL KEYS\nCommand/Super aliases marked * work only when delivered by the terminal. Ctrl+I stays Tab and Ctrl+Backspace stays deletion. No terminal or OS settings are changed. /shortcuts shows every resolved manual-file binding; docs/shortcuts.md lists the portable defaults.")
+		"TERMINAL KEYS\nCommand/Super aliases work only when delivered by the terminal. Ctrl+I stays Tab and Ctrl+Backspace stays deletion. No terminal or OS settings are changed. /shortcuts shows every resolved manual-file binding; docs/shortcuts.md lists the portable defaults.")
 	return strings.Join(parts, "\n\n")
 }

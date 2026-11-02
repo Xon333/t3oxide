@@ -138,6 +138,40 @@ func (a *Session) NavigatorPin(ctx context.Context, page NavigatorPage, thread s
 	return a.navigatorDisposition(ctx, env, row, action)
 }
 
+// CompletionReviewable permits the open gesture only for finished native work.
+// Fresh adapter revision and runtime guards remain the final authority.
+func CompletionReviewable(row Thread) bool {
+	v := row.Inbox
+	if v == nil || v.NativeRevision == "" || v.Settled || v.PendingRequestCount > 0 || v.PendingChildRequest || v.QueuedCount > 0 || v.Working != nil && *v.Working {
+		return false
+	}
+	switch strings.ToLower(row.Status) {
+	case "completed", "idle":
+		return true
+	}
+	return false
+}
+
+func (a *Session) NavigatorOpenReviewed(ctx context.Context, page NavigatorPage, thread string) (*Session, error) {
+	var row Thread
+	for _, offered := range page.Page.Threads {
+		if offered.ID == thread {
+			row = offered
+			break
+		}
+	}
+	next, err := a.NavigatorOpen(page, thread)
+	if err != nil {
+		return nil, err
+	}
+	if CompletionReviewable(row) {
+		if _, err = a.NavigatorReview(ctx, page, thread, "settle"); err != nil {
+			return nil, err
+		}
+	}
+	return next, nil
+}
+
 // NavigatorReview uses the same revision-bound durable lane as native pinning.
 // The adapter rejects hiding active work or unanswered requests.
 func (a *Session) NavigatorReview(ctx context.Context, page NavigatorPage, thread, action string) (Result, error) {

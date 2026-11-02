@@ -41,7 +41,7 @@ func TestCommandsDefaultUsesPortableSpaceAndPreservesOverrides(t *testing.T) {
 	m := testModel(t)
 	for _, context := range shortcutContexts {
 		binding := m.actionBindingFor("palette", context)
-		if binding.Help().Key != "Ctrl+Space" || !key.Matches(keyPress(tea.KeySpace, tea.ModCtrl), binding) || key.Matches(keyPress('p', tea.ModSuper), binding) {
+		if binding.Help().Key != shortcutHintText("Ctrl+Space") || !key.Matches(keyPress(tea.KeySpace, tea.ModCtrl), binding) || key.Matches(keyPress('p', tea.ModSuper), binding) {
 			t.Fatalf("%s: Commands default must advertise Ctrl+Space without claiming Terminal Print: %v", context, binding.Help())
 		}
 	}
@@ -119,12 +119,12 @@ func TestShortcutLabelsPreferConditionalCommandOnMac(t *testing.T) {
 		keys                    []string
 		command, platform, want string
 	}{
-		{[]string{"ctrl+n", "super+n"}, "new", "darwin", "Cmd+N*"},
+		{[]string{"ctrl+n", "super+n"}, "new", "darwin", "⌘N"},
 		{[]string{"ctrl+n", "super+n"}, "new", "linux", "Ctrl+N"},
-		{[]string{"ctrl+s"}, "stop", "darwin", "Ctrl+S"},
-		{[]string{"f1", "super+h"}, "help", "darwin", "Cmd+H*"},
+		{[]string{"ctrl+s"}, "stop", "darwin", "⌃S"},
+		{[]string{"alt+h", "ctrl+alt+h", "f1"}, "help", "darwin", "⌥H"},
 		{[]string{"f1", "super+h"}, "help", "linux", "/help"},
-		{[]string{"super+right"}, "", "darwin", "Cmd+→*"},
+		{[]string{"super+right"}, "", "darwin", "⌘→"},
 	} {
 		if got := shortcutLabelForOS(tc.keys, tc.command, tc.platform); got != tc.want {
 			t.Fatalf("%s %v: got %q want %q", tc.platform, tc.keys, got, tc.want)
@@ -256,7 +256,7 @@ func TestShortcutOverrideDrivesDispatchHelpAndPalette(t *testing.T) {
 	for _, raw := range m.paletteItems() {
 		row := raw.(choiceItem)
 		if row.command == "info" {
-			found = strings.Contains(row.description, "Alt+I")
+			found = strings.Contains(row.description, shortcutHintText("Alt+I"))
 		}
 	}
 	if !found {
@@ -349,7 +349,7 @@ func TestResolvedRequestSubmitKeepsOrdinarySendAndLaunchSeparate(t *testing.T) {
 	m.openPrompt(prompt)
 	m.restoreFocus()
 	form := m.dialog.requestForm
-	if !strings.Contains(strings.Join(m.formDialogHelpPairs(), " "), "Ctrl+Alt+U submit") {
+	if !strings.Contains(strings.Join(m.formDialogHelpPairs(), " "), shortcutHintText("Ctrl+Alt+U submit")) {
 		t.Fatal("form help did not advertise the resolved request submit")
 	}
 	m.Update(keyPress(tea.KeyEnter, tea.ModCtrl))
@@ -539,8 +539,8 @@ func TestResolvedShortcutHelpFitsSupportedViews(t *testing.T) {
 				t.Fatalf("width %d overflow: %q", size[0], line)
 			}
 		}
-		if strings.Contains(view, "Enter send") || !strings.Contains(view, "Ctrl+S") {
-			t.Fatal("view hides Stop or advertises obsolete Enter send")
+		if strings.Contains(view, "  Enter send") || !strings.Contains(view, shortcutLabel([]string{"ctrl+s"}, "stop")) {
+			t.Fatalf("view hides Stop or advertises obsolete Enter send: %s", view)
 		}
 	}
 }

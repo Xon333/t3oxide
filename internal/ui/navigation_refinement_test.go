@@ -66,7 +66,7 @@ func TestRefinementNavigatorFocusedSlotsSurviveNewShelfTitleAndRemoval(t *testin
 		t.Fatal("removed focused target jumped to another row")
 	}
 	m.Update(keyPress('o', tea.ModCtrl))
-	if m.navigator.focused || m.navigator.orderDeferred || m.navigator.list.Items()[0].(navigatorItem).thread.ID != "new-pin" {
+	if m.navigator.focused || m.navigator.orderDeferred || m.navigator.list.Items()[0].(navigatorItem).thread.ID != "row-01" {
 		t.Fatal("leaving did not apply queued native shelf ordering")
 	}
 }
@@ -78,9 +78,9 @@ func TestRefinementNavigatorCollapsedShelfRetainsCueAndRealToggle(t *testing.T) 
 	page.Page.Threads[1].Inbox = &wire.InboxMetadata{PendingChildRequest: true}
 	m.navigator.focused = false
 	m.Update(navigatorMsg{generation: m.generation, serial: m.navigator.serial, profile: "source", page: page})
-	m.toggleNavigatorShelf("Inbox")
+	m.toggleNavigatorShelf("Requests")
 	plain := ansi.Strip(m.View().Content)
-	if !strings.Contains(plain, "Inbox (2) · ?2") || strings.Contains(plain, "No conversations") {
+	if !strings.Contains(plain, "Requests (2) · ?2") || strings.Contains(plain, "No conversations") {
 		t.Fatalf("collapsed last shelf hid its pending cue/toggle: %s", plain)
 	}
 	found := false

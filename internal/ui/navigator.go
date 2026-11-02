@@ -29,6 +29,8 @@ type navigatorState struct {
 	cancel                            context.CancelFunc
 	loadedAt                          time.Time
 	selected                          string
+	reading                           string
+	moreBelow                         bool
 	review                            *navigatorReview
 	pages                             map[string]client.NavigatorPage
 	pending                           map[string]bool
@@ -362,13 +364,22 @@ func (m *Model) navigatorTarget(page client.NavigatorPage, thread, action string
 		return nil
 	}
 	session := m.session
-	return m.navigatorRun(action, func(ctx context.Context) (client.Result, error) {
+	attached := page.ProfileID == m.status.ProfileID && thread == m.status.ThreadID
+	cmd := m.navigatorRun(action, func(ctx context.Context) (client.Result, error) {
 		if action == "open" {
-			next, err := session.NavigatorOpen(page, thread)
+			next, err := session.NavigatorOpenReviewed(ctx, page, thread)
+			if attached {
+				next = nil
+			}
 			return client.Result{Next: next}, err
 		}
 		return session.NavigatorSource(ctx, page, thread, action)
 	})
+	if action != "open" || cmd == nil {
+		return cmd
+	}
+	return func() tea.Msg { return navigatorOpenedMsg{message: cmd(), page: page, thread: thread} }
+
 }
 
 func (m *Model) reviewedNavigatorAction(token string) tea.Cmd {
@@ -482,7 +493,7 @@ func (m *Model) navigatorRun(name string, run func(context.Context) (client.Resu
 	// admission, without waiting for a network result or a prompt to appear.
 	m.cancelNavigatorPreview()
 	if name == "open" {
-		if m.browserBusy {
+		if m.browserBusy || m.actionBusy {
 			m.notice = "Opening conversation"
 			return nil
 		}
@@ -797,8 +808,11 @@ func (m *Model) navigatorView(width, height int) string {
 	}
 	parts = append(parts, padBlock(rows, w, rowHeight))
 	health := m.navigatorHealth()
+	if !strings.Contains(health, "↓") && n.moreBelow {
+		health = strings.TrimSpace(health + " ↓")
+	}
 	parts = append(parts, p.subtle().Render(fitLine(health, w)))
-	controls := "Refresh"
+	controls := m.actionBindingFor("refresh", "navigator").Help().Key + " Refresh"
 	if n.page.Page.Cursor > 0 {
 		controls = "Prev  " + controls
 	}
@@ -810,13 +824,26 @@ func (m *Model) navigatorView(width, height int) string {
 		parts = append(parts, p.operational().Render(fitLine("May already be sent", w)))
 		parts = append(parts, p.active().Render(fitLine("Review saved action", w)))
 	} else {
-		info, help := m.actionBinding("info").Help().Key, m.actionBinding("help").Help().Key
-		parts = append(parts, p.subtle().Render(fitLine(info+" Info  "+help+" Help", w)))
-		parts = append(parts, p.subtle().Render(fitLine(m.actionBinding("sidebar").Help().Key+" Activity", w)))
+		info := m.actionBinding("info").Help().Key
+		helpKeys := m.actionBinding("help").Keys()
+		controlKeys := make([]string, 0, len(helpKeys))
+		for _, key := range helpKeys {
+			if !strings.Contains(key, "super+") {
+				controlKeys = append(controlKeys, key)
+			}
+		}
+		help := shortcutLabel(controlKeys, "help")
+		parts = append(parts, p.subtle().Render(fitLine("ⓘ "+info+"  (?) "+help, w)))
 	}
 	border := p.muted
 	if n.focused {
 		border = p.accent
 	}
 	return lipgloss.NewStyle().BorderRight(true).BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color(border)).PaddingRight(1).Render(padBlock(strings.Join(parts, "\n"), w, height))
+}
+
+type navigatorOpenedMsg struct {
+	message tea.Msg
+	page    client.NavigatorPage
+	thread  string
 }

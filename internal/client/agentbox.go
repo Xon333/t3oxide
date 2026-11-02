@@ -391,7 +391,7 @@ func InboxBucket(row InboxThread, now time.Time) string {
 	if v.Settled {
 		return "done"
 	}
-	return "needs"
+	return "finished"
 }
 
 // InboxRank compares presentation priority only. It never drives dispatch or

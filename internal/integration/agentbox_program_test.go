@@ -26,8 +26,6 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	r.send("/mode agentbox\x1d")
 	r.waitText("AgentBox")
 	waitWorkspaceFrame(t, r, func(v string) bool { return strings.Contains(v, "Alpha") && !strings.Contains(v, "Loading…") }, "native inbox page")
-	r.send("\r")
-	r.waitText("1 Changes")
 	r.send("r")
 	waitProgramReply(t, r, "Alpha")
 	const draft = "jknrelsz123\nexact second line"

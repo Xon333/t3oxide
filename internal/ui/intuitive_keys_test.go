@@ -16,11 +16,11 @@ func TestIntuitivePaletteHelpMatchesContextualDispatch(t *testing.T) {
 		name, draft, label     string
 		reading, opens, legacy bool
 	}{
-		{"empty-composer", "", "Ctrl+Space", false, true, false},
-		{"nonempty-composer", "first\nsecond", "Ctrl+Space", false, true, false},
-		{"reading-with-draft", "first\nsecond", "Ctrl+Space", true, true, false},
-		{"legacy-nonempty-composer", "first\nsecond", "Ctrl+Space", false, false, true},
-		{"legacy-reading-with-draft", "first\nsecond", "Ctrl+Space", true, true, true},
+		{"empty-composer", "", shortcutHintText("Ctrl+Space"), false, true, false},
+		{"nonempty-composer", "first\nsecond", shortcutHintText("Ctrl+Space"), false, true, false},
+		{"reading-with-draft", "first\nsecond", shortcutHintText("Ctrl+Space"), true, true, false},
+		{"legacy-nonempty-composer", "first\nsecond", shortcutHintText("Ctrl+Space"), false, false, true},
+		{"legacy-reading-with-draft", "first\nsecond", shortcutHintText("Ctrl+Space"), true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testModel(t)
@@ -184,14 +184,14 @@ func TestIntuitiveConversationHelpKeepsStopAndOneContextualRequestsShortcut(t *t
 					m.composer.SetValue(draft)
 					m.transcriptFocus, m.status.Requests = reading, requests
 					text := ansi.Strip(m.bindingHelp(width, m.helpMap()))
-					if !strings.Contains(text, "Ctrl+S Stop/hold") || !strings.Contains(text, m.keyMap().Palette.Help().Key) {
+					if !strings.Contains(text, shortcutHintText("Ctrl+S Stop/hold")) || !strings.Contains(text, m.keyMap().Palette.Help().Key) {
 						t.Fatalf("width %d hid Stop or contextual commands: %q", width, text)
 					}
 					want := 0
 					if requests > 0 {
 						want = 1
 					}
-					if strings.Count(text, "Ctrl+R requests") != want || strings.Contains(text, "3") {
+					if strings.Count(text, shortcutHintText("Ctrl+R requests")) != want || strings.Contains(text, "3") {
 						t.Fatalf("requests repeated, hidden or counted again at width %d: %q", width, text)
 					}
 				}
@@ -201,7 +201,7 @@ func TestIntuitiveConversationHelpKeepsStopAndOneContextualRequestsShortcut(t *t
 	m := testModel(t)
 	m.problem, m.preservedDraft = "uncertain operation", "\texact\r\n"
 	text := m.helpText()
-	for _, want := range []string{"/error", "/edit", "/recall", "operation ID", "Ctrl+S"} {
+	for _, want := range []string{"/error", "/edit", "/recall", "operation ID", shortcutHintText("Ctrl+S")} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("help lost essential recovery route %q", want)
 		}

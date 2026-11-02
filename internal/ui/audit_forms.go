@@ -384,7 +384,7 @@ func (m *Model) attachedTargetStatus() string {
 	if title == "" {
 		title = m.status.ThreadID
 	}
-	return "Attached: " + env + " / " + title + " · " + m.authoritativeStatus() + " · Ctrl+S Stop attached turn"
+	return "Attached: " + env + " / " + title + " · " + m.authoritativeStatus() + " · " + m.actionBinding("stop").Help().Key + " Stop attached turn"
 }
 
 func (m *Model) openModelSettingChooser() tea.Cmd {

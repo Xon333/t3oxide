@@ -23,6 +23,7 @@ type agentboxState struct {
 	prefs                                                config.InboxPreferences
 	rows                                                 []client.InboxThread
 	selected                                             string
+	reading                                              string
 	view                                                 string
 	project, environment                                 string
 	minimumPriority                                      int
@@ -92,7 +93,8 @@ type inboxRankMsg struct {
 
 func (m *Model) initAgentBox() {
 	m.mode = m.settings.workspaceMode()
-	m.agentbox.view = "needs"
+	m.agentbox.view = "finished"
+	m.agentbox.followLaunch = true
 	m.agentbox.summary = true
 	m.agentbox.cursors = map[string]int{}
 	m.agentbox.query = textinput.New()
@@ -253,7 +255,7 @@ func (m *Model) filterInbox() {
 		bucket := client.InboxBucket(row, time.Now())
 		// Keep the exact row owning the live reply visible while its lifecycle
 		// changes. Leaving reply reapplies the filter; no editor is retargeted.
-		keepReply := (a.reply || a.ack != nil && a.ack.row.Target.Key() == row.Target.Key()) && a.selected == row.Target.Key() && m.inboxAttached(row)
+		keepReply := (a.reading == row.Target.Key() || a.reply || a.ack != nil && a.ack.row.Target.Key() == row.Target.Key()) && a.selected == row.Target.Key() && m.inboxAttached(row)
 		if !keepReply && a.view != "all" && a.view != bucket {
 			continue
 		}
@@ -345,10 +347,15 @@ func (m *Model) stepInbox(delta int) tea.Cmd {
 		return nil
 	}
 	index := max(0, min(len(m.agentbox.rows)-1, m.inboxIndex()+delta))
+	previousReading := m.agentbox.reading
 	m.agentbox.selected = m.agentbox.rows[index].Target.Key()
 	m.agentbox.review = nil
 	m.agentbox.decision = false
 	m.agentbox.ack = nil
+	if previousReading != "" && previousReading != m.agentbox.selected {
+		m.agentbox.reading = ""
+		return m.loadInbox(true)
+	}
 	return nil
 }
 
@@ -364,14 +371,28 @@ func (m *Model) openInboxThread(reply bool) tea.Cmd {
 	m.agentbox.decision = true
 	m.agentbox.reply = reply
 	m.agentbox.review = nil
-	if m.inboxAttached(row) {
+	attached := m.inboxAttached(row)
+	if attached && (reply || !client.CompletionReviewable(row.Thread)) {
 		return m.restoreFocus()
 	}
-	page, key, session := m.agentbox.page, row.Target.Key(), m.session
-	return m.navigatorRun("inbox-open", func(ctx context.Context) (client.Result, error) {
-		next, err := session.InboxOpen(page, key)
+	page, session := client.NavigatorPage{ProfileID: row.Target.ProfileID, EnvironmentID: row.Target.EnvironmentID, Page: client.ThreadPage{Threads: []client.Thread{row.Thread}}}, m.session
+	cmd := m.navigatorRun("inbox-open", func(ctx context.Context) (client.Result, error) {
+		var next *client.Session
+		var err error
+		if reply {
+			next, err = session.NavigatorOpen(page, row.Thread.ID)
+		} else {
+			next, err = session.NavigatorOpenReviewed(ctx, page, row.Thread.ID)
+		}
+		if attached {
+			next = nil
+		}
 		return client.Result{Next: next}, err
 	})
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg { return inboxOpenedMsg{message: cmd(), row: row} }
 }
 
 func (m *Model) agentboxOwnsKeys() bool {
@@ -488,7 +509,7 @@ func (m *Model) agentboxAction(name, args string) tea.Cmd {
 		args = "done"
 	}
 	switch args {
-	case "needs", "working", "queued", "later", "later-view", "done", "all", "unknown":
+	case "finished", "needs", "working", "queued", "later", "later-view", "done", "all", "unknown":
 		m.agentbox.view = strings.TrimSuffix(args, "-view")
 		m.agentbox.ack = nil
 		m.agentbox.reorderNow = true
@@ -633,7 +654,7 @@ func (m *Model) fileInboxWork() tea.Cmd {
 
 func (m *Model) inboxViews() tea.Cmd {
 	items := []list.Item{}
-	for _, view := range []struct{ id, label string }{{"needs", "Inbox"}, {"working", "Working"}, {"queued", "Queued"}, {"later-view", "Later"}, {"done", "Reviewed"}, {"all", "All"}, {"unknown", "Unknown / unavailable"}} {
+	for _, view := range []struct{ id, label string }{{"finished", "Finished"}, {"needs", "Requests"}, {"working", "Working"}, {"queued", "Queued"}, {"later-view", "Later"}, {"done", "Reviewed"}, {"all", "All"}, {"unknown", "Unknown / unavailable"}} {
 		items = append(items, choiceItem{title: view.label, command: "inbox", args: view.id})
 	}
 	items = append(items, choiceItem{title: "Environment, project, priority", command: "inbox", args: "filters"}, choiceItem{title: "More / previous native pages", command: "inbox", args: "pages"}, choiceItem{title: "Refresh", command: "inbox", args: "refresh"}, choiceItem{title: "Info", command: "inbox", args: "info"})
@@ -677,4 +698,9 @@ func (m *Model) inboxPages() tea.Cmd {
 	}
 	m.openLocal("Native pages", "inbox-pages", items)
 	return nil
+}
+
+type inboxOpenedMsg struct {
+	message tea.Msg
+	row     client.InboxThread
 }

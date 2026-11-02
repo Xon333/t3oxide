@@ -16,8 +16,10 @@ import (
 
 func inboxViewLabel(view string) string {
 	switch view {
+	case "finished":
+		return "Finished"
 	case "needs":
-		return "Inbox"
+		return "Requests"
 	case "working":
 		return "Working"
 	case "queued":
@@ -212,8 +214,8 @@ func (m *Model) inboxListView(width, height int) string {
 		text := "No matching tasks"
 		if !a.loaded && a.loading {
 			text = "Loading metadata…"
-		} else if a.view == "needs" && a.query.Value() == "" {
-			text = "No needs-you items on this page"
+		} else if a.query.Value() == "" {
+			text = "No " + strings.ToLower(inboxViewLabel(a.view)) + " items on this page"
 			for _, source := range a.page.Sources {
 				if source.Error != "" || !source.NativeWorkflows {
 					text = "Native state unavailable"
