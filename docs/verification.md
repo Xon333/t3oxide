@@ -1,5 +1,11 @@
 # Verification
 
+## 0.10.0 source refinement, 2026-11-02
+
+The Go client now uses a compact message/project/launch flow with optional model and effort changes, native inherited defaults, fixed-height status-symbol rows, native review/hide/restore, and shortcut-only command palettes. Reported provider identity remains distinct from account telemetry in Info. Optional per-profile `allowedProviderInstanceIds` restricts new client execution without changing native global providers or historical identities; [configuration](../NATIVE-GO.md) records its recovery and request-answer limits.
+
+`bash scripts/check-go.sh` passed formatting, all six package suites, vet and the complete race run on macOS ARM64 with Go 1.27.2. The integration suite completed in 110.198 seconds normally and 191.555 seconds under race. Focused UI, configuration, client and actual-adapter launch tests cover untouched option omission, acknowledged-only message-draft clearing, exact native review guards and original uncertain-operation replay. Real Bubble Tea mouse journeys pass in both modes at 60×16, 80×24, 120×35 and 170×40. The macOS ARM64 source build reports `0.10.0-bubbletea`. These are source/fixture results; installed profiles, native account routing and owner interaction acceptance require separate validation. Adapter, Node and retained Swift sources are unchanged, so prior covering evidence for those inputs is retained.
+
 ## M1 source integration for 0.9.0, 2026-10-30
 
 The prepared native checkout reconciled to PR #2 at `6d581ae13e476b6aebaf5198b8b154270cdb52c0` without replacing later source. The owner selected `0.9.0-bubbletea`, then made Ctrl+Space the displayed Commands default after Terminal consumed Cmd+P as Print. The shipped Cmd+P alias was removed; contextual Ctrl+P fallback, legacy editor ownership and explicit manual overrides remain. Registry-driven hints, CLI help and current control documentation were aligned. Creation-destination documentation now includes the existing saved-pin precedence. No dependency, protocol, Swift rollback, installer or native service change is part of these corrections.
@@ -483,3 +489,141 @@ Native AppKit checks exercised text insertion/selection/copy, draft isolation, E
 For actual question-answer and Stop recovery, a helper was killed after the server accepted the command but before local acknowledgement. A fresh ordinary helper recovered the original authoritative receipt; another fresh helper returned the same receipt. The operation outcome was not inferred solely from current UI state.
 
 T3 services continued running during acceptance. Private host configuration and deployment receipts are intentionally excluded from this public record.
+
+### Navigation lifecycle source checks (2026-11-02)
+
+Working takes precedence over pinning; completed/unreviewed metadata belongs in Finished, with formal requests separate. Explicit open clears eligible finished work through the existing native revision-bound settle command and durable acknowledgement lane. Reading holds the drawn row; moving to another conversation refreshes the prior completion. Busy/request/queued states cannot auto-settle. Synthetic native-contract and Bubble Tea program tests cover this gesture without productive host mutations. Native terminal/GUI acceptance remains a separate owner check.
+
+The shared macOS shortcut formatter renders Apple modifier glyphs. Help defaults to Option-H (Control-Option-H remains an alias), with no Command-H alias; manual bindings still own dispatch and hints. The navigation footer uses registry hints and a down-arrow continuation cue.
+
+The default Command-N alias was removed after native acceptance of the prior candidate showed stock Ghostty intercepting it. New uses the existing context Control binding; explicit manual overrides remain available. No terminal configuration was changed.
+
+
+### Accepted research transport source checks (2026-11-02)
+
+The transport implementation passed the 229-test Node suite, final eight-case
+snapshot suite, wire race tests and vet, client tests, and changed-module syntax
+checks. Fixtures cover exact restored projection equality, inherited rows,
+retained requests, source bytes/cursors, malformed/stale references, decoding
+before identity validation, ordinary old-host snapshots, negotiated exact-ID
+cancellation and mutation exclusion. These are source/fixture results, not
+installed-host acceptance or resource measurements.
+
+Owner acceptance remains: verify hello identity/protocol and `readCancellation`;
+compare ordinary and restored compact snapshots at the same native sequence,
+including inherited rows, requests, full bodies and cursors, and record the
+returned markers. Cancel HTTP and unary RPC reads and verify a subsequent read
+works; stale cancellation must be harmless. Check unchanged journals without
+issuing productive mutations. Desktop/input acceptance remains separately owned.
+
+
+The final shared `scripts/check.sh` run passed: 231 Node tests, adapter/script
+syntax, retained Swift model and transport subprocess checks, and five Python
+measurement-tool tests. Targeted metadata-host integration checks passed all nine
+host/cycle cases and the lazy/offline-source check. The earlier full-Go stall
+was not reproduced; its original cause is unconfirmed. A new actual-helper
+regression passed normally and under race: canceling Go's exact read ID reaches
+stdio/Node/HTTP, retires a held handler, frees the regular lane, and performs no
+mutation, replay or detailed attachment. The held-metadata independent Stop and
+request regression, entire wire suite and 27 focused Node tests also passed.
+
+
+### Accepted research UI integration (2026-11-02)
+
+UI/client tests, vet and race checks passed for review anchors/raw fallbacks,
+source-bound receipt recovery, bounded browse scope, exact tool/code copying,
+grapheme selection/deletion/paste, stale forms and exact request recovery.
+Prepared AgentBox decision/control content is reused for frame hit geometry;
+context surfaces retain complete bounded keys and search rows reuse their prepared
+projection. These changes establish reduced repeated computation in source, not
+a measured runtime savings percentage. Bubble Tea 2.1.1 is the focused upstream
+resize-allocation update; go-gitdiff 0.9.0 supplies parsing with retained MIT notices.
+
+Final integration exposed a program-test synchronization race: reply controls
+appeared while the preceding open action was still pending, and explicit Send
+correctly retained the draft. The test now waits for open acknowledgement before
+sending; the focused regression passed. No source mutation retry was added.
+
+Owner native acceptance: compact/wide file/hunk navigation and changed-diff notes;
+physical pointer/caret/clipboard with Unicode and mouse-off selection; exact
+request recovery, searchable choices and independent Stop/Submit; source-qualified
+recent switching with drafts/reading positions; native project paging and exact
+receipt recovery. VoiceOver, IME, physical input and performance gains are unclaimed.
+
+
+Final parent integration checks passed on Go 1.27.2 darwin/arm64: fresh UI,
+client and wire package tests plus vet; CLI tests; AgentBox integration tests,
+actual read cancellation and metadata/independent-Stop cases (12.655s). Child
+UI/client/wire race evidence applies to unchanged production code. Module tidy
+and verification and whitespace checks passed. `scripts/build-go.sh` produced
+Mach-O ARM64; strict ad-hoc signature verification and `--version` passed.
+Artifact SHA-256: `b391a2c0074b20cbc8934f0e8e4c0dacb8bf425a10cc1d40818046b32e9fabc5`.
+No install, native desktop action or service restart was performed. The earlier
+full `check-go.sh` was not represented as passed; focused affected checks above
+and retained baseline evidence are the verification boundary.
+
+### Parent acceptance and correction (2026-11-02)
+
+Independent Sol review identified four source defects: Recent interpreted its ID
+as title search; launch message hit geometry was omitted; modal textareas retained
+virtual-only carets; and Copy code rejected valid indented/longer fences. Parent
+corrected them. Recent resolves exact IDs through fresh bounded metadata pages
+without altering browse filters or attaching detail. Focused regressions cover an
+out-of-page target with an unrelated title, compact/wide launch click/drag and
+terminal caret, and exact CRLF/tab body slices across valid fence boundaries.
+Those regressions, complete UI/client/wire package tests and vet passed. The new
+ARM64 executable passed strict signature verification; SHA-256 is
+`36a835b897b47947f65c845277d53d62e820f69423e7e9e2f58cfd590a416fc9`.
+
+Read-only installed-native acceptance on two hosts reporting
+`0.1.7-nightly.20261101.4016` passed 12 same-sequence full authoritative snapshot
+comparisons: ordinary snapshots exactly equal restored compact snapshots. Returned
+markers included ID tables, `turnItemsOmitLocalVisible`, `textOmitted` and
+`filesOmitted`; requests and available cursors were retained. Source stdio hello
+reported read cancellation and correct identity/protocol. HTTP cancellation of a
+helper-held actual native response and immediate unary RPC cancellation allowed
+subsequent reads; stale cancellation was harmless. Original journal filename/hash
+sets were unchanged. Existing adapters without cancellation remained readable.
+Inherited rows and subagent omission markers retain fixture coverage only;
+server-side resource retirement and stdio-to-unary cancellation were not newly
+proven. No productive mutation or installation occurred.
+
+Physical M1 acceptance of the preceding executable separately exercised violet
+Developer/AgentBox layouts at 150×43 and 88×32, palettes, ordinary composer
+click-to-caret, whole-grapheme deletion, mouse-off Ghostty selection and draft
+preservation across mode changes. Fleet Workspace was unavailable; the identified
+awake Dell display was used. Exact application drag replacement, recent switching,
+source clipboard commands and Changes/notes lacked suitable safe loaded cases;
+request Submit/Stop retain source/fixture evidence. The corrected launch pointer
+and modal caret need their separate focused physical recheck. No IME, VoiceOver,
+physical latency, RAM or battery improvement is claimed.
+
+The deprecated Swift client is outside active checks and release artifacts. Its
+source and separate state remain untouched. Earlier Swift check results above
+predate the owner's explicit deprecation instruction.
+
+Final-head CI exposed stale integration assertions for Apple glyph hints and
+Finished-open settlement. The tests now verify the accepted behavior: explicit
+open clears once, Changes/Reply add no mutation, and explicit Reopen uses the
+exact native target. AgentBox refreshes native eligibility after that acknowledged
+open while retaining the reading row. Previous now completes in the browser
+operation lane; a full program regression verifies switching back and restoring
+the exact draft. Those four journeys and out-of-page lookup passed normally and
+under race detection; UI tests and vet passed.
+
+A physical recheck verified corrected compact/wide launch click offsets and the
+visible terminal caret, but exposed lost drag selection. The parent found that
+Update invalidated drawn geometry on motion/release, cancelling the gesture.
+Those pointer events now consume the unchanged drawn frame. A regression through
+Update/View/release/text replacement preserves the exact selected range and
+surrounding Unicode. The focused physical recheck subsequently passed at wide and compact sizes: selecting `fghij` and typing `R` persisted exactly `ABCDE R 👩🏽‍💻 é omega`, preserving all surrounding UTF-8 bytes. Clipboard was restored and owned windows closed. The rebuilt ARM64 executable passed strict signature verification:
+`45c5643ee14b4398ce46575ffe23ef00719f0d9e2e52ac63120d63b6687c6c7e`.
+
+
+Final hosted CI passed both active jobs on production revision
+`501f6ae2d61e91259c524faaa232bcdae1501250`: complete `scripts/check-go.sh`
+(formatting, all Go packages, vet and race), ARM64 build/artifact, and shared
+adapter/script checks. The prior failed head is not acceptance evidence; its
+failures were diagnosed and corrected above. This final verification-record
+update changes documentation only and reuses that exact unchanged-code evidence.
+M4 installation remains held for the owner's connection check.

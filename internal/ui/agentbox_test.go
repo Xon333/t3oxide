@@ -50,7 +50,7 @@ func TestAgentBoxSessionSwitchRetiresReviewReads(t *testing.T) {
 		t.Fatal("stale completion changed the new review")
 	}
 	m.Update(inboxReviewMsg{generation: m.generation, serial: m.agentbox.reviewSerial, target: target, review: wire.ThreadReview{ThreadID: "b", Diff: "new changes"}, title: "New review"})
-	if m.agentbox.reviewLoading || m.agentbox.review == nil || m.agentbox.reviewTarget != target || !strings.Contains(m.detail, "new changes") {
+	if m.agentbox.reviewLoading || m.agentbox.review == nil || m.agentbox.reviewTarget != target || (m.reviewIndex == nil || !strings.Contains(m.reviewIndex.Raw, "new changes")) {
 		t.Fatal("current review did not finish on the new session")
 	}
 }
@@ -58,7 +58,8 @@ func TestAgentBoxSessionSwitchRetiresReviewReads(t *testing.T) {
 func seedAgentBox(m *Model) {
 	m.mode = "agentbox"
 	m.agentbox.loaded = true
-	m.agentbox.view = "needs"
+	m.agentbox.followLaunch = false
+	m.agentbox.view = "finished"
 	for _, item := range []struct{ id, title, status, env string }{{"alpha", "Review export flow", "completed", "one"}, {"beta", "Add keyboard navigation", "completed", "two"}, {"gamma", "Check error handling", "running", "one"}} {
 		target := client.InboxTarget{ProfileID: item.env, EnvironmentID: "env-" + item.env, ProjectID: "project", ThreadID: item.id, Revision: strings.Repeat("a", 64)}
 		row := client.InboxThread{Target: target, Environment: "Host " + item.env, Thread: client.Thread{ID: item.id, ProjectID: "project", Project: "Demo", Title: item.title, Status: item.status, UpdatedAt: "2026-10-29T12:00:00Z", Inbox: &wire.InboxMetadata{NativeRevision: target.Revision, UpdatedAt: "2026-10-29T12:00:00Z", QueuedCount: 0, Workspace: "/workspace/demo-task", Branch: "task/demo", LatestMessage: &wire.InboxMessage{Role: "assistant", Text: "The export flow now preserves the selected destination. Review the actual changes before deciding what to do next."}}}}
@@ -191,7 +192,7 @@ func TestAgentBoxRealViewSizesAndSyntheticCaptures(t *testing.T) {
 			m.restoreFocus()
 			view := m.View().Content
 			plain := ansi.Strip(view)
-			if !strings.Contains(plain, "AgentBox") || !strings.Contains(plain, "Needs you") || !strings.Contains(plain, "1 Changes") {
+			if !strings.Contains(plain, "AgentBox") || !strings.Contains(plain, "Finished") || !strings.Contains(plain, "1 Changes") {
 				t.Fatalf("missing actionable inbox at %v:\n%s", size, plain)
 			}
 			lines := strings.Split(view, "\n")

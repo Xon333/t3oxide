@@ -1,7 +1,7 @@
 t3oxide source adaptations
 
 The primary Go terminal client uses the unmodified MIT-licensed Charm modules:
-charm.land/bubbletea/v2 v2.1.0, charm.land/bubbles/v2 v2.2.1,
+charm.land/bubbletea/v2 v2.1.1, charm.land/bubbles/v2 v2.2.1,
 charm.land/lipgloss/v2 v2.0.6, and charm.land/glamour/v2 v2.0.1.
 Their original license texts are in LICENSES/. Exact release/source provenance
 is recorded in docs/dependencies.json; Go module checksums are in go.sum.
@@ -24,6 +24,13 @@ launch, inbox lifecycle and review presentation over those verified native
 contracts. Its JSONC/default-file behavior follows the pinned public contract;
 it bundles no Effect schema runtime or native execution service. See
 docs/native-workflows.md for exact source references and compatibility limits.
+
+adapter/core.mjs also adapts native lossless bounded snapshot restoration from
+pingdotgg/t3code a773dc38ac75177b6cd133d27df00ca0a83f9480:
+packages/contracts/src/orchestrationV2IdTable.ts and
+packages/shared/src/orchestrationV2BoundedSnapshot.ts and
+orchestrationV2DedupedBodies.ts. This is a narrow MIT-licensed codec adaptation;
+no native runtime is bundled.
 
 T3 source license retained below:
 
@@ -110,3 +117,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+The bounded file/hunk review index uses unmodified github.com/bluekeyes/go-gitdiff
+v0.9.0 (MIT). Its original license is retained in LICENSES/.

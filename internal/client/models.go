@@ -22,6 +22,19 @@ type ModelCatalog struct {
 	More                            bool                   `json:"more"`
 	RequiresNewThreadForModelChange bool                   `json:"requiresNewThreadForModelChange"`
 }
+
+// ProviderSummary is an identity label, not inferred account telemetry.
+func (c *ModelCatalog) ProviderSummary() string {
+	label := c.ProviderLabel
+	if c.ProviderIdentity != nil && c.ProviderIdentity.InstanceID == c.InstanceID && c.ProviderIdentity.Label != "" {
+		label = c.ProviderIdentity.Label
+	}
+	if label == "" || label == c.InstanceID {
+		return c.InstanceID
+	}
+	return label + " [" + c.InstanceID + "]"
+}
+
 type CatalogModel struct {
 	Slug      string             `json:"slug"`
 	Name      string             `json:"name"`
@@ -272,6 +285,9 @@ func (a *Session) applyModel(ctx context.Context, c *ModelCatalog, selected conf
 	if env == nil || thread != c.ThreadID {
 		return result, errors.New("conversation changed while choosing a model")
 	}
+	if err := env.CheckProviderInstance(selected.InstanceID); err != nil {
+		return result, err
+	}
 	if next {
 		if !overrideEnabled {
 			return result, errors.New("this host does not support message model overrides")
@@ -304,6 +320,9 @@ func (a *Session) applyModel(ctx context.Context, c *ModelCatalog, selected conf
 func (a *Session) settings(ctx context.Context) (Result, error) {
 	catalog, err := a.Catalog(ctx)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := a.checkModelProviderPolicy(catalog.InstanceID); err != nil {
 		return Result{}, err
 	}
 	snapshot := a.snapshot()
@@ -354,6 +373,9 @@ func (a *Session) pickModel(ctx context.Context, args string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := a.checkModelProviderPolicy(c.InstanceID); err != nil {
+		return Result{}, err
+	}
 	base := a.modelBase(c, next)
 	if args != "" {
 		selected, err := c.withModel(base, args)
@@ -397,7 +419,7 @@ func (a *Session) pickModel(ctx context.Context, args string) (Result, error) {
 	if next {
 		prompt += " One dispatch override; T3 owns any resulting thread preference. No automatic restore."
 	}
-	answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Model · " + modelScope(next), Prompt: prompt, Choices: choices, Initial: base.Model})
+	answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Model · " + modelScope(next) + " · " + c.ProviderSummary(), Prompt: prompt, Choices: choices, Initial: base.Model})
 	if err != nil || answer.Cancelled {
 		return Result{}, err
 	}
@@ -424,6 +446,9 @@ func (a *Session) pickOption(ctx context.Context, kind, args string) (Result, er
 	next, arg := nextArgument(args)
 	c, err := a.Catalog(ctx)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := a.checkModelProviderPolicy(c.InstanceID); err != nil {
 		return Result{}, err
 	}
 	base := a.modelBase(c, next)

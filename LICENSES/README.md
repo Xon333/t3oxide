@@ -5,11 +5,12 @@ The complete dependency graph is pinned by `go.mod` and `go.sum`. This source de
 | Module | Version | License text |
 |---|---|---|
 | `charm.land/bubbles/v2` | `v2.2.1` | [bubbles-MIT.txt](bubbles-MIT.txt) |
-| `charm.land/bubbletea/v2` | `v2.1.0` | [bubbletea-MIT.txt](bubbletea-MIT.txt) |
+| `charm.land/bubbletea/v2` | `v2.1.1` | [bubbletea-MIT.txt](bubbletea-MIT.txt) |
 | `charm.land/glamour/v2` | `v2.0.1` | [glamour-MIT.txt](glamour-MIT.txt) |
 | `charm.land/lipgloss/v2` | `v2.0.6` | [lipgloss-MIT.txt](lipgloss-MIT.txt) |
 | `github.com/charmbracelet/x/ansi` | `v0.11.9` | [github.com_charmbracelet_x_ansi-LICENSE.txt](github.com_charmbracelet_x_ansi-LICENSE.txt) |
 | `github.com/alecthomas/chroma/v2` | `v2.14.0` | [github.com_alecthomas_chroma_v2-LICENSE.txt](github.com_alecthomas_chroma_v2-LICENSE.txt) |
+| `github.com/bluekeyes/go-gitdiff` | `v0.9.0` | [github.com_bluekeyes_go-gitdiff-LICENSE.txt](github.com_bluekeyes_go-gitdiff-LICENSE.txt) |
 | `github.com/atotto/clipboard` | `v0.1.4` | [github.com_atotto_clipboard-LICENSE.txt](github.com_atotto_clipboard-LICENSE.txt) |
 | `github.com/aymerick/douceur` | `v0.2.0` | [github.com_aymerick_douceur-LICENSE.txt](github.com_aymerick_douceur-LICENSE.txt) |
 | `github.com/charmbracelet/colorprofile` | `v0.4.3` | [github.com_charmbracelet_colorprofile-LICENSE.txt](github.com_charmbracelet_colorprofile-LICENSE.txt) |

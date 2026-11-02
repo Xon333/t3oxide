@@ -23,7 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var version = "0.9.0-bubbletea"
+var version = "0.10.0-bubbletea"
 
 const help = `Usage: t3oxide [COMMAND] [OPTIONS]
 
@@ -231,7 +231,7 @@ func run(ctx context.Context, args []string, out io.Writer) (err error) {
 		return err
 	}
 	if a.version {
-		_, err = fmt.Fprintln(out, "t3oxide", version, "· Bubble Tea v2.1.0")
+		_, err = fmt.Fprintln(out, "t3oxide", version, "· Bubble Tea v2.1.1")
 		return err
 	}
 	if a.command == "capabilities" && a.env == "" {

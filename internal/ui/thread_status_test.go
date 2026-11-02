@@ -27,7 +27,7 @@ func TestThreadStatusRenderersDistinguishNativeStates(t *testing.T) {
 		{"failed with request", "failed", "! Failed", "error", &wire.InboxMetadata{PendingRequestCount: 1}},
 		{"error", "error", "! Failed", "error", nil},
 		{"blocked", "blocked", "# Blocked", "warning", nil},
-		{"completed", "completed", "+ Completed", "operation", nil},
+		{"completed", "completed", "+ Completed", "completed", nil},
 		{"reviewed unreported", "unreported", "? Unknown", "plain", &wire.InboxMetadata{Settled: true}},
 		{"reviewed idle", "idle", "- Idle", "plain", &wire.InboxMetadata{Settled: true}},
 		{"missing", "", "? Unknown", "plain", nil},
@@ -58,20 +58,30 @@ func TestThreadStatusRenderersDistinguishNativeStates(t *testing.T) {
 						d.Render(&nav, l, 0, item)
 						for _, output := range []string{nav.String(), strings.Split(m.inboxListView(width, 4), "\n")[0]} {
 							plain := ansi.Strip(output)
-							if !strings.HasSuffix(plain, tc.label) || !strings.Contains(plain, projectBubble(thread.Project, "unknown")) || !strings.Contains(plain, "I") || ansi.StringWidth(output) != width {
+							if !strings.HasSuffix(plain, strings.Fields(tc.label)[0]) || !strings.Contains(plain, projectBubble(thread.Project, "unknown")) || !strings.Contains(plain, "I") || ansi.StringWidth(output) != width {
 								t.Fatalf("width %d lost badge/title/identity or bounds: %q", width, plain)
 							}
 							if selected && !strings.HasPrefix(plain, ">") {
 								t.Fatalf("selection missing: %q", plain)
 							}
 							p := colors(theme)
-							want := map[string]string{"operation": p.operation, "warning": p.warning, "error": p.error, "plain": p.fg}[tc.role]
-							assertSemanticSlotText(t, output, tc.label, want)
-							for _, cell := range semanticSlotCells(t, output, tc.label) {
+							want := statusColor(tc.role)
+							if tc.role == "plain" {
+								want = p.fg
+							}
+							badgeOutput := ansi.TruncateLeft(output, width-1, "")
+							assertSemanticSlotText(t, badgeOutput, strings.Fields(tc.label)[0], want)
+							for _, cell := range semanticSlotCells(t, badgeOutput, strings.Fields(tc.label)[0]) {
 								if cell.Style.Attrs&uv.AttrBold == 0 {
 									t.Fatal("badge lost bold emphasis")
 								}
-								if selected && theme == "terminal" && cell.Style.Attrs&uv.AttrReverse == 0 {
+								if tc.role != "plain" {
+									assertSemanticSlotColor(t, cell.Style.Bg, statusBackground)
+									if cell.Style.Attrs&uv.AttrReverse != 0 {
+										t.Fatal("status colors reversed by selection")
+									}
+								}
+								if tc.role == "plain" && selected && theme == "terminal" && cell.Style.Attrs&uv.AttrReverse == 0 {
 									t.Fatal("badge lost terminal row selection")
 								}
 							}
@@ -98,7 +108,7 @@ func TestThreadStatusAgentBoxRealViewBoundsAndLiveDecision(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		out := m.View().Content
 		plain := ansi.Strip(out)
-		if !strings.Contains(plain, "! Failed") || !strings.Contains(plain, "1 request") || !strings.Contains(plain, "+ Completed") || !strings.Contains(plain, "> Active") {
+		if !strings.Contains(plain, "! Failed") || !strings.Contains(plain, "1 request") || !strings.Contains(plain, "  +") || !strings.Contains(plain, "  >") {
 			t.Fatalf("%v lost live failure/request or list distinctions: %q", size, plain)
 		}
 		geometry := m.inboxGeometry()

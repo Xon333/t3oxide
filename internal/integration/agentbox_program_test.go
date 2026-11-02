@@ -26,8 +26,6 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	r.send("/mode agentbox\x1d")
 	r.waitText("AgentBox")
 	waitWorkspaceFrame(t, r, func(v string) bool { return strings.Contains(v, "Alpha") && !strings.Contains(v, "Loading…") }, "native inbox page")
-	r.send("\r")
-	r.waitText("1 Changes")
 	r.send("r")
 	waitProgramReply(t, r, "Alpha")
 	const draft = "jknrelsz123\nexact second line"
@@ -87,6 +85,7 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	waitWorkspaceFrame(t, r, func(v string) bool { return strings.Contains(v, "1 Changes") && !strings.Contains(v, "Loading…") }, "ready decision after reply and Stop")
 	r.send("1")
 	r.waitText("export.go")
+	r.send("\r") // Explicit raw-source selection from the bounded file navigator.
 	r.waitText("selected destination")
 	r.send("\x1b")
 	waitWorkspaceFrame(t, r, func(v string) bool { return !strings.Contains(v, "╭─ Changes") && strings.Contains(v, "1 Changes") }, "native changes dismissal")
@@ -121,13 +120,14 @@ func TestAgentBoxProgramFilesRealIsolatedTaskFromNativeReview(t *testing.T) {
 	r.send("\x1b[98;7u")
 	r.waitText("AgentBox")
 	r.send("n")
-	r.waitText("Project")
-	r.send("\r")
-	r.waitText("First message")
+	r.modalReady("╭─ New ─")
 	const brief = "  Investigate export handling\nkeep the selected path  "
 	r.program.Send(tea.PasteMsg{Content: brief})
 	r.waitText("keep the selected path")
-	r.send("\t\x01\x0bNative task from inbox\r")
+	r.send("\t\x01\x0bNative task from inbox")
+	r.send("\x1b[Z\r") // Back to message; Continue, then project.
+	r.modalReady("Project")
+	r.send("\r")
 	r.waitText("[Create & send]")
 	if effects, _ := f.counts(); effects != 0 {
 		t.Fatal("reviewed title or brief launched without Create")
@@ -177,6 +177,9 @@ func TestAgentBoxProgramHealthyHostUsableWhileOtherMetadataIsPending(t *testing.
 	}, "independent healthy source before slow host")
 	r.send("\r")
 	r.waitText("1 Changes")
+	waitWorkspaceFrame(t, r, func(v string) bool {
+		return !strings.Contains(v, "Command pending") && !strings.Contains(v, "reconnecting")
+	}, "healthy thread open acknowledged before sending")
 	r.send("r")
 	waitProgramReply(t, r, "Alpha")
 	r.send("use the healthy host now\x1d")

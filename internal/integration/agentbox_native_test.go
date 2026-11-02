@@ -156,8 +156,8 @@ func TestAgentBoxActualNativeFileReplyChangesReviewAndStaleUndo(t *testing.T) {
 		return e.Snapshot != nil && e.Snapshot.Metadata.Live && e.Status.ActiveRunID == ""
 	})
 	row := nativeInboxThread(t, a, thread)
-	if client.InboxBucket(row, time.Now()) != "needs" {
-		t.Fatal("native completion did not return to needs-you")
+	if client.InboxBucket(row, time.Now()) != "finished" {
+		t.Fatal("native completion did not enter Finished")
 	}
 	review, err := a.ThreadReview(context.Background(), row.Target)
 	if err != nil || !strings.Contains(review.Diff, "+selected destination") || len(review.Files) != 1 || review.Workspace != filed["thread"].(object)["worktreePath"] {

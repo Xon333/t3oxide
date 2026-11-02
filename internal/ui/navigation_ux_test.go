@@ -56,6 +56,8 @@ func TestNavigationReviewOpensReviewedIdentityAfterHighlightChanges(t *testing.T
 			for _, child := range result {
 				run(child)
 			}
+		case navigatorOpenedMsg:
+			msg = result.message.(actionMsg)
 		case actionMsg:
 			msg = result
 		}

@@ -6,7 +6,7 @@ Ctrl+S retains the independent Stop + queue-hold lane, including while a normal 
 
 ## Application defaults
 
-Every Command action has a Control fallback in the same context. macOS help prefers the delivered Command alias and marks it with `*`; `/shortcuts` lists every resolved Control binding. Ctrl+Alt chords preserve ordinary Control editing keys. macOS and terminals can consume Command+H/M/N, modified arrows, digits and other shortcuts before the TUI receives them. Modified digits/arrows still require distinct terminal events; the listed ordinary navigation routes remain available. No terminal or OS keybindings are changed by t3oxide. **Commands is the portable alternative for every listed action.**
+Every Command action has a Control fallback in the same context. macOS help uses Apple modifier glyphs and prefers delivered Command aliases where available; `/shortcuts` lists every resolved Control binding. Ctrl+Alt chords preserve ordinary Control editing keys. macOS and terminals can consume Command+M/N, modified arrows, digits and other shortcuts before the TUI receives them. Modified digits/arrows still require distinct terminal events; the listed ordinary navigation routes remain available. No terminal or OS keybindings are changed by t3oxide. **Commands is the portable alternative for every listed action.**
 
 | Action | Shipped keys | Context / Command alias |
 | --- | --- | --- |
@@ -14,12 +14,12 @@ Every Command action has a Control fallback in the same context. macOS help pref
 | Switch conversation | Ctrl+O; F6 | Ordinary workspace; delivered Cmd+O. In the sidebar, F6 retains More. |
 | More sidebar actions | Alt+A; F6 | Sidebar query/results; the visible More control uses the same actions. |
 | Info | Ctrl+L; F2 | All surfaces; delivered Cmd+I. `/details` remains an alias for `/info`. |
-| Help | Ctrl+Alt+H; `?` in reading/activity; F1 | `/help` or Commands in any editor; delivered Cmd+H. |
+| Help | Alt+H; Ctrl+Alt+H compatibility alias; `?` in reading/activity; F1 | `/help` or Commands in any editor. On macOS: ⌥H; ⌘H remains owned by the OS. |
 | Send / execute recognized command | Ctrl+] | Composer only; delivered Cmd+Enter. |
 | Send literal text | Ctrl+\; Ctrl+Enter when distinct | Composer only; does not interpret slash commands. |
 | Steer | Ctrl+Alt+Enter when distinct | Composer only; delivered Cmd+Shift+Enter, or Commands → Steer. |
 | Request next / Submit | Ctrl+Enter when distinct | Only an actual request form; Enter on its focused Next/Submit button remains the portable route. This action never sends an ordinary reply or creates a thread. |
-| New | Ctrl+N outside multiline editors; Ctrl+Alt+N in the composer | Delivered Cmd+N also works from the composer; Ctrl+N retains next-line editing there. |
+| New | Ctrl+N outside multiline editors; Ctrl+Alt+N in the composer | ⌃⌥N in the macOS composer; ⌃N in navigation. The default Command-N alias is absent because stock Ghostty opens a terminal window; explicit manual bindings remain supported. Ctrl+N retains next-line editing in the composer. |
 | New in same project | Ctrl+Alt+T; Ctrl+Alt+N outside editors | Enhanced Ctrl+Shift+N or delivered Cmd+Shift+N; `/new-same`. |
 | Settings | Ctrl+Alt+G; Ctrl+G outside multiline editors | Delivered Cmd+, from ordinary workspace; Ctrl+G remains Select All in multiline editors; the navigator query uses it for Settings. |
 | Thread model | Ctrl+Alt+M; Alt+M outside editors | Delivered Cmd+M; `/model`. |
@@ -121,7 +121,7 @@ The palette and slash completion use `internal/ui/command_catalog.go` plus the s
 
 | Command | Effect |
 | --- | --- |
-| `/new [title]` | Choose an existing project in the creation environment, resolve native defaults, and review before Create. |
+| `/new [title]` | Write a first message, choose an existing project, then launch with native defaults; model and effort changes are optional. |
 | `/new-same [title]` | Preselect only the current project's exact ID; environment, model/options and workspace still use creation defaults. |
 | `/switch [words]` | Open conversation navigation; optional words search its native metadata. Highlighting alone does not attach. |
 | `/env` | Choose an environment explicitly. |
@@ -209,3 +209,5 @@ General options are `--config PATH` (environment configuration), `--state PATH` 
 Only `threads` accepts `--scope active|all|completed|failed`, `--type all|main|subagents|forks`, `--cursor N`, `--limit N` (1–200), and `--json-envelope`. `--item`/`--revision` belong to `inspect`; `--activity-cursor` belongs to `activity`. `--json` needs a read command. Unknown options, invalid values and unsupported combinations fail rather than being silently ignored.
 
 `capabilities`, `activity` and `inspect` use their versioned JSON envelope, including structured read errors. Host credentials remain host-local, and metadata/artifact references are not authorization to execute commands or read arbitrary host paths.
+
+On macOS, shortcut hints use ⌘, ⌥, ⌃ and ⇧ for Command, Option, Control and Shift. Manual bindings remain authoritative; key names in the configuration file are unchanged.

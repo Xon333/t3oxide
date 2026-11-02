@@ -8,7 +8,7 @@
 
 Browse conversations across your configured [T3 Code](https://github.com/pingdotgg/t3code) environments, open a thread, and keep working from your terminal. **Developer** gives you a unified conversation browser. **AgentBox** turns those same threads into a task inbox.
 
-T3 owns execution, permissions, threads, worktrees and queues. t3oxide connects through an on-demand Node adapter; closing the client leaves native work running. The primary client uses Go, Bubble Tea v2, Bubbles, Lip Gloss and Glamour. The retained Swift/AppKit client provides a separate rollback path.
+T3 owns execution, permissions, threads, worktrees and queues. t3oxide connects through an on-demand Node adapter; closing the client leaves native work running. The active client uses Go, Bubble Tea v2, Bubbles, Lip Gloss and Glamour. The deprecated Swift/AppKit files are retained without ongoing development or checks.
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"background": "#20232B", "primaryColor": "#2A2F3A", "primaryTextColor": "#E6E9F0", "primaryBorderColor": "#BBA5FA", "lineColor": "#A7ADBF", "edgeLabelBackground": "#20232B"}}}%%
@@ -29,7 +29,7 @@ flowchart LR
 
 ### Find the right conversation
 
-See configured environments together, ordered by recent native activity. Filter the list, then open the exact conversation with Enter or a click. Browsing does not subscribe to transcripts, and an unavailable host leaves healthy rows usable.
+See configured environments together, ordered by recent native activity. Hide reviewed conversations through native review state; restore them from All conversations. Filter the list, then open the exact conversation with Enter or a click. Browsing does not subscribe to transcripts, and an unavailable host leaves healthy rows usable.
 
 ### Work with the conversation in view
 
@@ -37,7 +37,7 @@ Read streaming Markdown, compose a reply, inspect tools and changes, or answer a
 
 ### Review tasks in AgentBox
 
-Start with **Needs you**, then move between Working, Queued, Later, Reviewed, All and Unknown. **Completed** describes a run; **Reviewed** describes the native review disposition. File work into an existing project, review each launch, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
+Start with **Inbox**, then move between Working, Queued, Later, Reviewed, All and Unknown. **Completed** describes a run; **Reviewed** describes the native review disposition. File work into an existing project, launch with native defaults, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
 
 Priorities organize the client view; they do not schedule work after exit. Existing native runs and accepted message queues continue independently. See the [AgentBox guide](docs/agentbox.md) for the full workflow.
 
@@ -99,7 +99,7 @@ bash scripts/check-security.sh
 bash scripts/build-go.sh
 ```
 
-The Go checks cover formatting, tests, vet and race detection. Shared checks cover the Node adapter, scripts, Python measurement tests and available Swift tools. Run the checks affected by your change; documentation changes need no app build.
+The Go checks cover formatting, tests, vet and race detection. Shared checks cover the Node adapter, scripts and Python measurement tests. Run the checks affected by your change; documentation changes need no app build.
 
 Read [architecture](docs/architecture.md) for the protocol boundary, [state and recovery](docs/state-recovery.md) before changing persistence, and [verification](docs/verification.md) for portable tests versus installed-instance evidence. Remaining native acceptance is tracked in [native remainder](NATIVE-REMAINDER.md).
 

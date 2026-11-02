@@ -35,7 +35,7 @@ func threadStatusBadge(row client.Thread) statusBadge {
 	}
 	switch status {
 	case "completed":
-		return statusBadge{"+ Completed", "operation"}
+		return statusBadge{"+ Completed", "completed"}
 	case "interrupted", "stopped", "cancelled", "canceled":
 		return statusBadge{"x Stopped", "warning"}
 	}
@@ -45,19 +45,35 @@ func threadStatusBadge(row client.Thread) statusBadge {
 	return statusBadge{"? Unknown", "plain"}
 }
 
-// Start from the row style so selection/focus stays visible behind the badge.
-// Terminal uses the existing ANSI roles, never fixed RGB colors.
-func (b statusBadge) style(p palette, base lipgloss.Style) lipgloss.Style {
-	color := p.fg
-	switch b.role {
+// Compact keeps the full textual status available in Info and decision details.
+func (b statusBadge) compact() statusBadge {
+	b.label = strings.Fields(b.label)[0]
+	return b
+}
+
+// Critical status colors are fixed, independently of theme and row selection.
+// A dark symbol cell preserves their contrast in light terminals too.
+const statusBackground = "#111318"
+
+func statusColor(role string) string {
+	switch role {
 	case "operation":
-		color = p.operation
+		return "#5DE8FF"
+	case "completed":
+		return "#5CFF85"
 	case "warning":
-		color = p.warning
+		return "#FFE45E"
 	case "error":
-		color = p.error
+		return "#FF7575"
 	}
-	return base.Foreground(lipgloss.Color(color)).Bold(true)
+	return ""
+}
+
+func (b statusBadge) style(p palette, base lipgloss.Style) lipgloss.Style {
+	if foreground := statusColor(b.role); foreground != "" {
+		return base.Foreground(lipgloss.Color(foreground)).Background(lipgloss.Color(statusBackground)).Reverse(false).Bold(true)
+	}
+	return base.Foreground(lipgloss.Color(p.fg)).Bold(true)
 }
 
 func renderStatusRow(line, identity string, badge statusBadge, p palette, base, marker lipgloss.Style) string {

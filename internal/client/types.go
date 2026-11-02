@@ -183,6 +183,7 @@ func cloneQuestion(q Question) Question {
 
 type LaunchInput struct{ Title, Message string }
 type LaunchReview struct {
+	Stage       string // message or ready for the compact native launch flow
 	Input       LaunchInput
 	Location    Location
 	Selection   *config.ModelSelection

@@ -10,6 +10,7 @@ import { T3, readConfig } from './t3.mjs';
 // their input order; in particular no mutation can overtake another mutation.
 const MAX_REGULAR = 8, MAX_STOP = 2, MAX_OUTPUT = 12;
 const MAX_OUTPUT_BYTES = 4 * LIMIT.frame;
+const READS = new Set(['list','models','projects','launch-defaults','native-defaults','thread-preview','thread-review','activity','inspect-item','watch','history']);
 const NAVIGATION = new Set(['watch', 'history']);
 
 export async function run(argv = process.argv.slice(2), {
@@ -25,6 +26,8 @@ export async function run(argv = process.argv.slice(2), {
   requireThat(major > 22 || major === 22 && minor >= 4, 'Node 22.4 or newer is required.', 'configuration');
   const config = await readConfig(configPath);
   let blocked = false, queued = [], queuedBytes = 0, ended = false;
+  const reads = new Map();
+  let cancellation = false;
   let backend, buffer = Buffer.alloc(0), navigation = 0;
   const lanes = { regular: { tail: Promise.resolve(), pending: 0, limit: MAX_REGULAR },
     stop: { tail: Promise.resolve(), pending: 0, limit: MAX_STOP } };
@@ -37,6 +40,8 @@ export async function run(argv = process.argv.slice(2), {
   function close() {
     if (ended) return;
     ended = true; ++navigation;
+    for (const controller of reads.values()) controller.abort();
+    reads.clear();
     queued = []; queuedBytes = 0; buffer = Buffer.alloc(0);
     backend?.close(); input.pause();
     input.off('data', receive); input.off('end', close); input.off('error', fail);
@@ -93,14 +98,14 @@ export async function run(argv = process.argv.slice(2), {
     try { write({id:'probe',result:await backend.probe()}); } finally { close(); }
     return { close };
   }
-  async function handle(a, generation) {
+  async function handle(a, generation, controller) {
     const superseded = () => generation !== null && generation !== navigation;
     mark('operation-start',{lane:a.op==='stop'?'stop':'regular'});
     try {
-      if (superseded()) throw new Fault('cancelled','Navigation was superseded.');
+      if (superseded() || controller?.signal.aborted) throw new Fault('cancelled','Navigation was superseded.');
       let result;
       switch (a.op) {
-        case 'hello': result = await backend.probe(); break;
+        case 'hello': result = await backend.probe(); cancellation = true; result = {...result, features:{...result?.features,readCancellation:true}}; break;
         case 'list': result = await backend.list(a.query ?? '', a); break;
         case 'models': result = await backend.models(a.threadId); break;
         case 'projects': result = await backend.projects(a); break;
@@ -115,10 +120,10 @@ export async function run(argv = process.argv.slice(2), {
         case 'send': case 'stop': case 'answer': case 'launch': case 'launch-project': case 'thread-action': case 'select-model': result = await backend.act(a.op,a); break;
         default: throw new Fault('invalid_request','Unsupported companion operation.');
       }
-      if (superseded()) throw new Fault('cancelled','Navigation was superseded.');
+      if (superseded() || controller?.signal.aborted) throw new Fault('cancelled','Navigation was superseded.');
       write({id:a.id,result:result ?? {}});
     } catch (error) {
-      replyError(a.id, superseded() ? new Fault('cancelled','Navigation was superseded.') : error);
+      replyError(a.id, (superseded() || controller?.signal.aborted) ? new Fault('cancelled','Navigation was superseded.') : error);
     } finally {mark('operation-end',{lane:a.op==='stop'?'stop':'regular'});}
   }
   function accept(a) {
@@ -126,6 +131,13 @@ export async function run(argv = process.argv.slice(2), {
     try {
       id = identifier(a?.id); requireThat(a.v === 1, 'Unsupported companion protocol.', 'incompatible');
       if (a.op !== 'hello') requireThat(a.environmentId === config.environmentId, 'Environment identity mismatch.', 'identity_mismatch');
+      if (a.op === 'cancel-read') {
+        requireThat(cancellation, 'Read cancellation was not negotiated.', 'unsupported');
+        identifier(a.requestId, 'read request id');
+        reads.get(a.requestId)?.abort();
+        return; // One-way control: no admission slot, journal or mutation dispatch.
+      }
+      requireThat(!reads.has(id), 'Duplicate active read id.');
       if (a.op !== 'thread-preview') backend.cancelPreview?.();
       const lane = a.op === 'stop' ? lanes.stop : lanes.regular;
       requireThat(lane.pending < lane.limit, 'Too many pending companion requests.', 'backpressure');
@@ -138,10 +150,16 @@ export async function run(argv = process.argv.slice(2), {
         generation = ++navigation;
         backend.cancelNavigation();
       }
+      const controller = READS.has(a.op) ? new AbortController() : null;
+      if (controller) reads.set(id, controller);
       lane.pending++;
       mark('operation-admitted',{lane:a.op==='stop'?'stop':'regular'});
-      lane.tail = lane.tail.then(() => ended ? undefined : handle(a, generation))
-        .catch(fail).finally(() => { lane.pending--; });
+      lane.tail = lane.tail.then(() => {
+        if (ended) return;
+        const work = () => handle(a, generation, controller);
+        return backend.read && controller ? backend.read(controller.signal, work) : work();
+      })
+        .catch(fail).finally(() => { lane.pending--; if (reads.get(id) === controller) reads.delete(id); });
     } catch (error) { replyError(id, error); }
   }
   function receive(chunk) {

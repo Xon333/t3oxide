@@ -1,8 +1,9 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 // T3-specific compatibility boundary; never imported by the native app.
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
-import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, targetThread, text, trimView, validateDescriptor, view } from './core.mjs';
+import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, restoreBoundedSnapshot, targetThread, text, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
 import { FEATURES, catalog, launchCommand, modelCommand, modelView, sameSelection } from './models.mjs';
 import { threadList } from './navigation.mjs';
@@ -33,6 +34,7 @@ export async function readConfig(path) {
 
 export class T3 {
   constructor(config, emit, dependencies = {}) {
+    this.readContext = new AsyncLocalStorage();
     this.config = config; this.emit = emit; this.fetch = dependencies.fetch ?? fetch;
     this.now = dependencies.now ?? (() => performance.now());
     this.trace = typeof dependencies.trace === 'function' ? dependencies.trace : null;
@@ -58,7 +60,30 @@ export class T3 {
     // thread/account identities, tokens, drafts or native configuration.
     this.trace?.({stage,at:this.now(),generation:this.generation,epoch:this.epoch,...extra});
   }
+  // Request-local scope keeps independent Stop/mutation work outside read
+  // cancellation. Retire the scope so inherited timers cannot reuse its signal.
+  async read(signal, work) {
+    const scope = {signal, active:true};
+    try { return await this.readContext.run(scope, work); }
+    finally { scope.active = false; }
+  }
+  readSignal(signal) {
+    const scope = this.readContext.getStore();
+    const request = scope?.active ? scope.signal : null;
+    return request && signal ? AbortSignal.any([request, signal]) : request ?? signal;
+  }
+  readCall(tag, payload) {
+    const signal = this.readSignal();
+    if (signal?.aborted) throw new Fault('cancelled', 'Read was cancelled.');
+    const call = this.rpc.call(tag, payload), abort = () => call.cancel();
+    signal?.addEventListener('abort', abort, {once:true});
+    return {...call, promise:call.promise.then(result => {
+      if (signal?.aborted) throw new Fault('cancelled', 'Read was cancelled.');
+      return result;
+    }).finally(() => signal?.removeEventListener('abort', abort))};
+  }
   async http(path, method = 'GET', authenticated = true, signal) {
+    signal = this.readSignal(signal);
     const controller = new AbortController(); this.controllers.add(controller);
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
@@ -79,6 +104,7 @@ export class T3 {
         if (total > LIMIT.upstream) { await reader.cancel(); throw new Fault('too_large', 'T3 response exceeds the host safety limit; no full-history fallback was attempted.'); }
         parts.push(value);
       }
+      if (signal?.aborted) throw new Fault('cancelled', 'Read was cancelled.');
       this.stats.httpBytes += total;
       return JSON.parse(Buffer.concat(parts).toString('utf8'));
     } catch (error) {
@@ -111,7 +137,7 @@ export class T3 {
       features: { ...FEATURES, modelSelection: d.capabilities?.serverResolvedCommandContext === true,
         nativeWorkflows: d.capabilities?.serverResolvedCommandContext === true,
         nativeDefaults: d.capabilities?.serverResolvedCommandContext === true,
-        nativeDefaultsWrite: false, threadPreview:true, serverSearch:true,
+        readCancellation:true, nativeDefaultsWrite: false, threadPreview:true, serverSearch:true,
         threadPinning:d.capabilities?.threadPinning === true,
         launchModelSelection: d.capabilities?.serverResolvedCommandContext === true,
         messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },
@@ -130,7 +156,9 @@ export class T3 {
     if (this.rpc) return;
     if (this.connecting) return this.connecting;
     this.wantConnection = true;
-    this.connecting = (async () => {
+    // Bootstrap is shared with independent Stop. A read may cancel its own
+    // subsequent I/O, but must not abort that shared connection establishment.
+    this.connecting = this.readContext.run(null, async () => {
       const generation = ++this.generation;
       const hello = this.consumeProbeReceipt(generation - 1) ?? await this.probe(false);
       this.stats.tickets++; this.mark('ticket-start');
@@ -153,7 +181,7 @@ export class T3 {
         this.journal = new Journal(this.config.journalDirectory, journalScope(this.config));
       }
       this.emit('status', { state: 'connected', ...hello });
-    })();
+    });
     try { await this.connecting; } catch (error) { this.probeReceipt = null; throw error; }
     finally { this.connecting = null; }
   }
@@ -195,7 +223,7 @@ export class T3 {
       const q = text(query,800).trim();
       requireThat(q.length >= 2 && q.length <= 200, 'Server search needs 2–200 characters.');
       await this.connect();
-      const result = await this.rpc.call('orchestration.searchThreads',{query:q,limit:50}).promise;
+      const result = await this.readCall('orchestration.searchThreads',{query:q,limit:50}).promise;
       requireThat(Array.isArray(result?.matches) && result.matches.length <= 50, 'Unsupported native search result.', 'incompatible');
       const ids = new Map();
       for (const match of result.matches) {
@@ -237,8 +265,8 @@ export class T3 {
     requireThat(['project','environment'].includes(a.scope ?? 'project'), 'Invalid native defaults scope.');
     await this.connect();
     const shell=await this.http('/api/orchestration/shell');
-    const config=await this.rpc.call('server.getConfig',{}).promise;
-    if (!config.settings) config.settings=await this.rpc.call('server.getSettings',{}).promise;
+    const config=await this.readCall('server.getConfig',{}).promise;
+    if (!config.settings) config.settings=await this.readCall('server.getSettings',{}).promise;
     const report=nativeDefaultsReport(shell,config,a.projectId,a.scope ?? 'project');
     this.rememberProvider(report.providerIdentity);
     return report;
@@ -258,15 +286,15 @@ export class T3 {
     requireThat(this.descriptor?.capabilities?.serverResolvedCommandContext === true,
       'Native launch defaults are unavailable on this host.', 'unsupported');
     const shell = await this.http('/api/orchestration/shell');
-    const config = await this.rpc.call('server.getConfig', {}).promise;
-    if (!config.settings) config.settings = await this.rpc.call('server.getSettings', {}).promise;
+    const config = await this.readCall('server.getConfig', {}).promise;
+    if (!config.settings) config.settings = await this.readCall('server.getSettings', {}).promise;
     const project = shell.projects?.find(p=>p.id===a.projectId && !p.deletedAt);
     requireThat(project, 'Selected project is unavailable.', 'stale');
     const mode=effectiveProjectSetting(config.settings,project,'defaultThreadEnvMode');
     let projectFile=null;
     if (mode == null) {
       try {
-        const file=await this.rpc.call('projects.readFile', {cwd:project.workspaceRoot,relativePath:'t3.json',allowMissing:true}).promise;
+        const file=await this.readCall('projects.readFile', {cwd:project.workspaceRoot,relativePath:'t3.json',allowMissing:true}).promise;
         if (file.exists !== false && !file.truncated) projectFile=projectFileDefaults(file.contents);
       } catch (error) {
         // Native treats a missing/invalid project file as absent. Authentication,
@@ -279,7 +307,7 @@ export class T3 {
     if (a.workspaceMode) defaults.workspaceMode=a.workspaceMode;
     defaults.workspaceStrategy={type:'root'};
     if (defaults.workspaceMode==='worktree') {
-      const refs=await this.rpc.call('vcs.listRefs',{cwd:defaults.workspaceRoot,limit:200,refKind:'local'}).promise;
+      const refs=await this.readCall('vcs.listRefs',{cwd:defaults.workspaceRoot,limit:200,refKind:'local'}).promise;
       requireThat(refs?.isRepo===true && Array.isArray(refs.refs), 'Native isolated worktree needs a Git repository.', 'unsupported');
       const base=refs.refs.find(r=>r.isDefault===true && r.isRemote!==true) ?? refs.refs.find(r=>r.current===true && r.isRemote!==true);
       requireThat(base && typeof base.name==='string' && base.name.length>0,
@@ -301,7 +329,7 @@ export class T3 {
     const cwd=thread.worktreePath ?? project?.workspaceRoot;
     requireThat(typeof cwd==='string' && cwd.startsWith('/') && Buffer.byteLength(cwd)<=4096 && !/[\x00-\x1f\x7f]/u.test(cwd),
       'Native review workspace is unavailable.','unsupported');
-    const result=await this.rpc.call('review.getDiffPreview',{cwd}).promise;
+    const result=await this.readCall('review.getDiffPreview',{cwd}).promise;
     const fresh=await this.http('/api/orchestration/shell');
     const current=fresh.threads?.find(t=>t.id===thread.id);
     requireThat(current && nativeRevision(current)===nativeRevision(thread), 'Thread changed during review; reopen it.', 'stale');
@@ -341,7 +369,7 @@ export class T3 {
     }
     await this.connect();
     requireThat(reviewed(), 'This activity page changed. Select the item again.', 'stale');
-    const read = this.rpc.call('orchestration.getTurnItem', {threadId:a.threadId, itemId:a.itemId,
+    const read = this.readCall('orchestration.getTurnItem', {threadId:a.threadId, itemId:a.itemId,
       ...(a.revision ? {revision:a.revision} : {})});
     const signal = a.viewThreadId ? this.navigation.signal : null;
     const cancel = () => read.cancel();
@@ -363,7 +391,7 @@ export class T3 {
     } finally { signal?.removeEventListener('abort', cancel); }
   }
   async modelCatalog(p) {
-    const config = await this.rpc.call('server.getConfig', {}).promise;
+    const config = await this.readCall('server.getConfig', {}).promise;
     const result=catalog(config, p);this.rememberProvider(result.providerIdentity);return result;
   }
   rememberProvider(identity) {
@@ -380,7 +408,8 @@ export class T3 {
   }
   async bounded(threadId, signal) {
     this.stats.snapshots++; this.mark('bounded-start');
-    const s = await this.http(`/api/orchestration/threads/${encodeURIComponent(threadId)}/bounded`, 'GET', true, signal);
+    // Lossless HTTP options only: no deferWork or live-stream body omission.
+    const s = restoreBoundedSnapshot(await this.http(`/api/orchestration/threads/${encodeURIComponent(threadId)}/bounded?compactTurnItems=1&dedupeBodies=1&compactIds=1`, 'GET', true, signal));
     targetThread(s, threadId);
     requireThat(Number.isSafeInteger(s.snapshotSequence), 'Missing snapshot sequence.', 'incompatible');
     this.mark('bounded-ready'); return s;

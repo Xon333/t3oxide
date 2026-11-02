@@ -354,9 +354,8 @@ func TestIntuitiveFlowAgentBoxRejectsChangedOffersAndStaleGeometry(t *testing.T)
 				t.Fatal("stale AgentBox decision click changed current source")
 			}
 			if change == "request" {
-				flowClick(t, m, "3 Later")
-				if m.dialog == nil || m.dialog.local != "inbox-later" {
-					t.Fatal("fresh Later choice was not reachable")
+				if labels := m.inboxChoiceLabels(); len(labels) != 2 || labels[0] != "Requests" {
+					t.Fatal("request offered an ineligible visibility action")
 				}
 			}
 		})

@@ -53,30 +53,42 @@ func projectBubble(project, kind string) string {
 }
 
 func nativeShelf(row client.Thread) string {
-	if row.Inbox == nil {
-		return "Conversations"
+	if row.Inbox != nil && (row.Inbox.PendingRequestCount > 0 || row.Inbox.PendingChildRequest) {
+		return "Requests"
 	}
-	if row.Inbox.PinnedAt != "" {
-		return "Pinned"
+	switch strings.ToLower(row.Status) {
+	case "preparing", "starting", "running", "active", "responding", "waiting", "waiting_for_input", "awaiting_input", "waiting_for_approval", "queued", "pending":
+		return "Working"
+	}
+	if row.Inbox == nil {
+		if row.Status == "completed" {
+			return "Finished"
+		}
+		return "Conversations"
 	}
 	if row.Inbox.Working != nil && *row.Inbox.Working {
 		return "Working"
 	}
-	if row.Inbox.PendingRequestCount > 0 || row.Inbox.PendingChildRequest || !row.Inbox.Settled && row.Inbox.SnoozedUntil == "" {
-		return "Needs you"
+	if !row.Inbox.Settled && row.Inbox.SnoozedUntil == "" {
+		return "Finished"
+	}
+	if row.Inbox.PinnedAt != "" {
+		return "Pinned"
 	}
 	return "Other"
 }
 func shelfRank(shelf string) int {
 	switch shelf {
-	case "Pinned":
-		return 0
 	case "Working":
+		return 0
+	case "Requests":
 		return 1
-	case "Needs you":
+	case "Finished":
 		return 2
-	case "Conversations":
+	case "Pinned":
 		return 3
+	case "Conversations":
+		return 4
 	default:
 		return 4
 	}
@@ -84,7 +96,7 @@ func shelfRank(shelf string) int {
 
 func (m *Model) freezeNavigatorRows(canonical []navigatorItem) []navigatorItem {
 	n := &m.navigator
-	if !n.focused || n.reorderNow || len(n.ordered) == 0 {
+	if n.reorderNow || n.reading == "" && !n.focused || len(n.ordered) == 0 {
 		n.reorderNow, n.orderDeferred = false, false
 		return canonical
 	}
@@ -131,7 +143,7 @@ func (m *Model) freezeNavigatorRows(canonical []navigatorItem) []navigatorItem {
 }
 
 func (m *Model) applyNavigatorOrder() {
-	if len(m.navigator.pages) == 0 {
+	if m.navigator.reading != "" || len(m.navigator.pages) == 0 {
 		return
 	}
 	m.navigator.reorderNow = true
@@ -204,8 +216,7 @@ func (m *Model) compactNavigatorOperations(width int) renderedSurface {
 	return result
 }
 
-// The same immutable result supplies the draw and the hit geometry. Expansion
-// is local to the selected row; no helper, subscription or attachment runs.
+// The same immutable result supplies fixed row drawing and hit geometry.
 func (m *Model) navigatorRowsLayout(width, height int) renderedSurface {
 	n := &m.navigator
 	p := colors(m.navigatorTheme())
@@ -274,21 +285,6 @@ func (m *Model) navigatorRowsLayout(width, height int) renderedSurface {
 		lines = append(lines, line.String())
 		if index == n.list.Index() && n.focused {
 			selectedStart = start
-			if height >= 6 {
-				// A focused title has a fixed two-line allocation. A metadata refresh
-				// can update text without moving any following drawn target.
-				for _, part := range expandedTitleLines(item.thread.Title, max(1, width-2)) {
-					lines = append(lines, p.selection().Render(fitLine("  "+part, width)))
-				}
-				context := item.thread.Project + " · " + item.label + " / " + item.profile
-				if item.thread.ProviderInstanceID != "" {
-					context += " · " + item.thread.ProviderInstanceID
-				}
-				if item.stale {
-					context = "No longer in returned page · Refresh"
-				}
-				lines = append(lines, p.subtle().Render(fitLine("  "+safeText(context), width)))
-			}
 			selectedEnd = len(lines)
 		}
 		hits = append(hits, hitZone{x: 0, y: start, width: width, height: len(lines) - start, action: "navigator-row", args: item.identity(), serial: n.serial})
@@ -300,26 +296,12 @@ func (m *Model) navigatorRowsLayout(width, height int) renderedSurface {
 	if selectedStart < offset {
 		offset = selectedStart
 	}
+	n.moreBelow = len(lines) > offset+height
 	if len(lines) > height {
 		lines = lines[offset:min(len(lines), offset+height)]
 	}
 	hits = clipHits(moveHits(hits, 0, -offset), 0, 0, width, height)
 	return renderedSurface{content: padBlock(strings.Join(lines, "\n"), width, height), hits: hits}
-}
-
-// expandedTitleLines preserves both ends of a long title in a stable two-line
-// region. Cell-aware truncation never splits a grapheme; Info retains all text.
-func expandedTitleLines(title string, width int) [2]string {
-	width = max(1, width)
-	title = strings.Join(strings.Fields(safeText(title)), " ")
-	wrapped := strings.Split(ansi.Wrap(title, width, ""), "\n")
-	result := [2]string{fitLine(wrapped[0], width), ""}
-	if len(wrapped) == 2 {
-		result[1] = fitLine(wrapped[1], width)
-	} else if len(wrapped) > 2 {
-		result[1] = fitLine(ansi.TruncateLeft(title, max(0, ansi.StringWidth(title)-width+1), "…"), width)
-	}
-	return result
 }
 
 func (m *Model) cancelNavigatorPreview() {

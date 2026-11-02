@@ -104,9 +104,16 @@ func (m *Model) resizeDialog() {
 			m.modalInput.SetHeight(max(1, min(4, m.modalHeight-7)))
 			return
 		} else if m.dialog.launch != nil {
-			m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
-			m.modalInput.SetHeight(max(1, min(8, surfaceHeight-8)))
-			m.launchTitle.SetWidth(max(1, m.workspaceWidth()-12))
+			if m.dialog.launch.review.Stage == "" {
+				m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
+				m.modalInput.SetHeight(max(1, min(8, surfaceHeight-8)))
+				m.launchTitle.SetWidth(max(1, m.workspaceWidth()-12))
+			} else {
+				m.modalInput.SetWidth(max(1, m.modalWidth-6))
+				m.modalInput.SetHeight(3)
+				m.launchTitle.SetWidth(max(1, m.modalWidth-12))
+				m.modalHeight = min(m.modalHeight, 11)
+			}
 			return
 		} else if m.dialog.kind == client.EnterText {
 			m.modalHeight = min(m.modalHeight, questionHeight+8)
@@ -184,7 +191,7 @@ func (m *Model) View() tea.View {
 	if m.width < 20 || m.height < 8 {
 		m.hitZones = nil
 		m.layoutDirty = true
-		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · Ctrl+Q exits"), m.width, m.height))
+		return m.terminalView(clipBlock(p.active().Render("t3oxide")+"\n"+p.subtle().Render("Resize terminal · "+m.actionBinding("quit").Help().Key+" exits"), m.width, m.height))
 	}
 	if m.browserPage || m.launchPage {
 		content := m.fullSurfaceView()
@@ -235,7 +242,7 @@ func (m *Model) View() tea.View {
 		state = "Read only · " + state
 	}
 	stateWidth := min(ansi.StringWidth(state), max(16, inner*2/3))
-	model := p.plain().Bold(true).Render(fitLine(modelStatusLine(m.status.ModelName), max(1, inner-stateWidth-2)))
+	model := p.plain().Bold(true).Render(fitLine(m.providerModelStatus(), max(1, inner-stateWidth-2)))
 	status := edgeLine(model, p.operational().Render(fitLine(state, stateWidth)), inner)
 	toolbar := m.toolbarView(inner)
 	body := m.bodyView()
@@ -322,13 +329,24 @@ func (m *Model) terminalView(content string) tea.View {
 	if m.mouse {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
+	if m.focused {
+		if editor, z, ok := m.drawnEditor(); ok {
+			if cursor := editor.Cursor(); cursor != nil {
+				cursor.Position.X += z.x
+				cursor.Position.Y += z.y
+				if z.contains(cursor.Position.X, cursor.Position.Y) {
+					v.Cursor = cursor
+				}
+			}
+		}
+	}
 	return v
 }
 
 func (m *Model) bodyView() string {
 	p := colors(m.theme)
 	if m.transcript == "" {
-		text := p.plain().Render("Ctrl+O  Browser") + "\n" + p.plain().Render(m.actionBinding("palette").Help().Key+"  Commands")
+		text := p.plain().Render(m.actionBinding("switch").Help().Key+"  Browser") + "\n" + p.plain().Render(m.actionBinding("palette").Help().Key+"  Commands")
 		if m.snapshot != nil {
 			text = p.subtle().Render("Preparing conversation…")
 		}
@@ -388,6 +406,9 @@ func (m *Model) modalLayout() renderedSurface {
 	d := m.dialog
 	if d == nil {
 		return renderedSurface{}
+	}
+	if d.launch != nil && !d.details {
+		return m.frameSurface(d.title, m.launchLayout(w, h-helpHeight), w)
 	}
 	if d.settingsForm != nil && !d.details {
 		surface := m.modelSettingsLayout(w, h-helpHeight)
@@ -467,7 +488,7 @@ func (m *Model) modalLayout() renderedSurface {
 
 func (m *Model) pickerSelectionView(width int) string {
 	d := m.dialog
-	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" || d.surface == client.SurfaceNativeDefaults {
+	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" || d.surface == client.SurfaceNativeDefaults || d.local == "palette" {
 		return ""
 	}
 	if item, ok := d.list.SelectedItem().(choiceItem); ok {
@@ -663,7 +684,7 @@ func (m *Model) sidebarView(width, height int) string {
 	if m.status.Writable {
 		access = "Writes enabled"
 	}
-	lines := []string{p.active().Render("Workspace"), "", fitLine(m.status.ProfileID, width), connected, access, "", "Ctrl+O  Browser", "/env    Environments", "Ctrl+R  Requests", optionKey("M") + "      Model", optionKey("E") + "      Effort", optionKey("S") + "      Speed", "/sidebar off"}
+	lines := []string{p.active().Render("Workspace"), "", fitLine(m.status.ProfileID, width), connected, access, "", m.actionBinding("switch").Help().Key + "  Browser", "/env    Environments", m.actionBinding("requests").Help().Key + "  Requests", optionKey("M") + "      Model", optionKey("E") + "      Effort", optionKey("S") + "      Speed", "/sidebar off"}
 	return padBlock(p.subtle().Render(strings.Join(lines, "\n")), width, height)
 }
 

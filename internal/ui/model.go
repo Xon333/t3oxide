@@ -55,6 +55,11 @@ type copyResultMsg struct{ err error }
 // Model keeps component state on Bubble Tea's event loop. Network operations,
 // settings persistence, clipboard helpers and Markdown rendering run in commands.
 type Model struct {
+	contextSurface                             contextSurface
+	recentConversations                        []recentConversation
+	reviewIndex                                *reviewIndex
+	reviewRaw                                  string
+	editorGesture                              *editorGesture
 	ctx                                        context.Context
 	cancel                                     context.CancelFunc
 	sessionCtx                                 context.Context
@@ -168,6 +173,7 @@ func NewModel(ctx context.Context, session *client.Session, settings *Settings) 
 	m.navigationHidden = settings.navigationHidden()
 	m.initNavigator()
 	m.composer = newTextarea("")
+	m.composer.SetVirtualCursor(false)
 	m.composer.DynamicHeight = true
 	m.composer.MinHeight = 1
 	m.modalInput = newTextarea("Enter your answer")
@@ -206,7 +212,7 @@ func newTextarea(placeholder string) textarea.Model {
 	t.MaxContentHeight = 0
 	t.MaxWidth = 10000
 	t.SetHeight(3)
-	t.SetVirtualCursor(true)
+	t.SetVirtualCursor(false)
 	t.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("enter", "ctrl+m", "alt+enter", "shift+enter", "ctrl+j"), key.WithHelp("Enter", "newline"))
 	return t
 }
@@ -470,7 +476,7 @@ func (m *Model) startRender() tea.Cmd {
 		content, err := m.renderer.render(ctx, req)
 		result := renderedMsg{request: req, content: content, err: err, rows: m.renderer.rows}
 		if err == nil {
-			result.prepared = prepareTranscript(content, req.width, req.searchTerm)
+			result.prepared = m.renderer.prepare(content, req.width, req.searchTerm)
 			if err := ctx.Err(); err != nil {
 				result.err = err
 				result.prepared = nil
@@ -482,7 +488,7 @@ func (m *Model) startRender() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 	switch message.(type) {
-	case tea.MouseClickMsg:
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 	case tea.MouseWheelMsg:
 		// Pointer routing reads the last drawn bounds. A disabled or rejected
 		// wheel does not invalidate otherwise unchanged controls.
@@ -545,9 +551,65 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 		return m.inboxMutationFinished(msg)
 	case inboxRankMsg:
 		return m, m.inboxRankFinished(msg)
+	case inboxOpenedMsg:
+		result, ok := msg.message.(actionMsg)
+		if !ok || result.generation != m.generation || result.id != m.actionID {
+			return m, nil
+		}
+		reviewed := result.err == nil && msg.reviewed
+		if reviewed {
+			m.agentbox.reading = msg.row.Target.Key()
+		}
+		next, cmd := m.Update(msg.message)
+		if reviewed {
+			// Keep the reading row, but refresh its native revision and eligibility
+			// after the acknowledged visibility change before offering actions.
+			return next, tea.Batch(cmd, m.loadInbox(false))
+		}
+		return next, cmd
+	case toolSourceMsg:
+		return m, m.acceptToolSource(msg)
+	case navigatorOpenedMsg:
+		result, ok := msg.message.(actionMsg)
+		if !ok || result.generation != m.generation || result.id != m.browserID {
+			return m, nil
+		}
+		refresh := false
+		if result.err == nil {
+			identity := msg.page.ProfileID + "\x00" + msg.thread
+			refresh = m.navigator.reading != "" && m.navigator.reading != identity
+			if refresh {
+				previous := m.navigator.reading
+				rows := m.navigator.ordered[:0]
+				for _, row := range m.navigator.ordered {
+					if row.identity() != previous {
+						rows = append(rows, row)
+					}
+				}
+				m.navigator.ordered = rows
+			}
+			m.navigator.reading = ""
+			for _, row := range msg.page.Page.Threads {
+				if row.ID == msg.thread && client.CompletionReviewable(row) {
+					m.navigator.reading = identity
+				}
+			}
+		}
+		next, cmd := m.Update(msg.message)
+		if refresh {
+			m.navigator.reorderNow = m.navigator.reading == ""
+			return next, tea.Batch(cmd, m.loadNavigator(m.navigator.profile, m.navigator.query, true))
+		}
+		return next, cmd
 	case navigatorMsg:
 		return m, m.navigatorLoaded(msg)
+	case tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		_, command := m.editorPointer(msg)
+		return m, command
 	case tea.MouseClickMsg:
+		if handled, command := m.editorPointer(msg); handled {
+			return m, command
+		}
 		if handled, command := m.agentboxMouse(msg); handled {
 			return m, command
 		}
@@ -565,6 +627,7 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 		}
 		return m, m.updateComponent(msg.kind, msg.id, msg.message)
 	case tea.WindowSizeMsg:
+		m.cancelEditorGesture()
 		m.layoutDirty = true
 		m.width, m.height = max(1, msg.Width), max(1, msg.Height)
 		m.reconcileWorkspaceFocus()
@@ -578,6 +641,7 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 		m.focused = true
 		return m, m.restoreFocus()
 	case tea.BlurMsg:
+		m.cancelEditorGesture()
 		m.focused = false
 		m.composer.Blur()
 		m.modalInput.Blur()
@@ -832,6 +896,10 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 			m.openDetail(msg.result.DetailTitle, m.readableClientDetail(msg.name, msg.result.Detail))
 		}
 		if msg.err == nil {
+			if msg.name == "navigator-review" {
+				m.resetNavigatorMembership()
+				commands = append(commands, m.loadNavigator(m.navigator.profile, m.navigator.query, true))
+			}
 			if msg.name == "send" && msg.delivery == m.nextDelivery && msg.deliverySerial == m.deliverySerial {
 				m.nextDelivery = ""
 			}

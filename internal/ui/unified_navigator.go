@@ -351,7 +351,7 @@ func (m *Model) navigatorHealth() string {
 		parts = append(parts, "! "+strings.Join(ids, ", "))
 	}
 	if n.page.Page.More {
-		parts = append(parts, "More available")
+		parts = append(parts, "↓")
 	}
 	incomplete := 0
 	for _, page := range n.pages {
@@ -366,9 +366,6 @@ func (m *Model) navigatorHealth() string {
 	}
 	if incomplete > 0 {
 		parts = append(parts, fmt.Sprintf("%d incomplete", incomplete))
-	}
-	if n.orderDeferred {
-		parts = append(parts, "Order held · Refresh to reorder")
 	}
 	return strings.Join(parts, " · ")
 }

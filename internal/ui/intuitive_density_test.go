@@ -126,7 +126,7 @@ func TestIntuitiveDensityAuthoritativeRequestsAndRealFeedback(t *testing.T) {
 	if strings.Count(view, "Awaiting input (3)") != 1 || strings.Contains(view, "request(s)") || m.feedbackVisible() || m.feedbackView(80) != "" {
 		t.Fatalf("request count acquired duplicate feedback:\n%s", view)
 	}
-	for _, want := range []string{"running", "Review saved action", "Saved Stop", "Draft not saved", "Ctrl+O  Browser"} {
+	for _, want := range []string{"running", "Review saved action", "Saved Stop", "Draft not saved", m.actionBinding("switch").Help().Key + "  Browser"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("authoritative state missing %q", want)
 		}
@@ -182,12 +182,12 @@ func TestIntuitiveDensityCompactFooterUsesContext(t *testing.T) {
 	m := testModel(t)
 	footer := ansi.Strip(m.footerView(39))
 	palette := m.actionBinding("palette").Help().Key
-	if !strings.Contains(footer, palette+" commands") || strings.Contains(footer, "^Space") || strings.Index(footer, "Ctrl+S") > strings.Index(footer, palette) {
+	if !strings.Contains(footer, palette+" commands") || strings.Contains(footer, "^Space") || strings.Index(footer, shortcutHintText("Ctrl+S")) > strings.Index(footer, palette) {
 		t.Fatalf("compact footer lost contextual command/Stop packing: %q", footer)
 	}
 	m.status.Requests = 2
 	footer = ansi.Strip(m.footerView(39))
-	if !strings.Contains(footer, "Ctrl+R requests") || !strings.HasPrefix(footer, "Ctrl+S") {
+	if !strings.Contains(footer, shortcutHintText("Ctrl+R requests")) || !strings.HasPrefix(footer, shortcutHintText("Ctrl+S")) {
 		t.Fatalf("compact footer bypassed pending requests or Stop: %q", footer)
 	}
 	m.status.Requests = 0
@@ -234,7 +234,7 @@ func TestIntuitiveDensityFullPageGeometryPaysForActualChrome(t *testing.T) {
 			if lipgloss.Height(m.modalView()) > available {
 				t.Fatal("modal exceeded measured full-page body allocation")
 			}
-			if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Visible notice") || !strings.Contains(view, "Ctrl+Q") {
+			if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Visible notice") || !strings.Contains(view, shortcutHintText("Ctrl+Q")) {
 				t.Fatalf("feedback hid full-page bottom controls:\n%s", view)
 			}
 			m.Update(noticeMsg{generation: m.generation})
@@ -298,7 +298,7 @@ func TestIntuitiveDensityDialogHelpTracksDetailsAndLaunchFocus(t *testing.T) {
 	}{{0, "Enter newline"}, {1, "Enter continue"}, {2, "Enter create"}, {3, "Enter cancel"}, {7, "Enter editor"}} {
 		m.dialog.launch.focus = tc.focus
 		help := ansi.Strip(m.dialogHelp(56, true))
-		if !strings.Contains(help, tc.want) || strings.Count(help, "Ctrl+S") != 1 || !strings.Contains(help, "Ctrl+Q") {
+		if !strings.Contains(help, tc.want) || strings.Count(help, shortcutHintText("Ctrl+S")) != 1 || !strings.Contains(help, shortcutHintText("Ctrl+Q")) {
 			t.Fatalf("launch focus help=%q, want %q", help, tc.want)
 		}
 	}
@@ -355,17 +355,17 @@ func TestIntuitiveDensityFullPageHelpHasOneOwner(t *testing.T) {
 			}
 			help := ansi.Strip(m.dialogHelp(m.workspaceWidth(), true))
 			first, _, _ := strings.Cut(help, "\n")
-			if !strings.Contains(first, "Enter open") || !strings.Contains(first, "Ctrl+S") {
+			if !strings.Contains(first, "Enter open") || !strings.Contains(first, shortcutHintText("Ctrl+S")) {
 				t.Fatalf("compact primary/Stop hidden: %q", first)
 			}
 			view := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Enter open", "Tab controls", m.actionBinding("info").Help().Key + " Info", "Esc resume", "Ctrl+S", "Ctrl+Q"} {
+			for _, want := range []string{"Enter open", "Tab controls", m.actionBinding("info").Help().Key + " Info", "Esc resume", shortcutHintText("Ctrl+S"), shortcutHintText("Ctrl+Q")} {
 				if strings.Count(view, want) != 1 {
 					t.Fatalf("expected one %q:\n%s", want, view)
 				}
 			}
 			m.openDetail("Help", "Local help content")
-			if strings.Contains(ansi.Strip(m.modalView()), "Ctrl+Y copy") || !strings.Contains(ansi.Strip(m.dialogHelp(m.workspaceWidth(), true)), "Ctrl+Y copy") {
+			if strings.Contains(ansi.Strip(m.modalView()), shortcutHintText("Ctrl+Y copy")) || !strings.Contains(ansi.Strip(m.dialogHelp(m.workspaceWidth(), true)), shortcutHintText("Ctrl+Y copy")) {
 				t.Fatal("detail overlay did not yield local controls to full page")
 			}
 			if lipgloss.Height(m.View().Content) > size[1] || lipgloss.Width(m.View().Content) > size[0] {

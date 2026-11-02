@@ -59,6 +59,7 @@ type response struct {
 }
 type pendingRequest struct {
 	stop  bool
+	hello bool
 	reply chan response
 }
 type writeFrame struct {
@@ -88,6 +89,7 @@ type Connection struct {
 	events                      chan Packet
 	wake                        chan struct{}
 	eventWake                   chan struct{}
+	readCancellation            bool
 	closed                      bool
 	err                         error
 	pending                     map[string]*pendingRequest
@@ -221,7 +223,7 @@ func (c *Connection) Request(ctx context.Context, op string, fields map[string]a
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	p := &pendingRequest{stop: op == "stop", reply: make(chan response, 1)}
+	p := &pendingRequest{stop: op == "stop", hello: op == "hello", reply: make(chan response, 1)}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -256,6 +258,10 @@ func (c *Connection) Request(ctx context.Context, op string, fields map[string]a
 			return reply.result, reply.err
 		default:
 		}
+		if cancellableRead(op) {
+			c.cancelRead(id)
+			return nil, wait.Err()
+		}
 		return nil, &Fault{Code: "timeout", Message: "no acknowledgement; acceptance is unknown—retry only the saved operation ID", Uncertain: true}
 	case <-c.done:
 		select {
@@ -269,6 +275,31 @@ func (c *Connection) Request(ctx context.Context, op string, fields map[string]a
 		}
 		return nil, &Fault{Code: "disconnected", Message: "connection closed; acceptance is unknown—retry only the saved operation ID", Uncertain: true}
 	}
+}
+
+func cancellableRead(op string) bool {
+	switch op {
+	case "list", "models", "projects", "launch-defaults", "native-defaults", "thread-preview", "thread-review", "activity", "inspect-item", "watch", "history":
+		return true
+	}
+	return false
+}
+
+func (c *Connection) cancelRead(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || !c.readCancellation {
+		return
+	}
+	// Preserve request-before-cancel ordering and Stop's reserved writer lane.
+	// Best effort when a stalled writer cannot admit this bounded control frame.
+	if c.regularWrites >= 16 {
+		return
+	}
+	data, _ := json.Marshal(map[string]any{"v": 1, "environmentId": c.environment.EnvironmentID, "id": NewID(), "op": "cancel-read", "requestId": id})
+	c.regularQueue = append(c.regularQueue, writeFrame{data: append(data, '\n')})
+	c.regularWrites++
+	signal(c.wake)
 }
 
 func (c *Connection) removePending(id string, p *pendingRequest) {
@@ -410,6 +441,10 @@ func (c *Connection) readOutput() {
 			}
 			c.mu.Lock()
 			if p := c.pending[packet.ID]; p != nil {
+				if p.hello && replyErr == nil {
+					features, _ := result["features"].(map[string]any)
+					c.readCancellation = features["readCancellation"] == true
+				}
 				select {
 				case p.reply <- response{result, replyErr}:
 				default:

@@ -94,7 +94,11 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 			return nil
 		}
 		old := m.composer.Value()
-		m.composer, cmd = m.composer.Update(message)
+		if handled, next := updateGraphemeEditor(&m.composer, message); handled {
+			cmd = next
+		} else {
+			m.composer, cmd = m.composer.Update(message)
+		}
 		m.composerChanged(old)
 		// Native DynamicHeight also recalculates on cursor-only updates. Keep
 		// the display cap after those updates without limiting stored text.
@@ -116,7 +120,11 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 		if m.rejectInput(message, "Answer") {
 			return nil
 		}
-		m.modalInput, cmd = m.modalInput.Update(message)
+		if handled, next := updateGraphemeEditor(&m.modalInput, message); handled {
+			cmd = next
+		} else {
+			m.modalInput, cmd = m.modalInput.Update(message)
+		}
 		if len(m.modalInput.Value()) > maxInputBytes || strings.Count(m.modalInput.Value(), "\n") >= maxInputLines {
 			m.modalInput.SetValue(old)
 			m.setInputProblem("modal", id, "Answer limit is 64 KiB / 9,999 lines; this input was not added"+m.retainAttempt(inputText(message)))
@@ -187,6 +195,8 @@ func (m *Model) rejectInput(message tea.Msg, label string) bool {
 	current, selection := m.composer.Value(), m.composer.SelectedText()
 	if kind == "modal" {
 		current, selection = m.modalInput.Value(), m.modalInput.SelectedText()
+		normalizeEditorSelection(&m.modalInput)
+		selection = m.modalInput.SelectedText()
 		if m.dialog.prompt != nil && m.dialog.prompt.Question.SingleLine && strings.ContainsAny(text, "\r\n") {
 			m.setInputProblem(kind, id, "This field is one line; this input was not added"+m.retainAttempt(text))
 			return true
@@ -213,6 +223,9 @@ func (m *Model) rejectInput(message tea.Msg, label string) bool {
 	if kind == "composer" && utf8.ValidString(text) && len(text) <= maxInputBytes && strings.Count(text, "\n") < maxInputLines {
 		m.rejectedInput = &exactRejectedInput{generation: m.generation, edits: m.draftEdits, draft: m.currentDraft(), text: text}
 		reason += " · Commands: " + m.exactRejectedInputLabel()
+	}
+	if kind == "modal" && m.retainRequestExactInput(text) {
+		reason += " · Ctrl+Shift+V stages exact answer; Submit sends"
 	}
 	m.setInputProblem(kind, id, reason+m.retainAttempt(text))
 	return true

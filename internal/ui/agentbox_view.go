@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -16,8 +17,10 @@ import (
 
 func inboxViewLabel(view string) string {
 	switch view {
+	case "finished":
+		return "Finished"
 	case "needs":
-		return "Needs you"
+		return "Requests"
 	case "working":
 		return "Working"
 	case "queued":
@@ -38,7 +41,11 @@ func (m *Model) agentboxView() tea.View {
 	w, h := m.width, m.height
 	geometry := m.inboxGeometry()
 	left, right := geometry.left, geometry.right
-	header := p.active().Render("AgentBox") + "  " + p.plain().Bold(true).Render(inboxViewLabel(m.agentbox.view))
+	searchMode := "Loaded"
+	if m.agentbox.serverSearch {
+		searchMode = "Server"
+	}
+	header := p.subtle().Render(searchMode) + " · " + p.active().Render("AgentBox") + "  " + p.plain().Bold(true).Render(inboxViewLabel(m.agentbox.view))
 	counts := fmt.Sprintf("%d", len(m.agentbox.rows))
 	if m.agentbox.loading {
 		counts = "Loading…"
@@ -56,7 +63,8 @@ func (m *Model) agentboxView() tea.View {
 	composer := m.inboxComposerView()
 	bodyHeight := geometry.body
 	list := m.inboxListView(left, bodyHeight)
-	detail := m.inboxDecisionView(right, bodyHeight)
+	decision := m.inboxDecisionLayout(right, bodyHeight)
+	detail := decision.content
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", detail)
 	parts := []string{header, body}
 	if op != "" {
@@ -65,7 +73,8 @@ func (m *Model) agentboxView() tea.View {
 	if feedback != "" {
 		parts = append(parts, feedback)
 	}
-	if controls := m.inboxComposerControls(); controls.content != "" {
+	controls := m.inboxComposerControls()
+	if controls.content != "" {
 		parts = append(parts, controls.content)
 	}
 	if composer != "" {
@@ -82,7 +91,7 @@ func (m *Model) agentboxView() tea.View {
 	if m.dialog != nil || m.detail != "" {
 		m.recordModalHits()
 	} else {
-		m.hitZones = m.agentboxHitZones()
+		m.hitZones = m.agentboxPreparedHits(decision, controls)
 	}
 	return m.terminalView(clipBlock(canvas, w, h))
 }
@@ -130,7 +139,7 @@ func (m *Model) inboxGeometry() inboxGeometry {
 		queryRows = 1
 		g.firstRow++
 	}
-	g.rows = max(1, g.body-queryRows-2-m.inboxSelectionExtra(g.body-queryRows))
+	g.rows = max(1, g.body-queryRows-2)
 	g.start = max(0, max(0, m.inboxIndex())-g.rows+1)
 	return g
 }
@@ -151,8 +160,7 @@ func (m *Model) inboxListView(width, height int) string {
 	} else if a.query.Value() != "" {
 		lines = append(lines, p.subtle().Render(fitLine("/ "+a.query.Value(), width)))
 	}
-	extra := m.inboxSelectionExtra(height - len(lines))
-	available := max(1, height-len(lines)-2-extra)
+	available := max(1, height-len(lines)-2)
 	index := max(0, m.inboxIndex())
 	start := max(0, index-available+1)
 	end := min(len(a.rows), start+available)
@@ -162,7 +170,7 @@ func (m *Model) inboxListView(width, height int) string {
 		if n, ok := a.prefs.Tasks[row.Target.Key()]; ok {
 			priority = []string{"L", "M", "H", "U"}[n]
 		}
-		badge := threadStatusBadge(row.Thread)
+		badge := threadStatusBadge(row.Thread).compact()
 		prefix := "  "
 		if m.inboxAttached(row) {
 			prefix = "* "
@@ -208,30 +216,13 @@ func (m *Model) inboxListView(width, height int) string {
 		}
 		rendered := renderStatusRow(line, identity, badge, p, style, marker)
 		lines = append(lines, rendered)
-		if row.Target.Key() == a.selected && extra > 0 {
-			titleLines := expandedTitleLines(row.Thread.Title, max(1, width-2))
-			if extra == 3 {
-				lines = append(lines, p.selection().Render(fitLine("  "+titleLines[0], width)), p.selection().Render(fitLine("  "+titleLines[1], width)))
-			} else {
-				title := titleLines[1]
-				if strings.TrimSpace(title) == "" {
-					title = titleLines[0]
-				}
-				lines = append(lines, p.selection().Render(fitLine("  "+title, width)))
-			}
-			context := row.Thread.Project + " · " + row.Environment + " / " + row.Target.ProfileID
-			if row.Thread.ProviderInstanceID != "" {
-				context += " · " + row.Thread.ProviderInstanceID
-			}
-			lines = append(lines, p.subtle().Render(fitLine("  "+safeText(context), width)))
-		}
 	}
 	if len(a.rows) == 0 {
 		text := "No matching tasks"
 		if !a.loaded && a.loading {
 			text = "Loading metadata…"
-		} else if a.view == "needs" && a.query.Value() == "" {
-			text = "No needs-you items on this page"
+		} else if a.query.Value() == "" {
+			text = "No " + strings.ToLower(inboxViewLabel(a.view)) + " items on this page"
 			for _, source := range a.page.Sources {
 				if source.Error != "" || !source.NativeWorkflows {
 					text = "Native state unavailable"
@@ -257,11 +248,25 @@ func (m *Model) inboxDecisionView(width, height int) string {
 }
 
 func (m *Model) inboxChoiceLabels() []string {
-	if m.status.Requests > 0 {
-		return []string{"Requests", "Conversation", "Later"}
+	row, ok := m.selectedInbox()
+	if !ok {
+		return nil
+	}
+	if m.inboxAttached(row) && m.status.Requests > 0 || row.Thread.Inbox != nil && (row.Thread.Inbox.PendingRequestCount > 0 || row.Thread.Inbox.PendingChildRequest) {
+		return []string{"Requests", "Conversation"}
 	}
 	if m.agentbox.ack != nil {
 		return []string{"Next", "Back to inbox"}
+	}
+	if row.Thread.Inbox == nil || m.inboxSourceLoading(row.Target.ProfileID) {
+		return []string{"Conversation"}
+	}
+	bucket := client.InboxBucket(row, time.Now())
+	if m.inboxAttached(row) && m.status.ActiveRunID != "" || bucket == "working" || bucket == "queued" {
+		return []string{"Changes", "Reply"}
+	}
+	if row.Thread.Inbox.Settled {
+		return []string{"Changes", "Reply", "Reopen"}
 	}
 	return []string{"Changes", "Reply", "Reviewed"}
 }
@@ -436,25 +441,30 @@ func (m *Model) agentboxMouse(msg tea.MouseClickMsg) (bool, tea.Cmd) {
 
 func (m *Model) agentboxHitZones() []hitZone {
 	g := m.inboxGeometry()
+	return m.agentboxHits(m.inboxDecisionLayout(g.right, g.body))
+}
+
+func (m *Model) agentboxHits(decision renderedSurface) []hitZone {
+	return m.agentboxPreparedHits(decision, m.inboxComposerControls())
+}
+
+func (m *Model) agentboxPreparedHits(decision, controls renderedSurface) []hitZone {
+	g := m.inboxGeometry()
 	var hits []hitZone
 	y := g.firstRow
 	if len(m.agentbox.rows) == 0 {
 		hits = append(hits, moveHits(m.inboxEmptySearchSurface(g.left).hits, 0, g.firstRow+1)...)
 	}
-	extra := m.inboxSelectionExtra(g.body - (g.firstRow - 1))
 	for i := g.start; i < min(len(m.agentbox.rows), g.start+g.rows); i++ {
 		row := m.agentbox.rows[i]
 		height := 1
-		if row.Target.Key() == m.agentbox.selected {
-			height += extra
-		}
 		if !m.inboxSourceLoading(row.Target.ProfileID) {
 			hits = append(hits, hitZone{x: 0, y: y, width: g.left, height: height, action: "inbox-row", target: row.Target})
 		}
 		y += height
 	}
 	if row, ok := m.selectedInbox(); ok && !m.inboxSourceLoading(row.Target.ProfileID) {
-		hits = append(hits, moveHits(m.inboxDecisionLayout(g.right, g.body).hits, g.left+2, 1)...)
+		hits = append(hits, moveHits(decision.hits, g.left+2, 1)...)
 	}
 	controlsY := 1 + g.body
 	if m.operationLine() != "" {
@@ -466,7 +476,10 @@ func (m *Model) agentboxHitZones() []hitZone {
 	if m.feedbackVisible() || m.agentbox.error != "" {
 		controlsY++
 	}
-	hits = append(hits, moveHits(m.inboxComposerControls().hits, 0, controlsY)...)
+	hits = append(hits, moveHits(controls.hits, 0, controlsY)...)
+	if m.agentbox.reply {
+		hits = append(hits, hitZone{x: 0, y: controlsY + 1, width: m.width, height: m.composer.Height() + 2, action: "composer"})
+	}
 	for i := range hits {
 		hits[i].serial = m.agentbox.serial
 	}
@@ -488,15 +501,6 @@ func (m *Model) inboxComposerControls() renderedSurface {
 	return controls
 }
 
-func (m *Model) inboxSelectionExtra(height int) int {
-	if height >= 8 && m.agentbox.selected != "" {
-		return 3
-	}
-	if height >= 7 && m.agentbox.selected != "" {
-		return 2
-	}
-	return 0
-}
 func (m *Model) inboxMachineKind(profile string) string {
 	for _, source := range m.agentbox.page.Sources {
 		if source.ProfileID == profile {

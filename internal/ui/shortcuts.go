@@ -43,7 +43,7 @@ var shortcutActions = []shortcutAction{
 	{"stop", "stop", "Stop/hold", map[string][]string{"global": {"ctrl+s"}}},
 	{"quit", "quit", "exit", map[string][]string{"global": {"ctrl+q"}}},
 	{"palette", "", "commands", map[string][]string{"global": {"ctrl+space", "ctrl+@", "f3"}, "composer": {"ctrl+p"}, "reading": {"ctrl+p"}, "navigator": {"ctrl+p"}, "activity": {"ctrl+p"}, "context": {"ctrl+p"}, "form": {"ctrl+p"}, "search": {"ctrl+p"}, "detail": {"ctrl+p"}, "agentbox": {"ctrl+p"}}},
-	{"help", "help", "help", map[string][]string{"global": {"ctrl+alt+h", "f1", "super+h"}, "reading": {"?"}, "activity": {"?"}, "context": {"?"}, "agentbox": {"?"}}},
+	{"help", "help", "help", map[string][]string{"global": {"alt+h", "ctrl+alt+h", "f1"}, "reading": {"?"}, "activity": {"?"}, "context": {"?"}, "agentbox": {"?"}}},
 	{"info", "info", "Info", map[string][]string{"global": {"ctrl+l", "f2", "super+i"}}},
 	{"error", "error", "error", map[string][]string{"global": {"f8"}}},
 	{"mode", "mode", "mode", map[string][]string{"global": {"ctrl+alt+b", "shift+super+b"}}},
@@ -72,7 +72,7 @@ var shortcutActions = []shortcutAction{
 	{"steer", "steer", "steer", map[string][]string{"composer": {"ctrl+alt+enter", "shift+super+enter"}}},
 	{"request-submit", "", "next/submit", map[string][]string{"form": {"ctrl+enter"}}},
 	{"dismiss", "", "back", map[string][]string{"global": {"esc"}}},
-	{"new", "new", "New", workspaceKeys([]string{"ctrl+n", "super+n"}, []string{"ctrl+alt+n", "super+n"})},
+	{"new", "new", "New", workspaceKeys([]string{"ctrl+n"}, []string{"ctrl+alt+n"})},
 	{"new-same", "new-same", "New same project", workspaceKeys([]string{"ctrl+alt+n", "ctrl+alt+t", "shift+super+n", "ctrl+shift+n"}, []string{"ctrl+alt+t", "shift+super+n"})},
 	{"settings", "settings", "settings", workspaceKeys([]string{"ctrl+g", "ctrl+alt+g", "super+,"}, []string{"ctrl+alt+g", "super+,"})},
 	{"refresh", "refresh", "refresh", workspaceKeys([]string{"alt+r", "ctrl+alt+r", "super+r"}, []string{"ctrl+alt+r", "super+r"})},
@@ -388,8 +388,13 @@ func shortcutLabelForOS(keys []string, command, platform string) string {
 	}
 	replacer := strings.NewReplacer("ctrl+", "Ctrl+", "alt+", "Alt+", "shift+", "Shift+", "super+", "Super+", "meta+", "Meta+", "enter", "Enter", "space", "Space", "tab", "Tab", "esc", "Esc", "up", "↑", "down", "↓", "left", "←", "right", "→")
 	label := replacer.Replace(chosen)
+	if platform == "darwin" && len(chosen) > 1 && strings.Contains(chosen, "+") {
+		if tail := chosen[strings.LastIndex(chosen, "+")+1:]; len(tail) == 1 && tail[0] >= 'a' && tail[0] <= 'z' {
+			label = label[:len(label)-1] + strings.ToUpper(tail)
+		}
+	}
 	if platform == "darwin" {
-		label = strings.ReplaceAll(label, "Super+", "Cmd+")
+		label = strings.NewReplacer("Super+", "⌘", "Alt+", "⌥", "Ctrl+", "⌃", "Shift+", "⇧").Replace(label)
 	}
 	if len(chosen) == 1 && chosen[0] >= 'a' && chosen[0] <= 'z' {
 		return chosen
@@ -400,7 +405,7 @@ func shortcutLabelForOS(keys []string, command, platform string) string {
 	if len(chosen) >= 2 && chosen[0] == 'f' && chosen[1] >= '0' && chosen[1] <= '9' {
 		label = strings.ToUpper(label)
 	}
-	if strings.Contains(chosen, "super+") {
+	if platform != "darwin" && strings.Contains(chosen, "super+") {
 		label += "*"
 	}
 	return label
@@ -484,7 +489,7 @@ func (m *Model) shortcutsText() string {
 		path = m.settings.shortcuts.path
 	}
 	hint := func(id string) string { return m.actionBindingFor(id, "composer").Help().Key }
-	parts := []string{"Optional manual file: " + path, "Read at startup. Remove the file to restore defaults. No live reload or settings editor.", "* Command/Super aliases require a terminal that actually forwards the enhanced key. Core actions remain in Commands. Enter adds a newline to the ordinary composer; " + hint("send") + " sends; " + hint("send-literal") + " sends literal text; " + hint("steer") + " steers. Ctrl+S always retains independent Stop."}
+	parts := []string{"Optional manual file: " + path, "Read at startup. Remove the file to restore defaults. No live reload or settings editor.", "Command/Super aliases require a terminal that actually forwards the enhanced key. Core actions remain in Commands. Enter adds a newline to the ordinary composer; " + hint("send") + " sends; " + hint("send-literal") + " sends literal text; " + hint("steer") + " steers. Ctrl+S always retains independent Stop."}
 	var config *ShortcutConfig
 	if m.settings != nil {
 		config = m.settings.shortcuts

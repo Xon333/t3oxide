@@ -200,14 +200,14 @@ func (m *Model) contextView(width, height int) string {
 
 // The same bounded viewport supplies text and click geometry. The focused
 // activity remains on screen even when facts or earlier tools fill the pane.
-func (m *Model) contextPanel(width, height int) (string, int, int) {
+func (m *Model) renderContextPanel(width, height int, facts []string) (string, int, int) {
 	p := colors(m.theme)
 	label := "Activity"
 	if m.contextFocused {
 		label = "> " + label
 	}
 	var rows []string
-	for _, value := range m.contextFacts() {
+	for _, value := range facts {
 		if value != "" {
 			rows = append(rows, p.plain().Render(fitLine(safeText(value), width)))
 		}

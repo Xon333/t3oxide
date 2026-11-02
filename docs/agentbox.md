@@ -12,11 +12,11 @@ An empty first message files an empty native thread. A nonempty first message st
 
 ## Inbox and decisions
 
-The inbox defaults to **Needs you**. `V` or Commands changes view; `/` filters loaded metadata locally. With no matching rows, **Search server conversations** or Enter explicitly searches bounded native message content across configured sources. This switches the presentation to All while retaining environment, project and minimum priority filters. Healthy sources appear progressively, and pending, failed and incomplete sources remain visible. Native message matches remain visible even when the query is absent from their titles. Editing the query retires old results and returns to local filtering without another read; Enter with loaded matches or Refresh explicitly reloads metadata. Additional native pages remain explicit. Every row keeps environment/project/thread identity and the native revision; duplicate thread IDs across environments cannot alias.
+The inbox defaults to **Inbox**. `V` or Commands changes view; `/` filters loaded metadata locally. With no matching rows, **Search server conversations** or Enter explicitly searches bounded native message content across configured sources. This switches the presentation to All while retaining environment, project and minimum priority filters. Healthy sources appear progressively, and pending, failed and incomplete sources remain visible. Native message matches remain visible even when the query is absent from their titles. Editing the query retires old results and returns to local filtering without another read; Enter with loaded matches or Refresh explicitly reloads metadata. Additional native pages remain explicit. Every row keeps environment/project/thread identity and the native revision; duplicate thread IDs across environments cannot alias.
 
 | View | Evidence |
 | --- | --- |
-| Needs you | A native formal request, blocked/failed work, or unsettled inactive work requiring review. |
+| Inbox | A native formal request, blocked/failed work, or unsettled inactive work requiring review. |
 | Working | Reported active/preparing/starting/running state. |
 | Queued | A native queued state or explicitly reported queued count. No local filed draft is presented as an accepted native queue. |
 | Later | Native `snoozedUntil` in the future. |
@@ -38,7 +38,7 @@ Requests retain the existing exact request ID, revision, allowed answers and val
 
 Changes uses native `review.getDiffPreview` over the exact thread's reported worktree or project root. The adapter validates returned cwd, clips the diff/file projection to its wire budget, and retains native hashes and linked PR metadata. Truncation and unavailable capabilities are explicit. A model's completion message does not substitute for Git data.
 
-Reviewed uses native settle/unsettle. It refuses active/queued work or a pending formal request. A later native event can move the thread back into Needs you. No commit, push, merge or worktree deletion is performed. PR metadata may be stale or absent according to the native source; opening full T3 is the existing supported route for broader Git actions.
+Reviewed uses native settle/unsettle. It refuses active/queued work or a pending formal request. A later native event can move the thread back into Inbox. No commit, push, merge or worktree deletion is performed. PR metadata may be stale or absent according to the native source; opening full T3 is the existing supported route for broader Git actions.
 
 Later uses native snooze/unsnooze with an exact timestamp. Its backend remains responsible for visibility and wake behavior. It does not schedule a new execution. The client gates hiding active work and unresolved formal requests, and the adapter revalidates fresh native state before dispatch.
 
@@ -63,3 +63,38 @@ Thread status badges use the same labels as Developer: Active, Waiting, Failed, 
 After a successful Reviewed or Later action, the current attachment stays open with an acknowledgement. **Next** deliberately opens the next eligible source-qualified item in the frozen list order. **Back to inbox** leaves the acknowledgement. A failure or uncertain result keeps the current item and its recovery cue. Ordinary Up/Down selection does not attach a conversation.
 
 The reply composer has a separate **Send** control and **Auto / Queue / Steer** intent menu. Choosing intent stages one message; it does not submit or change the saved delivery setting. Auto means **T3 decides** until native evidence reports an outcome. A late acknowledgement cannot clear a newer draft or override.
+
+
+## Bounded review and precise navigation
+
+Changes opens a searchable file list and per-file hunk list. Inspect a file or
+hunk, or stage its citation in the existing editable reply; only Send submits
+that reply. Binary, rename/copy, mode-only, malformed and clipped patches retain
+a raw inspection route. A changed source digest invalidates navigation tokens
+while human draft text stays saved. Inspection and notes do not mark work
+Reviewed. Ordinary completed-conversation opening retains its existing lifecycle.
+
+The command palette exposes Recent conversations, Previous conversation, Loaded
+messages, Browse environment / project and Batch receipts. Recent entries retain
+source identity and use existing draft/caret/reading return state. Loaded messages
+searches the current bounded page and jumps to its exact row. Loaded and Server
+search stay explicit; editing a Server query does not run it or silently switch
+to local filtering. Project browsing uses deliberate bounded native project pages;
+it does not alter New's creation destination or claim exhaustive server search.
+
+Batch receipt items reopen their exact acknowledged thread, review their original
+saved operation, or edit a still-matching remaining draft. Recovery remains
+explicit and uses the original operation identity. No filing scheduler is added.
+
+`/copy code` selects original loaded fenced-code bytes. `/copy input` and
+`/copy result` select a loaded activity and deliberately read its bounded structured
+source. Copy retains available source bytes rather than styled wrapping, applies
+redaction and clipboard limits, and rejects changed source offers. Shortened or
+omitted output remains labeled. Large request option sets have searchable choices;
+small approvals retain their compact exact form. Use exact answer stages rejected
+exact input inside its original form; Submit remains a separate action.
+
+Mouse-enabled editors use drawn textarea geometry for caret and drag selection;
+grapheme boundaries apply to navigation, deletion and selection. Resize, blur,
+attachment and modal replacement retire gestures. Mouse-off terminal selection
+retains its existing behavior. Physical terminal acceptance remains separate.

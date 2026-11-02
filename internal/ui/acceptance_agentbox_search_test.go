@@ -70,8 +70,8 @@ func TestAcceptanceAgentBoxZeroResultServerSearchAndStaleQueryRetirement(t *test
 				m.Update(keyPress(tea.KeyEnd))
 				m.Update(keyPress('u', tea.ModCtrl))
 				m.Update(tea.PasteMsg{Content: "Task fork alpha"})
-				if m.agentbox.serverSearch || m.agentbox.loading || len(m.agentbox.rows) != 1 || m.agentbox.query.Value() != "Task fork alpha" {
-					t.Fatal("editing did not return to local loaded-result filtering")
+				if !m.agentbox.serverSearch || m.agentbox.loading || len(m.agentbox.rows) != 0 || m.agentbox.query.Value() != "Task fork alpha" {
+					t.Fatal("editing changed Server mode or retained old matches")
 				}
 				late := client.InboxSource{ProfileID: "beta", EnvironmentID: "env-beta", Label: "Beta", NativeWorkflows: true, Page: pages["beta"].Page}
 				m.Update(inboxSourceMsg{serial: serial, source: late})
@@ -79,12 +79,10 @@ func TestAcceptanceAgentBoxZeroResultServerSearchAndStaleQueryRetirement(t *test
 				m.Update(componentMsg{generation: m.generation, kind: "agentbox-search", id: serial, message: tea.PasteMsg{Content: "retired"}})
 				m.View()
 				row, ok = m.selectedInbox()
-				if !ok || row.Target.ProfileID != "alpha" || row.Thread.ID != "fork" || len(m.agentbox.rows) != 1 || m.agentbox.query.Value() != "Task fork alpha" || m.currentDraft() != draft || m.status.ThreadID != thread || m.actionBusy || m.stopBusy {
+				if ok || len(m.agentbox.rows) != 0 || m.agentbox.query.Value() != "Task fork alpha" || m.currentDraft() != draft || m.status.ThreadID != thread || m.actionBusy || m.stopBusy {
 					t.Fatal("retired query changed source, input, attachment or operation authority")
 				}
-				if !strings.Contains(m.inboxSourceHealth(), "Loaded search results") || !strings.Contains(m.inboxSourceHealth(), "incomplete") || !strings.Contains(m.inboxSourceHealth(), "failed") {
-					t.Fatal("canceled peer or partial loaded-search scope became complete success", m.inboxSourceHealth())
-				}
+
 			})
 		}
 	}

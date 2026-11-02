@@ -138,7 +138,7 @@ func TestIntuitiveBrowserMoreHelpRendersOneDetailPanel(t *testing.T) {
 					t.Fatalf("full-page Help clipped its %s frame corner at %v:\n%s", corner, size, view)
 				}
 			}
-			if strings.Count(view, "Ctrl+Y copy") != 1 {
+			if strings.Count(view, shortcutHintText("Ctrl+Y copy")) != 1 {
 				t.Fatal("Help acquired duplicated or missing contextual copy controls")
 			}
 			assertIntuitiveNoReply(t, result)
@@ -300,7 +300,7 @@ func TestIntuitiveLaunchFocusedCreateVisibleWithFeedback(t *testing.T) {
 	m.Update(keyPress(tea.KeyTab))
 	m.Update(keyPress(tea.KeyEnter))
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, "[Create & send]") || !strings.Contains(view, "Draft save failed") || !strings.Contains(view, "Ctrl+S") {
+	if !strings.Contains(view, "[Create & send]") || !strings.Contains(view, "Draft save failed") || !strings.Contains(view, shortcutHintText("Ctrl+S")) {
 		t.Fatalf("focused control/feedback/footer was clipped:\n%s", view)
 	}
 }

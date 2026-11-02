@@ -125,7 +125,7 @@ func decodeProjects(result map[string]any) ([]NativeProject, *int, error) {
 	}
 	return projects, next, nil
 }
-func (a *Session) chooseNativeProject(ctx context.Context, conn *wire.Connection, wanted string) (NativeProject, error) {
+func (a *Session) chooseNativeProject(ctx context.Context, conn *wire.Connection, wanted string, choose ...bool) (NativeProject, error) {
 	cursor := 0
 	missingSource := false
 	for {
@@ -140,14 +140,16 @@ func (a *Session) chooseNativeProject(ctx context.Context, conn *wire.Connection
 		if next != nil && (*next <= cursor || len(projects) == 0) {
 			return NativeProject{}, errors.New("native project continuation did not advance")
 		}
+		wantedFound := false
 		for _, p := range projects {
-			if wanted != "" && p.ID == wanted {
+			wantedFound = wantedFound || p.ID == wanted
+			if wanted != "" && p.ID == wanted && (len(choose) == 0 || !choose[0]) {
 				return p, nil
 			}
 		}
 		// Search later native pages for the same exact project identity before
 		// requiring a choice; a title match never retargets across environments.
-		if wanted != "" && next != nil {
+		if wanted != "" && !wantedFound && next != nil {
 			cursor = *next
 			continue
 		}
@@ -158,7 +160,7 @@ func (a *Session) chooseNativeProject(ctx context.Context, conn *wire.Connection
 			continue
 		}
 		prompt := ""
-		if wanted != "" || missingSource {
+		if wanted != "" && !wantedFound || missingSource {
 			prompt = "The source project is not registered in this environment. Choose an existing project."
 		}
 		choices := make([]Choice, 0, len(projects)+1)
@@ -174,7 +176,7 @@ func (a *Session) chooseNativeProject(ctx context.Context, conn *wire.Connection
 		if len(choices) == 0 {
 			return NativeProject{}, errors.New("no existing project; create the project in T3")
 		}
-		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Project", Prompt: prompt, Choices: choices})
+		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Project", Initial: wanted, Prompt: prompt, Choices: choices})
 		if err != nil {
 			return NativeProject{}, err
 		}
@@ -275,6 +277,38 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 	if err := a.flushDraft(); err != nil {
 		return Result{}, err
 	}
+	if seed == nil && batchLaunchContext(ctx) == nil {
+		initial := LaunchInput{Title: title}
+		if initial.Title == "" {
+			initial.Title = "New conversation"
+		}
+		if saved, ok := a.manager.State.LaunchDraft("t3oxide-client", "new-message"); ok {
+			initial.Message = saved.Message
+			if title == "" {
+				initial.Title = saved.Title
+			}
+		}
+		store := func(in LaunchInput) error {
+			return a.manager.State.SetLaunchDraft("t3oxide-client", "new-message", config.LaunchDraft{Title: in.Title, Message: in.Message})
+		}
+		answer, askErr := a.asker.Ask(ctx, Question{Surface: SurfaceLaunch, Kind: EnterText, Title: "New", LaunchReview: &LaunchReview{Stage: "message", Input: initial, Actions: []string{"continue", "cancel"}, StoreDraft: store}})
+		if askErr != nil {
+			return Result{}, askErr
+		}
+		if answer.Launch != nil {
+			initial = *answer.Launch
+		}
+		if err := store(initial); err != nil {
+			return Result{}, err
+		}
+		if answer.Cancelled || answer.Action == "cancel" {
+			return Result{}, nil
+		}
+		if answer.Action != "continue" {
+			return Result{}, errors.New("launch action was not offered")
+		}
+		seed = &initial
+	}
 	var env config.Environment
 	var err error
 	if explicitProfile != "" {
@@ -298,7 +332,7 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 		return Result{}, err
 	}
 	defer closeNativeConnection(conn)
-	project, err := a.chooseNativeProject(ctx, conn, projectID)
+	project, err := a.chooseNativeProject(ctx, conn, projectID, seed != nil && batchLaunchContext(ctx) == nil)
 	if errors.Is(err, context.Canceled) && ctx.Err() == nil {
 		return Result{}, nil
 	}
@@ -314,6 +348,9 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 	input := LaunchInput{Title: title}
 	if input.Title == "" {
 		input.Title = "New conversation"
+	}
+	if err := env.CheckProviderInstance(d.ModelSelection.InstanceID); err != nil {
+		return Result{}, err
 	}
 	selected := d.ModelSelection.Clone()
 	workspaceMode := d.WorkspaceMode
@@ -358,16 +395,25 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 			d.InteractionMode = saved.InteractionMode
 		}
 	}
+
 	for {
 		location := Location{ProfileID: env.ID, EnvironmentID: env.EnvironmentID, Environment: env.Label, ProjectID: project.ID, Title: project.Title, Workspace: d.WorkspaceRoot}
 		if d.WorkspaceStrategy.Type == "worktree" {
 			location.Workspace = "New worktree from " + d.WorkspaceStrategy.BaseRef + " · " + d.WorkspaceRoot
 		}
 		actions := launchActions(&d.Catalog, &selected, true)
-		actions = append(actions, "workspace", "defaults", "native-defaults", "pin-destination", "destination", "project", "environment")
+		actions = append(actions, "workspace", "pin-destination", "project", "environment")
+		if stale {
+			actions = append(actions, "defaults")
+		}
 		bound := d
 		boundSelection := selected.Clone()
 		store := func(in LaunchInput) error {
+			if seed != nil && batchLaunchContext(ctx) == nil {
+				if err := a.manager.State.SetLaunchDraft("t3oxide-client", "new-message", config.LaunchDraft{Title: in.Title, Message: in.Message}); err != nil {
+					return err
+				}
+			}
 			strategy := bound.WorkspaceStrategy
 			return a.manager.State.SetLaunchDraft(env.EnvironmentID, formSource, config.LaunchDraft{Title: in.Title, Message: in.Message, ProjectID: project.ID, Workspace: location.Workspace, Selection: &boundSelection, NativeDefaultsRevision: bound.Revision, NativeWorkspaceRoot: bound.WorkspaceRoot, WorkspaceStrategy: &strategy, RuntimeMode: bound.RuntimeMode, InteractionMode: bound.InteractionMode})
 		}
@@ -375,7 +421,7 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 		if stale {
 			unavailable = "Native defaults changed. Choose Defaults to review their current values before Create."
 		}
-		review := &LaunchReview{Input: input, Location: location, Selection: &selected, Summary: selected.Summary() + " · " + d.RuntimeMode + " · " + d.InteractionMode, Actions: actions, Unavailable: unavailable, StoreDraft: store}
+		review := &LaunchReview{Stage: "ready", Input: input, Location: location, Selection: &selected, Summary: d.Catalog.ProviderSummary() + " · " + selected.Summary() + " · " + d.RuntimeMode + " · " + d.InteractionMode, Actions: actions, Unavailable: unavailable, StoreDraft: store}
 		answer, err := a.asker.Ask(ctx, Question{Surface: SurfaceLaunch, Kind: EnterText, Title: "New conversation", LaunchReview: review})
 		if err != nil {
 			return Result{}, err
@@ -398,10 +444,6 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 			return a.newConversationInEnvironment(ctx, input.Title, "", isolated, "", &input)
 		case "pin-destination":
 			if err = a.PinCreationDestination(env.ID, env.EnvironmentID, project.ID); err != nil {
-				return Result{}, err
-			}
-		case "native-defaults":
-			if _, err = a.EditNativeDefaults(ctx, env.ID, project.ID); err != nil {
 				return Result{}, err
 			}
 		case "project":
@@ -472,6 +514,9 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 			id := wire.NewID()
 			thread := wire.NewID()
 			fields := map[string]any{"threadId": thread, "newThreadId": thread, "projectId": project.ID, "title": input.Title, "message": input.Message, "modelSelection": selected, "workspaceStrategy": d.WorkspaceStrategy, "workspaceRoot": d.WorkspaceRoot, "workspaceMode": workspaceMode, "isolated": isolated, "defaultsRevision": d.Revision, "formSource": formSource}
+			if seed != nil && batchLaunchContext(ctx) == nil {
+				fields["compactMessageDraft"] = true
+			}
 			bindBatchLaunch(ctx, fields)
 			reply, err := a.performProjectLaunch(ctx, conn, env, fields, id, false)
 			if err != nil {
@@ -486,6 +531,11 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 }
 
 func (a *Session) performProjectLaunch(ctx context.Context, conn *wire.Connection, env config.Environment, fields map[string]any, id string, retry bool) (map[string]any, error) {
+	if !retry {
+		if err := checkSelectionPolicy(env, fields["modelSelection"]); err != nil {
+			return nil, err
+		}
+	}
 	key := env.EnvironmentID + "/normal"
 	a.manager.mu.Lock()
 	if a.manager.closed || a.manager.inFlight[key] {

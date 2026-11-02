@@ -35,6 +35,21 @@ func featurePrompt(t *testing.T, a *client.Session) *client.Prompt {
 	t.Helper()
 	select {
 	case p := <-a.Prompts():
+		// Existing contract tests inspect the final native binding. Accept the
+		// compact New steps with their exact offered defaults along the way.
+		if p.Question.LaunchReview != nil && p.Question.LaunchReview.Stage == "message" {
+			input := p.Question.LaunchReview.Input
+			p.Respond(client.Answer{Action: "continue", Launch: &input})
+			return featurePrompt(t, a)
+		}
+		if p.Question.Title == "Project" && p.Question.Initial != "" {
+			for _, choice := range p.Question.Choices {
+				if choice.ID == p.Question.Initial {
+					p.Respond(client.Answer{ChoiceIDs: []string{choice.ID}})
+					return featurePrompt(t, a)
+				}
+			}
+		}
 		return p
 	case <-time.After(5 * time.Second):
 		t.Fatal("feature prompt missing")

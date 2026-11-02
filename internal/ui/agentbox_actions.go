@@ -89,7 +89,7 @@ func (m *Model) markInboxReviewed() tea.Cmd {
 	m.agentbox.offer = &target
 	items := []list.Item{choiceItem{title: "Inspect actual changes", command: "inbox", args: "diff"}}
 	if row.Thread.Inbox.Settled {
-		items = append(items, choiceItem{title: "Reopen in Needs you", command: "inbox", args: "unsettle"})
+		items = append(items, choiceItem{title: "Reopen in Inbox", command: "inbox", args: "unsettle"})
 	} else {
 		items = append(items, choiceItem{title: "Mark reviewed", description: "Settle this native thread; no commit, push or merge", command: "inbox", args: "settle"})
 	}
@@ -275,7 +275,10 @@ func (m *Model) inboxReviewFinished(msg inboxReviewMsg) tea.Cmd {
 	if msg.review.DiffTruncated {
 		lines = append(lines, "\nDiff is bounded; inspect the remaining changes in full T3.")
 	}
-	m.openDetail("Changes", safeText(strings.Join(lines, "\n")))
+	m.reviewRaw = safeText(strings.Join(lines, "\n"))
+	index := buildReviewIndex(msg.review)
+	m.reviewIndex = &index
+	m.reviewFiles()
 	if m.session != nil {
 		offset, notice := m.session.ReviewPosition(msg.target, msg.review)
 		m.detailViewport.SetYOffset(offset)
@@ -415,34 +418,27 @@ func (m *Model) inboxOfferedChoice(index int) tea.Cmd {
 	if !ok || !m.inboxAttached(row) {
 		return nil
 	}
-	if m.agentbox.ack != nil && m.agentbox.ack.row.Target.Key() == row.Target.Key() && m.status.Requests == 0 {
-		if index == 1 {
-			return m.nextAcknowledgedInbox()
-		}
-		if index == 2 {
-			return m.agentboxAction("inbox", "back")
-		}
+	labels := m.inboxChoiceLabels()
+	if index < 1 || index > len(labels) {
 		return nil
 	}
-	if m.status.Requests > 0 {
-		switch index {
-		case 1:
-			return m.execute("requests", "")
-		case 2:
-			return m.setMode("developer")
-		case 3:
-			return m.inboxLaterMenu()
-		}
-	} else {
-		switch index {
-		case 1:
-			return m.loadInboxReview()
-		case 2:
-			return m.openInboxThread(true)
-		case 3:
-			return m.markInboxReviewed()
-		}
+	switch labels[index-1] {
+	case "Requests":
+		return m.execute("requests", "")
+	case "Conversation":
+		return m.setMode("developer")
+	case "Next":
+		return m.nextAcknowledgedInbox()
+	case "Back to inbox":
+		return m.agentboxAction("inbox", "back")
+	case "Changes":
+		return m.loadInboxReview()
+	case "Reply":
+		return m.openInboxThread(true)
+	case "Reviewed", "Reopen":
+		return m.markInboxReviewed()
 	}
+
 	return nil
 }
 

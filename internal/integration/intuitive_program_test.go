@@ -3,6 +3,7 @@ package integration_test
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,11 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r.modalReady("Commands")
 	r.send("help\r")
 	r.waitText("Keyboard and commands")
-	if view := r.views.text(); strings.Count(view, "Keyboard and commands") != 1 || strings.Count(view, "Ctrl+Y copy") != 1 {
+	copyHint := "Ctrl+Y copy"
+	if runtime.GOOS == "darwin" {
+		copyHint = "⌃Y copy"
+	}
+	if view := r.views.text(); strings.Count(view, "Keyboard and commands") != 1 || strings.Count(view, copyHint) != 1 {
 		t.Fatalf("Help acquired duplicate or missing local detail controls:\n%s", view)
 	}
 	r.send("\x1b")
@@ -92,15 +97,18 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 	r.send("\t\x10") // Reading focus makes Ctrl+P a command action.
 	r.modalReady("Commands")
 	r.send("New conversation\r")
-	r.modalReady("Project")
-	r.send("\r")
-	r.waitText("First message")
+	r.modalReady("╭─ New ─")
 	const message = "  first message\nsecond line  "
 	const title = "Literal /model title"
 	r.program.Send(tea.PasteMsg{Content: message})
 	r.waitText("second line")
-	r.send("\t")
-	r.send("\x01\x0b" + title + "\r") // Replace the prefilled title using its native editor.
+	r.send("\r")
+	r.modalReady("Project")
+	r.send("\r")
+	r.waitText("[Create & send]")
+	r.send("\x1b[Z") // Optional title editor, immediately before Launch.
+	r.waitText("New conversation")
+	r.send("\x01\x0b" + title + "\r") // Enter returns to explicit Launch.
 	r.waitText("[Create & send]")
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
 		t.Fatal("finishing the title dispatched before explicit Create")
@@ -132,6 +140,10 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 }
 
 func TestIntuitiveHistoryKeepsVerifiedRequestsVisibleAndReviewable(t *testing.T) {
+	requestHint := "Ctrl+R requests"
+	if runtime.GOOS == "darwin" {
+		requestHint = "⌃R requests"
+	}
 	for _, size := range [][2]int{{60, 16}, {80, 24}, {120, 35}} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			f := newFixture(t)
@@ -149,7 +161,7 @@ func TestIntuitiveHistoryKeepsVerifiedRequestsVisibleAndReviewable(t *testing.T)
 			r.send("/earlier\x1d")
 			r.waitText("Earlier page for thread-a")
 			r.waitText("Awaiting input (2)")
-			r.waitText("Ctrl+R requests")
+			r.waitText(requestHint)
 			const draft = "historical draft\nsecond line"
 			r.program.Send(tea.PasteMsg{Content: draft})
 			r.waitText("second line")
@@ -160,7 +172,7 @@ func TestIntuitiveHistoryKeepsVerifiedRequestsVisibleAndReviewable(t *testing.T)
 			r.modalReady("T3 approval")
 			r.send("\x1b")
 			r.waitText("Earlier page for thread-a")
-			r.waitText("Ctrl+R requests")
+			r.waitText(requestHint)
 			if view := r.views.text(); strings.Count(view, "Awaiting input (2)") != 1 {
 				t.Fatalf("historical request count repeated or disappeared:\n%s", view)
 			}

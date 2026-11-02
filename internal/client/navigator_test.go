@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"github.com/Xon333/t3oxide/internal/wire"
 	"testing"
 )
 
@@ -103,5 +104,26 @@ func TestNavigatorUnsupportedLineageAndUnknownProfileFailBeforeIO(t *testing.T) 
 	profiles[0].ID = "changed"
 	if s.NavigatorProfiles()[0].ID != env.ID {
 		t.Fatal("profile presentation mutated configuration")
+	}
+}
+
+func TestNavigatorReviewRejectsUnqualifiedOrPendingWorkWithoutIO(t *testing.T) {
+	manager, _, env := recoveryManager(t)
+	session, err := manager.NewSession(env.ID, "attached")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := NavigatorPage{ProfileID: env.ID, EnvironmentID: env.EnvironmentID, Page: ThreadPage{Threads: []Thread{{ID: "offered"}}}}
+	for _, action := range []string{"settle", "unsettle", "archive"} {
+		if _, err := session.NavigatorReview(context.Background(), page, "offered", action); err == nil {
+			t.Fatalf("accepted %s without revision", action)
+		}
+	}
+	page.Page.Threads[0].Inbox = &wire.InboxMetadata{NativeRevision: "exact", PendingRequestCount: 1}
+	if _, err := session.NavigatorReview(context.Background(), page, "offered", "settle"); err == nil {
+		t.Fatal("hid pending request")
+	}
+	if session.conn != nil || session.thread != "attached" {
+		t.Fatal("review changed attachment")
 	}
 }

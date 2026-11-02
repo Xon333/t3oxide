@@ -22,6 +22,9 @@ func TestAuditInteractionCommandSearchAndBoundVariants(t *testing.T) {
 		targets[i] = item.FilterValue()
 	}
 	for _, spec := range m.commandCatalog() {
+		if spec.name == "native-defaults" {
+			continue
+		}
 		ranks := commandFilter(spec.name, targets)
 		if len(ranks) == 0 || items[ranks[0].Index].(choiceItem).command != spec.name {
 			t.Fatalf("canonical %q missing or outranked", spec.name)

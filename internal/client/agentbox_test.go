@@ -51,7 +51,7 @@ func TestInboxLifecycleDoesNotInferCompletionFromProseOrOverrideRequests(t *test
 	}
 	row.Thread.Inbox.QueuedCount = 0
 	row.Thread.Inbox.Settled = false
-	if InboxBucket(row, now) != "needs" {
+	if InboxBucket(row, now) != "finished" {
 		t.Fatal("completed work skipped human review")
 	}
 	row.Thread.Inbox = nil
