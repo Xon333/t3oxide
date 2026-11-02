@@ -40,7 +40,7 @@ func TestNavigationReviewOpensReviewedIdentityAfterHighlightChanges(t *testing.T
 	m.session = session
 	m.openNavigatorActions()
 	token := navigatorReviewToken(t, m, "open")
-	m.navigator.list.Select(1) // The menu still names Runtime ownership / fleet.
+	m.navigator.list.Select(2) // The menu still names Runtime ownership / fleet.
 	cmd := m.chooseDialog()    // Activate the initial visible Open row as a user does.
 	if cmd == nil {
 		t.Fatal("reviewed open did not produce the lazy target")
@@ -116,7 +116,7 @@ func TestNavigationDetailsPreserveDraftAnchorAndExactMetadataTarget(t *testing.T
 	m.navigator.focused = true
 	m.openNavigatorActions()
 	token := navigatorReviewToken(t, m, "details")
-	m.navigator.list.Select(1)
+	m.navigator.list.Select(2)
 	m.dialog = nil
 	m.navigatorAction(token)
 	for _, want := range []string{"Linux host", "Conversation ID: fleet", "Runtime ownership", "Metadata only"} {

@@ -38,7 +38,7 @@ func intuitiveBrowserMoreProgram(t *testing.T, size [2]int) {
 	r.modalReady("Commands")
 	r.send("Conversations\r")
 	waitNavigatorQuery(t, r, "Filter loaded")
-	r.send("Beta")
+	r.send("/Beta")
 	waitNavigatorQuery(t, r, "Beta")
 	before := f.requestCounts()
 	r.send("\x1ba") // Alt+A opens the current source-bound More menu.

@@ -66,7 +66,7 @@ func TestRefinementNavigatorFocusedSlotsSurviveNewShelfTitleAndRemoval(t *testin
 		t.Fatal("removed focused target jumped to another row")
 	}
 	m.Update(keyPress('o', tea.ModCtrl))
-	if m.navigator.focused || m.navigator.orderDeferred || m.navigator.list.Items()[0].(navigatorItem).thread.ID != "row-01" {
+	if m.navigator.focused || m.navigator.orderDeferred || m.navigator.list.Items()[1].(navigatorItem).thread.ID != "row-01" {
 		t.Fatal("leaving did not apply queued native shelf ordering")
 	}
 }
@@ -91,7 +91,7 @@ func TestRefinementNavigatorCollapsedShelfRetainsCueAndRealToggle(t *testing.T) 
 			break
 		}
 	}
-	if !found || len(m.navigator.list.VisibleItems()) != 2 {
+	if !found || len(m.navigator.list.VisibleItems()) != 3 {
 		t.Fatal("actual drawn collapsed shelf could not reopen")
 	}
 }
@@ -138,7 +138,7 @@ func TestRefinementNavigatorPreviewYieldsToRequestsAndExactSource(t *testing.T) 
 			case "source":
 				msg.preview.EnvironmentID = "different-env"
 			case "selection":
-				m.navigator.list.Select(1)
+				m.navigator.list.Select(2)
 			}
 			m.Update(msg)
 			if m.detail != "" || m.navigator.preview != nil {

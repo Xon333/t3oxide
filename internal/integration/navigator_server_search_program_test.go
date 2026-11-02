@@ -33,7 +33,7 @@ func TestNavigatorProgramServerContentSearchShowsNativeMatchesAndOpensExactRow(t
 				waitNavigatorQuery(t, r, "Filter loaded")
 				r.waitText("[FI◇] Beta")
 				before := f.requestCounts()
-				r.send("Markdown")
+				r.send("/Markdown")
 				waitNavigatorQuery(t, r, "Markdown")
 				r.waitText("No loaded matches")
 				counts := f.requestCounts()

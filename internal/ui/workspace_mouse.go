@@ -189,6 +189,9 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			}
 		case "navigator-shelf":
 			if z.serial == m.navigator.serial {
+				m.navigator.focused = true
+				m.navigator.editing = false
+				m.navigator.list.FilterInput.Blur()
 				return m.toggleNavigatorShelf(z.args)
 			}
 		case "navigator":
@@ -200,7 +203,7 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 				return nil
 			}
 			for j, raw := range m.navigator.list.VisibleItems() {
-				if raw.(navigatorItem).identity() == z.args {
+				if row, ok := raw.(navigatorItem); ok && row.identity() == z.args {
 					m.navigator.list.Select(j)
 					m.navigator.selected = z.args
 					m.navigator.focused = true

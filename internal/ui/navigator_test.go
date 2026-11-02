@@ -95,6 +95,7 @@ func TestNavigatorFocusFilteringAndClicksKeepAttachedDraftAndReading(t *testing.
 	m.follow = false
 	draft, snapshot, offset := m.currentDraft(), m.snapshot, m.viewport.YOffset()
 	finishCommand(t, m, m.focusNavigator())
+	m.Update(keyPress('/'))
 	for _, r := range "documentation" {
 		m.Update(keyPress(r))
 	}
@@ -176,16 +177,16 @@ func TestNavigatorSnapshotsDoNotInventChildrenOrActivity(t *testing.T) {
 	m := navigatorFixture(t, 120, 35)
 	m.navigator.focused = true
 	m.resizeNavigator()
-	before := m.navigator.list.Items()[0].(navigatorItem).thread
+	before := m.navigator.list.Items()[1].(navigatorItem).thread
 	m.status.ProfileID = "linux-host"
 	m.status.ThreadID = "fleet"
 	m.status.RunState = "completed"
 	m.reconcileNavigator()
-	after := m.navigator.list.Items()[0].(navigatorItem).thread
-	if before.ChildCount != after.ChildCount || after.Status != "completed" || len(m.navigator.list.Items()) != 4 {
+	after := m.navigator.list.Items()[1].(navigatorItem).thread
+	if before.ChildCount != after.ChildCount || after.Status != "completed" || len(m.navigator.list.Items()) != 6 {
 		t.Fatal("attached status reconciliation changed metadata scope")
 	}
-	if m.navigator.list.Items()[1].(navigatorItem).thread.Status != "running" {
+	if m.navigator.list.Items()[2].(navigatorItem).thread.Status != "running" {
 		t.Fatal("invented another thread's freshness")
 	}
 	parent, sub := "root", "subagent"

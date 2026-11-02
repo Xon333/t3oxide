@@ -401,6 +401,9 @@ func TestEditableNavigatorAndBrowserOwnNativeCaretKeys(t *testing.T) {
 					m.dialog.list.SetFilterState(list.Filtering)
 				}
 				m.restoreFocus()
+				if surface == "navigator" {
+					m.Update(keyPress('/'))
+				}
 				editor := &m.navigator.list.FilterInput
 				if surface == "browser" {
 					editor = &m.dialog.list.FilterInput

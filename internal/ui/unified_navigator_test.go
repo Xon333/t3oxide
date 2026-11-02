@@ -32,7 +32,7 @@ func TestUnifiedNavigatorExactIdentityRecentOrderAndPartialHostUsability(t *test
 		t.Fatal("healthy source unavailable behind pending hosts")
 	}
 	m.navigatorLoaded(navigatorMsg{generation: m.generation, serial: m.navigator.serial, profile: "beta", page: b})
-	if m.navigator.list.Items()[0].(navigatorItem).profile != "beta" {
+	if m.navigator.list.Items()[1].(navigatorItem).profile != "beta" {
 		t.Fatal("unified view did not sort by recent native activity")
 	}
 	page, _, ok = m.navigatorSource()
@@ -40,7 +40,7 @@ func TestUnifiedNavigatorExactIdentityRecentOrderAndPartialHostUsability(t *test
 		t.Fatal("inserted newer duplicate ID stole selected source")
 	}
 	m.navigatorLoaded(navigatorMsg{generation: m.generation, serial: m.navigator.serial, profile: "offline", err: errors.New("identity mismatch")})
-	if !m.navigator.loaded || m.navigator.loading || len(m.navigator.list.Items()) != 2 || !strings.Contains(m.navigatorHealth(), "offline") {
+	if !m.navigator.loaded || m.navigator.loading || len(m.navigator.list.Items()) != 3 || !strings.Contains(m.navigatorHealth(), "offline") {
 		t.Fatal("partial host state hidden or healthy rows lost")
 	}
 	m.openNavigatorActions()

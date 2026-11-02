@@ -82,7 +82,7 @@ func TestBubbleTeaFeaturesModelPickersAndExplicitChildNavigation(t *testing.T) {
 	if strings.Contains(r.views.text(), "[FI◇] child") {
 		t.Fatal("subagents expanded before an explicit source action")
 	}
-	r.send("Alpha")
+	r.send("/Alpha")
 	waitNavigatorQuery(t, r, "Alpha")
 	r.send("\x1ba")
 	r.modalReady("More · Conversations")
@@ -99,7 +99,7 @@ func TestBubbleTeaFeaturesModelPickersAndExplicitChildNavigation(t *testing.T) {
 	r.waitText("Initial Markdown for Alpha")
 	r.send("/threads\x1d")
 	r.waitText("Conversations")
-	r.send("\x15")
+	r.send("/\x15")
 	waitNavigatorQuery(t, r, "Filter loaded")
 	r.send("\x1ba")
 	r.modalReady("More · Conversations")

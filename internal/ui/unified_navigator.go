@@ -16,6 +16,24 @@ import (
 
 const allProfiles = "*"
 
+// Headings are navigation items, never conversation targets.
+type navigatorHeading struct {
+	shelf           string
+	count, requests int
+}
+
+func (h navigatorHeading) FilterValue() string { return "" }
+
+func navigatorSelection(raw list.Item) string {
+	if h, ok := raw.(navigatorHeading); ok {
+		return "heading:" + h.shelf
+	}
+	if row, ok := raw.(navigatorItem); ok {
+		return row.identity()
+	}
+	return ""
+}
+
 func (i navigatorItem) identity() string { return i.profile + "\x00" + i.thread.ID }
 func (i navigatorItem) nativeIdentity() string {
 	if i.environment != "" {
@@ -193,11 +211,11 @@ func (m *Model) unifiedNavigatorLoaded(msg navigatorMsg) tea.Cmd {
 func (m *Model) rebuildUnifiedNavigator() {
 	n := &m.navigator
 	identity := n.selected
-	if item, ok := n.list.SelectedItem().(navigatorItem); ok {
-		identity = item.identity()
+	if selected := navigatorSelection(n.list.SelectedItem()); selected != "" {
+		identity = selected
 	}
 	input := n.list.FilterInput
-	filter := n.list.FilterValue()
+	filter := input.Value()
 	var rows []navigatorItem
 	page := client.NavigatorPage{ProfileID: n.profile, Label: "All environments", Query: n.query}
 	ids := make([]string, 0, len(n.pages))
@@ -255,16 +273,36 @@ func (m *Model) rebuildUnifiedNavigator() {
 	})
 	rows = m.freezeNavigatorRows(rows)
 	n.ordered = rows
-	visible := make([]navigatorItem, 0, len(rows))
+	// Group the frozen stream without disturbing order within each shelf.
+	var shelves []string
+	groups := map[string][]navigatorItem{}
 	for _, row := range rows {
-		if !n.collapsed[row.shelf] {
-			visible = append(visible, row)
+		if _, ok := groups[row.shelf]; !ok {
+			shelves = append(shelves, row.shelf)
 		}
+		groups[row.shelf] = append(groups[row.shelf], row)
 	}
-	rows = visible
-	items := make([]list.Item, len(rows))
-	for i := range rows {
-		items[i] = rows[i]
+	sort.SliceStable(shelves, func(i, j int) bool { return shelfRank(shelves[i]) < shelfRank(shelves[j]) })
+	var items []list.Item
+	for _, shelf := range shelves {
+		group := groups[shelf]
+		h := navigatorHeading{shelf: shelf, count: len(group)}
+		for _, row := range group {
+			if !row.stale && row.thread.Inbox != nil {
+				h.requests += row.thread.Inbox.PendingRequestCount
+				if row.thread.Inbox.PendingChildRequest {
+					h.requests++
+				}
+			}
+		}
+		if filter == "" {
+			items = append(items, h)
+		}
+		if filter != "" || !n.collapsed[shelf] {
+			for _, row := range group {
+				items = append(items, row)
+			}
+		}
 	}
 	n.page = page
 	n.list.SetItems(items)
@@ -275,10 +313,23 @@ func (m *Model) rebuildUnifiedNavigator() {
 		n.list.ResetFilter()
 	}
 	n.list.FilterInput = input
+	found := false
 	for i, raw := range n.list.VisibleItems() {
-		if raw.(navigatorItem).identity() == identity {
+		if navigatorSelection(raw) == identity {
 			n.list.Select(i)
+			found = true
 			break
+		}
+	}
+	// An explicit scope change can retire the old target. Offer the first real
+	// conversation when available; a collapsed-only projection selects a heading.
+	if !found {
+		n.list.Select(0)
+		for i, raw := range n.list.VisibleItems() {
+			if _, ok := raw.(navigatorItem); ok {
+				n.list.Select(i)
+				break
+			}
 		}
 	}
 	if selected, ok := n.list.SelectedItem().(navigatorItem); ok {

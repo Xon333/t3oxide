@@ -996,8 +996,9 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 			return m, cmd
 		}
 		if !m.searching && m.dialog == nil && m.detail == "" && m.mode != "agentbox" && m.navigator.focused && m.navigationVisible() {
-			m.navigator.editing = true
-			m.navigator.list.FilterInput.Focus()
+			if !m.navigator.editing {
+				return m, nil
+			}
 			return m, m.updateComponent("navigator", m.navigator.serial, msg)
 		}
 		if !m.searching && m.dialog == nil && m.detail == "" && m.mode == "agentbox" && m.agentbox.searching && !m.agentbox.reply && !m.browserPage && !m.launchPage {

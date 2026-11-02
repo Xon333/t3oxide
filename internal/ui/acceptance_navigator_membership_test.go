@@ -48,6 +48,7 @@ func membershipNavigator(t *testing.T) (*Model, map[string]client.NavigatorPage)
 	}
 	m.navigator.focused = true
 	m.navigator.list.SetFilterText("Task")
+	m.rebuildUnifiedNavigator()
 	m.navigator.list.FilterInput.SetCursor(2)
 	m.composer.SetValue("  exact attached draft\nsecond line  ")
 	return m, pages
@@ -56,7 +57,7 @@ func membershipNavigator(t *testing.T) (*Model, map[string]client.NavigatorPage)
 func selectNavigatorIdentity(t *testing.T, m *Model, identity string) {
 	t.Helper()
 	for i, raw := range m.navigator.list.VisibleItems() {
-		if raw.(navigatorItem).identity() == identity {
+		if row, ok := raw.(navigatorItem); ok && row.identity() == identity {
 			m.navigator.list.Select(i)
 			return
 		}
@@ -163,6 +164,7 @@ func TestAcceptanceNavigatorServerContentResultsAndLocalQueryRetirement(t *testi
 			t.Run(fmt.Sprintf("%dx%d/%s", size[0], size[1], edit), func(t *testing.T) {
 				m, pages := membershipNavigator(t)
 				m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+				m.Update(keyPress('/', 0))
 				m.navigator.list.SetFilterText("")
 				m.restoreFocus()
 				draft := m.currentDraft()

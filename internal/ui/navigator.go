@@ -229,6 +229,7 @@ func (m *Model) initNavigator() {
 	m.navigator.list.FilterInput.CharLimit = 256
 	m.navigator.list.FilterInput.SetVirtualCursor(true)
 	m.navigator.list.Filter = list.UnsortedFilter
+	m.navigator.list.FilterInput.Blur()
 }
 
 func (m *Model) loadNavigator(profile, query string, force bool) tea.Cmd {
@@ -676,6 +677,9 @@ func (m *Model) navigatorKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "space", " ":
 		if !n.editing {
+			if h, ok := n.list.SelectedItem().(navigatorHeading); ok {
+				return m.toggleNavigatorShelf(h.shelf)
+			}
 			return m.navigatorAction("preview")
 		}
 	case "left":
@@ -691,32 +695,39 @@ func (m *Model) navigatorKey(msg tea.KeyPressMsg) tea.Cmd {
 	// computation cannot change a newly selected environment or target.
 	if msg.String() == "up" {
 		n.editing = false
+		n.list.FilterInput.Blur()
 		n.list.CursorUp()
 		return nil
 	}
 	if msg.String() == "down" {
 		n.editing = false
+		n.list.FilterInput.Blur()
 		n.list.CursorDown()
 		return nil
 	}
 	if msg.String() == "pgup" {
+		n.editing = false
+		n.list.FilterInput.Blur()
 		n.list.PrevPage()
 		return nil
 	}
 	if msg.String() == "pgdown" {
+		n.editing = false
+		n.list.FilterInput.Blur()
 		n.list.NextPage()
 		return nil
 	}
-	if msg.String() == "home" && n.list.FilterInput.Value() == "" {
+	if msg.String() == "home" && !n.editing {
 		n.list.Select(0)
 		return nil
 	}
-	if msg.String() == "end" && n.list.FilterInput.Value() == "" {
+	if msg.String() == "end" && !n.editing {
 		n.list.Select(len(n.list.VisibleItems()) - 1)
 		return nil
 	}
-	n.editing = true
-	n.list.FilterInput.Focus()
+	if !n.editing {
+		return nil
+	}
 	return m.updateComponent("navigator", n.serial, msg)
 }
 
@@ -750,15 +761,9 @@ func (m *Model) applyNavigatorFilter(previous string) {
 		n.pending = nil
 		m.resetNavigatorMembership()
 	}
-	if n.serverSearch || query == "" {
-		n.list.ResetFilter()
-	} else {
-		selected := n.list.Index()
-		n.list.SetFilterText(query)
-		n.list.SetFilterState(list.FilterApplied)
-		n.list.Select(min(selected, max(0, len(n.list.VisibleItems())-1)))
-	}
 	n.list.FilterInput = input
+	m.rebuildUnifiedNavigator()
+	m.layoutDirty = true
 }
 
 func (m *Model) navigatorTheme() string {
