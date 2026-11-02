@@ -58,19 +58,34 @@ func loadedCodeBlocks(text string) []string {
 			end += pos + 1
 		}
 		line := strings.TrimSuffix(strings.TrimSuffix(text[pos:end], "\n"), "\r")
+		// CommonMark permits up to three leading spaces and a closing fence
+		// at least as long as its opener. Only delimiters are interpreted;
+		// the copied body remains an untouched source-byte slice.
+		fence := line
+		for i := 0; i < 3 && strings.HasPrefix(fence, " "); i++ {
+			fence = fence[1:]
+		}
 		if marker == "" {
-			if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-				ch := line[0]
-				n := 0
-				for n < len(line) && line[n] == ch {
+			if strings.HasPrefix(fence, "```") || strings.HasPrefix(fence, "~~~") {
+				ch, n := fence[0], 0
+				for n < len(fence) && fence[n] == ch {
 					n++
 				}
-				marker = line[:n]
-				start = end
+				if ch == '`' && strings.ContainsRune(fence[n:], '`') {
+					pos = end
+					continue
+				}
+				marker, start = fence[:n], end
 			}
-		} else if strings.HasPrefix(line, marker) && strings.Trim(line[len(marker):], " \t") == "" {
-			blocks = append(blocks, text[start:pos])
-			marker = ""
+		} else if strings.HasPrefix(fence, marker) {
+			n := 0
+			for n < len(fence) && fence[n] == marker[0] {
+				n++
+			}
+			if strings.Trim(fence[n:], " \t") == "" {
+				blocks = append(blocks, text[start:pos])
+				marker = ""
+			}
 		}
 		pos = end
 	}

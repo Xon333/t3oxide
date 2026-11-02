@@ -561,3 +561,43 @@ Artifact SHA-256: `b391a2c0074b20cbc8934f0e8e4c0dacb8bf425a10cc1d40818046b32e9fa
 No install, native desktop action or service restart was performed. The earlier
 full `check-go.sh` was not represented as passed; focused affected checks above
 and retained baseline evidence are the verification boundary.
+
+### Parent acceptance and correction (2026-11-02)
+
+Independent Sol review identified four source defects: Recent interpreted its ID
+as title search; launch message hit geometry was omitted; modal textareas retained
+virtual-only carets; and Copy code rejected valid indented/longer fences. Parent
+corrected them. Recent resolves exact IDs through fresh bounded metadata pages
+without altering browse filters or attaching detail. Focused regressions cover an
+out-of-page target with an unrelated title, compact/wide launch click/drag and
+terminal caret, and exact CRLF/tab body slices across valid fence boundaries.
+Those regressions, complete UI/client/wire package tests and vet passed. The new
+ARM64 executable passed strict signature verification; SHA-256 is
+`36a835b897b47947f65c845277d53d62e820f69423e7e9e2f58cfd590a416fc9`.
+
+Read-only installed-native acceptance on two hosts reporting
+`0.1.7-nightly.20261101.4016` passed 12 same-sequence full authoritative snapshot
+comparisons: ordinary snapshots exactly equal restored compact snapshots. Returned
+markers included ID tables, `turnItemsOmitLocalVisible`, `textOmitted` and
+`filesOmitted`; requests and available cursors were retained. Source stdio hello
+reported read cancellation and correct identity/protocol. HTTP cancellation of a
+helper-held actual native response and immediate unary RPC cancellation allowed
+subsequent reads; stale cancellation was harmless. Original journal filename/hash
+sets were unchanged. Existing adapters without cancellation remained readable.
+Inherited rows and subagent omission markers retain fixture coverage only;
+server-side resource retirement and stdio-to-unary cancellation were not newly
+proven. No productive mutation or installation occurred.
+
+Physical M1 acceptance of the preceding executable separately exercised violet
+Developer/AgentBox layouts at 150×43 and 88×32, palettes, ordinary composer
+click-to-caret, whole-grapheme deletion, mouse-off Ghostty selection and draft
+preservation across mode changes. Fleet Workspace was unavailable; the identified
+awake Dell display was used. Exact application drag replacement, recent switching,
+source clipboard commands and Changes/notes lacked suitable safe loaded cases;
+request Submit/Stop retain source/fixture evidence. The corrected launch pointer
+and modal caret need their separate focused physical recheck. No IME, VoiceOver,
+physical latency, RAM or battery improvement is claimed.
+
+The deprecated Swift client is outside active checks and release artifacts. Its
+source and separate state remain untouched. Earlier Swift check results above
+predate the owner's explicit deprecation instruction.

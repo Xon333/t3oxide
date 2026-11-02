@@ -73,7 +73,7 @@ func (m *Model) openRecentConversation(token string) tea.Cmd {
 			profile, environment, thread := r.page.ProfileID, r.page.EnvironmentID, r.thread.ID
 			var fresh client.NavigatorPage
 			cmd := m.navigatorRun("recent-open", func(ctx context.Context) (client.Result, error) {
-				page, err := session.NavigatorRead(ctx, profile, thread)
+				page, err := session.NavigatorRecentRead(ctx, profile, thread)
 				if err != nil {
 					return client.Result{}, err
 				}

@@ -58,6 +58,23 @@ func (a *Session) NavigatorRead(ctx context.Context, profile, query string) (Nav
 	return NavigatorPage{ProfileID: profile, EnvironmentID: env.EnvironmentID, Label: env.Label, Query: query, Page: page, Navigation: a.manager.navigation(env.EnvironmentID), Tree: tree}, nil
 }
 
+// NavigatorRecentRead resolves an exact saved identity through fresh bounded
+// metadata pages, without changing the user's browsing scope or reading detail.
+func (a *Session) NavigatorRecentRead(ctx context.Context, profile, thread string) (NavigatorPage, error) {
+	env, err := a.navigatorEnvironment(profile)
+	if err != nil {
+		return NavigatorPage{}, err
+	}
+	if thread == "" {
+		return NavigatorPage{}, errors.New("missing recent conversation identity")
+	}
+	page, tree, err := a.browserMetadataTarget(ctx, env, "", false, thread)
+	if err != nil {
+		return NavigatorPage{}, err
+	}
+	return NavigatorPage{ProfileID: profile, EnvironmentID: env.EnvironmentID, Label: env.Label, Page: page, Tree: tree}, nil
+}
+
 // NavigatorScope is the explicit browsing scope, independent of launch target
 // or the current attachment. Its initial value includes every configured host.
 func (a *Session) NavigatorScope() []string {

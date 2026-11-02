@@ -133,6 +133,10 @@ func (a *Session) browserMetadata(ctx context.Context, env config.Environment, q
 	return a.browserMetadataRead(ctx, env, query, false)
 }
 func (a *Session) browserMetadataRead(ctx context.Context, env config.Environment, query string, serverSearch bool) (ThreadPage, bool, error) {
+	return a.browserMetadataTarget(ctx, env, query, serverSearch, "")
+}
+
+func (a *Session) browserMetadataTarget(ctx context.Context, env config.Environment, query string, serverSearch bool, target string) (ThreadPage, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	a.mu.Lock()
@@ -166,15 +170,34 @@ func (a *Session) browserMetadataRead(ctx context.Context, env config.Environmen
 	if serverSearch {
 		fields["serverSearch"], fields["cursor"], fields["limit"] = true, 0, 50
 	}
-	result, err := conn.Request(ctx, "list", fields, "")
-	if err != nil {
-		return ThreadPage{}, navigation, err
+	if target != "" {
+		// Recent identity lookup must not inherit a title query, collapsed tree,
+		// lifecycle or cursor from the independent browsing presentation.
+		fields = map[string]any{"query": "", "lifecycle": "all", "typeFilter": "all", "grouped": false, "cursor": 0, "limit": 200}
 	}
-	if err = ctx.Err(); err != nil {
-		return ThreadPage{}, navigation, err
+	for {
+		result, err := conn.Request(ctx, "list", fields, "")
+		if err != nil {
+			return ThreadPage{}, navigation, err
+		}
+		if err = ctx.Err(); err != nil {
+			return ThreadPage{}, navigation, err
+		}
+		page, err := DecodeThreadPage(result)
+		if err != nil || target == "" {
+			return page, navigation, err
+		}
+		for _, row := range page.Threads {
+			if row.ID == target {
+				page.Threads = []Thread{row}
+				return page, navigation, nil
+			}
+		}
+		if !navigation || page.NextCursor == nil || *page.NextCursor <= page.Cursor {
+			return ThreadPage{}, navigation, errors.New("recent conversation is absent from available metadata")
+		}
+		fields["cursor"] = *page.NextCursor
 	}
-	page, err := DecodeThreadPage(result)
-	return page, navigation, err
 }
 
 // Browse keeps the current detailed session alive. Only an explicit offered

@@ -19,7 +19,14 @@ func (m *Model) drawnEditor() (*textarea.Model, hitZone, bool) {
 		return nil, hitZone{}, false
 	}
 	for _, z := range m.hitZones {
-		if m.dialog != nil && m.detail == "" && m.modalInput.Focused() && m.dialog.preservedInitial == "" && (z.action == "text-field" || z.action == "request-field" && m.requestEditorVisible()) {
+		launchMessage := m.dialog != nil && m.dialog.launch != nil && m.dialog.launch.preservedMessage == "" && z.action == "launch-field" && z.args == "message"
+		if m.dialog != nil && m.detail == "" && m.modalInput.Focused() && m.dialog.preservedInitial == "" && (launchMessage || z.action == "text-field" || z.action == "request-field" && m.requestEditorVisible()) {
+			if launchMessage && m.dialog.launch.review.Stage == "" {
+				z.x += 2
+				z.y++
+				z.width -= 4
+				z.height -= 2
+			}
 			if z.action == "request-field" {
 				z.y++
 				z.height--

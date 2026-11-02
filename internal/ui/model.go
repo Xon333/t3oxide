@@ -212,7 +212,7 @@ func newTextarea(placeholder string) textarea.Model {
 	t.MaxContentHeight = 0
 	t.MaxWidth = 10000
 	t.SetHeight(3)
-	t.SetVirtualCursor(true)
+	t.SetVirtualCursor(false)
 	t.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("enter", "ctrl+m", "alt+enter", "shift+enter", "ctrl+j"), key.WithHelp("Enter", "newline"))
 	return t
 }
