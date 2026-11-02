@@ -1,14 +1,26 @@
-t3oxide source adaptations
+t3oxide third-party attribution
 
-The primary Go terminal client uses the unmodified MIT-licensed Charm modules:
-charm.land/bubbletea/v2 v2.1.1, charm.land/bubbles/v2 v2.2.1,
-charm.land/lipgloss/v2 v2.0.6, and charm.land/glamour/v2 v2.0.1.
-Their original license texts are in LICENSES/. Exact release/source provenance
-is recorded in docs/dependencies.json; Go module checksums are in go.sum.
-The interface uses those libraries directly. It does not depend on core-tui.
-The transport and recovery code were reused from the separately delivered Go
-core-tui alternative for this same project, then adapted into a T3-specific
-session layer; that alternative's UI source is not bundled here.
+The Rust terminal client directly uses Ratatui 0.30.2 (MIT), ratatui-textarea
+0.9.3 (MIT), tui-markdown 0.3.13 (MIT OR Apache-2.0), and nucleo-matcher 0.3.1
+(MPL-2.0), together with the crates recorded in Cargo.lock.
+
+LICENSES/rust-third-party.txt contains the original license and notice texts
+for the complete locked Rust dependency graph. docs/dependencies.json records
+exact versions, source archive URLs, checksums and upstream commit identities
+where available. Include NOTICE and LICENSES/ with binary distributions.
+
+nucleo-matcher is used as an unmodified library. Its MPL-2.0-covered source is
+available at https://crates.io/api/v1/crates/nucleo-matcher/0.3.1/download,
+with the archive checksum in Cargo.lock and docs/dependencies.json. No upstream
+MPL-covered file is copied into or modified within the application source.
+
+Herdr, Herdr T3 Focus, Herdr T3 layout and TUIOS informed interaction choices;
+their application code is not bundled. No FrankenTUI code or restricted course
+material is incorporated. docs/rust-source-reuse.md records exact inspected
+sources, licenses and adoption decisions.
+
+The notices below cover retained Node adapter contract and codec adaptations.
+They do not grant a top-level license to t3oxide's original application code.
 
 adapter/core.mjs, adapter/t3.mjs, adapter/models.mjs, adapter/navigation.mjs
 and adapter/native.mjs
@@ -87,13 +99,9 @@ adapter/activity.mjs ports and adapts tool_argument, output_text, tool_output
 and describe_as from krishhgg/t3term src/transcript.rs at
 d1d33e89ae16dd09a4ff1e2a9f1570b3416a0c1e. The bounded lazy result inspector
 also follows src/client.rs::turn_item and src/tui/mod.rs::Outputs.
-internal/ui/navigator.go and workspace_layout.go adapt the responsive column,
-sidebar width, focus cycle and context-pane composition in src/tui/mod.rs
-and src/tui/details.rs from that same revision.
 
-The adapted code uses t3oxide's source-qualified identities, exact operation
-recovery, bounded history and existing themes. No Rust runtime, full T3
-projector or t3term account-switching policy is bundled.
+The retained activity adapter uses t3oxide's source-qualified identities and
+bounded inspection. No t3term account-switching policy or full projector is bundled.
 Original t3term MIT license (also in LICENSES/t3term-LICENSE.txt):
 
 MIT License
@@ -117,6 +125,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-The bounded file/hunk review index uses unmodified github.com/bluekeyes/go-gitdiff
-v0.9.0 (MIT). Its original license is retained in LICENSES/.

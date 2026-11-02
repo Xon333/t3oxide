@@ -137,7 +137,7 @@ export class T3 {
       features: { ...FEATURES, modelSelection: d.capabilities?.serverResolvedCommandContext === true,
         nativeWorkflows: d.capabilities?.serverResolvedCommandContext === true,
         nativeDefaults: d.capabilities?.serverResolvedCommandContext === true,
-        readCancellation:true, nativeDefaultsWrite: false, threadPreview:true, serverSearch:true,
+        readCancellation:true, inclusiveThreadList:true, nativeDefaultsWrite: false, threadPreview:true, serverSearch:true,
         threadPinning:d.capabilities?.threadPinning === true,
         launchModelSelection: d.capabilities?.serverResolvedCommandContext === true,
         messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },

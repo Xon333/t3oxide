@@ -1,14 +1,80 @@
-# Installation: Go terminal client
+# Installation and configuration
 
-The primary Go/Bubble Tea client connects to an existing T3 environment through an on-demand host adapter. The legacy Swift app uses the same adapter and environment profiles, with separate client state. Installation does not install, start, upgrade, or restart T3, Node.js, SSH, or a VPN.
+The Rust terminal client connects to existing T3 Code environments through a small host-local Node companion. The client does not start or own T3. A local profile launches the companion directly; a remote profile launches the same companion through an existing OpenSSH route.
 
-## 1. Prepare each host
+## Build the client
 
-Use a local checkout of this repository and the ordinary account that owns the T3 instance. Resolve its existing Node.js 22.4+ executable and loopback T3 URL.
+Use a current stable Rust toolchain on Linux or macOS. `Cargo.toml` declares Rust 1.88; the exact toolchain used for validation is recorded in [verification](docs/rust-verification.md). There is no Go build or runtime requirement.
 
-For an already configured host, preserve its credential and identity and follow [Updates and recovery](#updates-and-recovery). The credential setup below is for a new installation.
+```sh
+cargo build --locked --release
+./target/release/t3oxide --version
+./target/release/t3oxide --help
+```
 
-Create a dedicated host-local credential using the **installed T3 CLI for that instance**, with `orchestration:read`, `orchestration:operate` and `filesystem:read` scopes. The read scope lets native launch review inspect the project's `t3.json`, repository refs and changes. CLI flags may vary by nightly; consult that installation's help. For versions supporting the following syntax, first set the Bash array `T3_CMD` to the installed executable and its instance-specific options:
+For a user-local installation:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+install -m 755 target/release/t3oxide "$HOME/.local/bin/t3oxide"
+```
+
+Ensure that directory is on your shell's `PATH`. Distributions must retain `NOTICE` and `LICENSES/`. Building or installing the executable does not update a host companion, alter T3 or open a connection.
+
+## Reuse existing environment profiles
+
+The default profile file remains `~/.config/t3oxide/environments.json`. Preserve an existing file. The Rust client reads the established version 1 format:
+
+```json
+{
+  "version": 1,
+  "environments": [
+    {
+      "id": "desk",
+      "label": "Desk T3",
+      "environmentId": "EXACT_NATIVE_ENVIRONMENT_ID",
+      "sshDestination": null,
+      "node": "/absolute/path/to/node",
+      "adapter": "/absolute/path/to/t3oxide/current/main.mjs",
+      "hostConfig": "/absolute/path/to/t3oxide/host.json",
+      "enabled": true,
+      "defaultForNew": true
+    }
+  ]
+}
+```
+
+Use the actual absolute paths and environment identity returned by the host installer. The executable and configuration paths belong to that host. Set `sshDestination` to an existing SSH alias for a remote profile; leave it `null` for a local companion.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique client profile identity used by `--env`. |
+| `label` | Human-readable name. |
+| `environmentId` | Exact native identity verified during every handshake. |
+| `node`, `adapter`, `hostConfig` | Absolute paths on the adapter host. |
+| `sshDestination` | Existing alias or destination; no command-line options. |
+| `enabled` | Only enabled profiles participate. |
+| `defaultForNew` | Optional explicit creation preference; it does not retarget saved operations. |
+| `webURL` | Optional client-reachable HTTP(S) address, without credentials, query or fragment. |
+| `allowedProviderInstanceIds` | Optional nonempty allowlist of exact provider instances. Absence permits the configured native instance; an empty list is rejected. |
+
+New users can start from `config/environments.example.json`, replacing placeholders and enabling only configured sources. The client does not rewrite profiles. Remote connections use batch authentication, strict host-key checking and a bounded connection timeout. Confirm your SSH route and known host key independently; the client does not create an SSH key or configure a VPN.
+
+```sh
+t3oxide envs
+t3oxide doctor --env desk --json
+t3oxide --env desk
+```
+
+An unavailable host is reported independently. It does not make a healthy environment's metadata disappear or authorize a fallback mutation on another host.
+
+## Prepare a new adapter host
+
+This section is for a new host. Existing installations should preserve their identity, credential and operation journal and follow the update section below.
+
+Use the ordinary account that owns the existing T3 instance, a checkout of this source, an existing Node **22.4 or newer** executable and the instance's loopback URL. The companion has no npm dependencies. It uses the host-local credential for authenticated native HTTP and WebSocket operations; credentials never belong in `environments.json`.
+
+Create a dedicated credential through that installation's own T3 CLI, with `orchestration:read`, `orchestration:operate` and `filesystem:read` scopes. Consult the installed CLI's help because installation paths and supported flags vary. For versions supporting this command form, set `T3_CMD` to the installed executable and its instance options first:
 
 ```bash
 umask 077
@@ -19,7 +85,7 @@ mkdir -p "$HOME/.config/t3oxide"
 chmod 600 "$HOME/.config/t3oxide/t3.token"
 ```
 
-Keep the token on the host; do not commit it or copy it into client configuration. Set `HOST_T3_BASE` to the existing loopback origin, then run:
+The read scope for files supports native project defaults, refs and diff inspection. Keep the credential on the adapter host. Set `HOST_T3_BASE` to the existing instance's loopback origin, then explicitly choose the allowed write policy:
 
 ```sh
 node scripts/install-host.mjs \
@@ -28,64 +94,44 @@ node scripts/install-host.mjs \
   --enable-writes
 ```
 
-Use `--read-only` instead of `--enable-writes` to disable mutations. The installer verifies environment identity, protocol, and authenticated access, installs a versioned adapter under `~/.local/share/t3oxide/`, and writes private configuration at `~/.config/t3oxide/host.json`.
+Use `--read-only` in place of `--enable-writes` for read-only access. The installer verifies native identity, protocol and authenticated access before publishing a versioned companion under `~/.local/share/t3oxide/`. It keeps the host configuration private. Copy its output's `environmentId`, `node`, `adapter` and `hostConfig` values into the corresponding client profile, preserving exact spelling.
 
-Save the output fields `environmentId`, `node`, `adapter`, and `hostConfig` for the client profile. Use the exact absolute paths returned by the installer.
+This is a host-local installation step, not a prerequisite for compiling or exercising fixture tests. The installer does not install Node, start T3 or replace native services.
 
-## 2. Build and configure the Go client
+## Appearance and interaction
 
-With Go 1.26.10+ installed:
+Choose **Appearance** from the command palette, or launch with `--theme terminal|violet|cyan|lime`. Terminal uses your terminal palette; the other choices use fixed colors with consistent error, waiting and success roles. UI choices are saved in the Rust state file.
 
-```sh
-bash scripts/build-go.sh
-mkdir -p "$HOME/.local/bin" "$HOME/.config/t3oxide"
-install -m 755 dist/t3oxide "$HOME/.local/bin/t3oxide"
-```
+F2 changes Developer/AgentBox without changing the active source. F3 cycles Split, Focus and Wide. Compact terminals show the focused pane; Tab still moves among navigator, transcript, composer and Details. Use `--no-mouse` or **Toggle mouse** for native terminal text selection. Mouse capture otherwise enables conversation selection, pane focus, transcript scroll and Unicode-aware composer selection.
 
-For a new installation only, create the profiles file:
+The composer uses Enter for newlines and Ctrl+] for send. `VISUAL` or `EDITOR` supplies an external editor through Ctrl+E; the edited text returns to the original conversation and remains a draft. An editor failure preserves the original draft and reports the retained temporary file when needed.
 
-```sh
-cp config/environments.example.json "$HOME/.config/t3oxide/environments.json"
-```
+See [shortcuts](docs/shortcuts.md) for all contexts. No shortcut configuration file is needed for the default workspace.
 
-Preserve an existing `environments.json`. Ensure `~/.local/bin` is on your shell's PATH. Edit the profiles before opening the client:
+## State and migration
 
-- Give each profile a unique `id` and a descriptive `label`.
-- Fill its environment identity and executable/configuration paths from the host installer output.
-- Set `sshDestination` to an existing SSH alias, or `null` for a local adapter.
-- Set `enabled` to `true` for configured profiles; remove unused examples.
-- Optionally set `webURL` to a full T3 URL reachable **from the client**, without credentials, query, or fragment. Omit it when no browser route is available.
+The defaults are:
 
-Remote connections use batch authentication and strict host-key checking. Establish SSH access first. A host's loopback URL is not remotely reachable unless an existing forward exposes it on the client; T3 Connect browser access is not itself an SSH route.
+| Data | Location and owner |
+| --- | --- |
+| Profiles | `~/.config/t3oxide/environments.json`, read by the Rust client. |
+| Rust drafts, recovery and UI preferences | `~/.config/t3oxide/rust-state.json`, exclusively locked by one Rust client. |
+| Host credential and configuration | Private files on each adapter host. |
+| Exact adapter operation receipts | `operations-v1/` beside the host configuration. |
+| Threads, runs, permissions, worktrees and queues | Native T3. |
 
-Run `t3oxide envs` to inspect configured profiles, then `t3oxide` to open the TUI. See [Go controls and themes](NATIVE-GO.md). The primary CI artifact, `t3oxide-terminal-macos-arm64`, contains the Apple Silicon executable and notices. Include `NOTICE` and `LICENSES/` when redistributing it.
+`--config PATH` and `--state PATH` select explicit client files. A custom state path is useful for an isolated trial; keep it in a separate directory if you want an empty workspace without importing previous terminal state.
 
-## 3. Verify the connection
+When the Rust state file does not exist, the client validates the sibling `go-drafts.json` and supported prompt/inbox sidecars, takes a shared source lock and writes the imported data to the Rust file. The original files' contents are retained. Close the previous client before migration. If the Rust file already exists, it is authoritative and is not reimported. Invalid or unsupported state fails explicitly; it is not replaced with an empty object. Unknown fields survive supported transactions.
 
-Check the selected environment identity, open a thread, and receive a live update. If writes are enabled, use a disposable conversation to verify a harmless send. See the [verification record](docs/verification.md) for the cases exercised against tested installations.
+Compose and launch edits save after a short idle interval and are flushed before leaving the relevant form, changing source or quitting. Each composer draft is limited to 64 KiB and 9,999 lines. Ordinary operation and Stop recovery records are separate. After a save error, correct the filesystem problem and retry leaving the form; a normal Ctrl+Q will not silently discard edits.
 
-Switching environments or quitting the client ends only the owned helper connection. Existing T3 work continues independently.
+A saved uncertain operation may already have taken effect. Open **Recover saved operations**, review its complete original environment, identity and payload, and use **Reconcile original action**. The client never reconnects and silently resends. Clearing a local record is a separate explicit choice after checking the native result; it does not undo T3 work.
 
-## Updates and recovery
+## Updates and verification on your hosts
 
-Rerun the host installer from the desired source revision to update the adapter. With no flags, `node scripts/install-host.mjs` preserves the configured identity, token-file path and write setting. It selects a versioned release through the `current` symlink; restoring a previous compatible target rolls back the adapter without changing T3. Preserve an active or interrupted `.install-lock` until its installer has finished or its publication has been reviewed. Reconnect existing helpers to load updated modules. Rebuild and replace the Go executable when client source changes.
+Rebuild the Rust executable from the desired revision. The bundled companion advertises inclusive child metadata; update it explicitly to expose collapsed child summaries to local filtering. An older compatible companion can still provide its advertised operations and native search. To update a configured companion, run `node scripts/install-host.mjs` on that host from the same source revision. With no policy/identity flags, the installer retains the existing configuration, token-file path and write setting and publishes a versioned target. Reconnect the client to load the new modules. Retain the previous compatible target and any installer lock until publication is complete or reviewed.
 
-Renew expired credentials through the same installed T3 CLI, retain the private token path and original session subject, and reconnect. Existing credentials with only the two orchestration scopes can still browse conversations; native project-file, refs and change reads may fail with a missing `filesystem:read` scope. Preserve the existing credential until its same-subject replacement has been verified against the intended environment. Reconnect does not automatically replay writes: retry saved uncertain operations explicitly.
+Preserve all unresolved client records and `operations-v1/`. Its bounded durable receipts are recovery records, not a disposable cache. Replacing the frontend does not acknowledge or resolve an operation. Credential renewal should preserve the intended environment and session subject; verify the replacement before retiring the existing credential.
 
-Preserve `~/.config/t3oxide/go-drafts.json` and appearance settings in `terminal.json` on the client, any legacy `drafts.json`, and `operations-v1/` beside the host configuration. The first normal Go launch imports validated Swift drafts only when the Go state file is absent; it never edits the Swift file. The host journal contains original operation payloads and receipts, not tokens; it is recovery state, not disposable cache. Its 4,096-record limit fails closed for new operations rather than evicting recovery records.
-
-To disable writes, rerun the installer with `--read-only`. When decommissioning, revoke only the dedicated companion credential through the installed CLI and preserve any unresolved recovery state. Do not remove the T3 installation or its data.
-
-## Legacy Swift rollback
-
-The retained Swift/AppKit source is in `mac/`; it is no longer the primary client. On an Apple Silicon Mac with macOS 14+ and Apple developer tools:
-
-```sh
-bash scripts/build-mac.sh
-mkdir -p "$HOME/Applications"
-cp -R dist/t3oxide.app "$HOME/Applications/"
-```
-
-Open `~/Applications/t3oxide.app` using the existing environment profiles. The build is ad-hoc signed and not notarized; do not disable Gatekeeper globally. `dist/t3oxide-macos-arm64.zip` contains the same app; CI labels its artifact `t3oxide-legacy-swift-macos-arm64`.
-
-Keep `drafts.json` separate from `go-drafts.json`. Swift rollback does not import new Go drafts, presets or pending operations. Review unresolved work before switching and use one client at a time during adoption. Retain both state files and the host journals; replacing the frontend does not resolve or replay outstanding writes.
+Run `doctor` for exact identity and metadata access, then open a conversation and observe a live update. Where writes are enabled, use a disposable native conversation to verify send, Stop and requests under that host's offered capabilities. Those checks require the actual local credential and SSH/terminal environment. The [verification record](docs/rust-verification.md) identifies which results were obtained with fixtures and which remain host-local acceptance checks.

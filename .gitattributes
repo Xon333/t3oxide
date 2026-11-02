@@ -1,0 +1,4 @@
+# Source archives contain the active terminal product and its verification.
+/mac export-ignore
+/tests/*.swift export-ignore
+/scripts/build-mac.sh export-ignore

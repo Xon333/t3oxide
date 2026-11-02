@@ -78,7 +78,7 @@ export function threadList(shell, query = '', options = {}) {
       if (working(t)) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
     }
   }
-  const eligible = available.filter(t => !scoped || threadType(t) !== 'subagent' ||
+  const eligible = available.filter(t => !scoped || options.includeChildren === true || threadType(t) !== 'subagent' ||
     ((q || lifecycle !== 'active' || working(t)) && (q || filter === 'subagents' || open.has(lineage(t.lineage)?.parentThreadId))))
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
   const all = new Map(), children = new Map();

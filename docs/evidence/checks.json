@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-02",
+  "platform": "Linux x86_64",
+  "baselineCommit": "e73caacd673d1a9bbceea8a7ed240b2a068ba5a7",
+  "t3ContractCommit": "ac8dce0cc3abd8a337f2d806b5082a6834b9b81a",
+  "toolchains": {
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "node": "24.22.1",
+    "python": "3.12.14",
+    "baselineGo": "1.26.10"
+  },
+  "releaseBinary": {
+    "version": "t3oxide 0.11.0 \u00b7 Rust / Ratatui",
+    "target": "x86_64-unknown-linux-gnu",
+    "bytes": 3324744,
+    "sha256": "5f2554961bad5b942fae76c07dc4e26fa6e68c79cc9ef6579805d91b684a8721"
+  },
+  "checks": [
+    {
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    },
+    {
+      "command": "cargo clippy --locked --all-targets -- -D warnings",
+      "exitCode": 0,
+      "log": "clippy.log"
+    },
+    {
+      "command": "cargo test --locked --all-targets",
+      "exitCode": 0,
+      "libraryTestsPassed": 81,
+      "integrationTestsPassed": 3,
+      "log": "rust-tests.log"
+    },
+    {
+      "command": "bash scripts/check.sh",
+      "exitCode": 0,
+      "nodeTestsPassed": 237,
+      "pythonTestsPassed": 5,
+      "log": "adapter-and-scripts.log"
+    },
+    {
+      "command": "python3 tests/loopback_fixture.py",
+      "exitCode": 0,
+      "cutPoints": 4,
+      "operations": [
+        "Stop",
+        "approval",
+        "question"
+      ],
+      "log": "loopback.log"
+    },
+    {
+      "command": "cargo build --release --locked --offline",
+      "exitCode": 0,
+      "log": "release-build.log"
+    },
+    {
+      "command": "cargo check --locked --offline --all-targets --target aarch64-apple-darwin",
+      "exitCode": 0,
+      "executionScope": "cross-target compilation only",
+      "log": "macos-arm-check.log"
+    },
+    {
+      "command": "cargo check --locked --offline --all-targets --target x86_64-apple-darwin",
+      "exitCode": 0,
+      "executionScope": "cross-target compilation only",
+      "log": "macos-intel-check.log"
+    },
+    {
+      "command": "python3 tests/rust_terminal.py --binary target/release/t3oxide --baseline /isolated/go-baseline/t3oxide-go --output /isolated/evidence --iterations 3",
+      "exitCode": 0,
+      "acceptanceOutcomes": 41,
+      "samplesPerClient": 3,
+      "data": "terminal-evidence.json"
+    },
+    {
+      "command": "bash scripts/build-rust.sh",
+      "exitCode": 0,
+      "log": "packaged-build.log",
+      "packagedBinarySha256": "5f2554961bad5b942fae76c07dc4e26fa6e68c79cc9ef6579805d91b684a8721",
+      "packagedBinaryMatchesRelease": true
+    }
+  ],
+  "notExercised": [
+    "installed T3 authentication and provider execution",
+    "real SSH routes",
+    "macOS linking/signing or native terminal runtime",
+    "physical keyboard/mouse delivery and display paint timing"
+  ],
+  "artifacts": {
+    "terminal-evidence.json": {
+      "bytes": 6838,
+      "sha256": "1de4aabb7afa610bfe595dcfff90fa98df8b8bd274ec20fece035bbf4686be65"
+    },
+    "developer.txt": {
+      "bytes": 6452,
+      "sha256": "d04a4563448b7ded06a41d12af6fb493ecc89901f701ab93f9892a98d9144d0d"
+    },
+    "agentbox.txt": {
+      "bytes": 6448,
+      "sha256": "f2a75bd02634cc2f438958e02696a015ed8fe0bffe2f477bf0dd5cbd43bc8c78"
+    },
+    "rust-tests.log": {
+      "bytes": 7739,
+      "sha256": "0c42a5af35d971b98af472d23f50f0fc5a94a23be35b4445d9da194daac4d391"
+    },
+    "adapter-and-scripts.log": {
+      "bytes": 51099,
+      "sha256": "bc945a8bffec8c5ae806f84733dfbc85cbfffe93c64d07ec721fb39048f2a169"
+    },
+    "clippy.log": {
+      "bytes": 198,
+      "sha256": "d4044ff29535b7d8cf99664a1880cca5780be9a23bfd172fea6bb4addf580451"
+    },
+    "loopback.log": {
+      "bytes": 257,
+      "sha256": "b680b4779496f847035b62463be5e7cff240f63e58f993a005da268551c8c1b1"
+    },
+    "macos-arm-check.log": {
+      "bytes": 4269,
+      "sha256": "3bca86cdb4bff17abaed46cedcdab23552c3948a79175235df2ffaaae60ea7e6"
+    },
+    "macos-intel-check.log": {
+      "bytes": 3418,
+      "sha256": "5e372bdef173d7e0e4d81324061ec36a8128da0e34e07d99d91ad67dd76b872b"
+    },
+    "release-build.log": {
+      "bytes": 134,
+      "sha256": "6edcc496a80d9ac313f33761ef4df5da4b5979e9dc70b51f8068db5c41124e1f"
+    },
+    "packaged-build.log": {
+      "bytes": 142,
+      "sha256": "c08a4b0d0fa2175ab050b6e5761e9368b081fa1e82e2212628e8a18faafb53a8"
+    }
+  }
+}

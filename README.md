@@ -1,108 +1,86 @@
-<h1 align="center">t3oxide</h1>
+# t3oxide
 
-<p align="center">A terminal workspace for your existing T3 Code conversations and tasks.</p>
+A Rust terminal workspace for existing [T3 Code](https://github.com/pingdotgg/t3code) environments. Browse conversations, follow live work, answer native requests and review changes without giving another service control of your agents.
 
-![Developer conversation browser in the violet theme](docs/screenshots/native-violet-developer.png)
+**Developer and AgentBox share one workspace.** Developer emphasizes conversation navigation; AgentBox emphasizes attention, active work and explicit review. Switching views preserves the attached conversation, composer and reading position. T3 remains responsible for threads, agents, execution, permissions, queues and worktrees.
 
-## Overview
+## Build and connect
 
-Browse conversations across your configured [T3 Code](https://github.com/pingdotgg/t3code) environments, open a thread, and keep working from your terminal. **Developer** gives you a unified conversation browser. **AgentBox** turns those same threads into a task inbox.
-
-T3 owns execution, permissions, threads, worktrees and queues. t3oxide connects through an on-demand Node adapter; closing the client leaves native work running. The active client uses Go, Bubble Tea v2, Bubbles, Lip Gloss and Glamour. The deprecated Swift/AppKit files are retained without ongoing development or checks.
-
-```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#20232B", "primaryColor": "#2A2F3A", "primaryTextColor": "#E6E9F0", "primaryBorderColor": "#BBA5FA", "lineColor": "#A7ADBF", "edgeLabelBackground": "#20232B"}}}%%
-flowchart LR
-  C["t3oxide<br/>One workspace · multiple environments"] -->|"Local stdio"| A["On-demand adapter"]
-  C -->|"SSH"| B["On-demand adapter"]
-  A --> L["Local T3 environment<br/>Threads · runs · workspaces"]
-  B --> R["Remote T3 environment<br/>Threads · runs · workspaces"]
-  classDef client fill:#2A2F3A,stroke:#BBA5FA,color:#E6E9F0
-  classDef adapter fill:#2A2F3A,stroke:#84D7E4,color:#E6E9F0
-  classDef native fill:#2A2F3A,stroke:#C1D99B,color:#E6E9F0
-  class C client
-  class A,B adapter
-  class L,R native
-```
-
-## Features
-
-### Find the right conversation
-
-See configured environments together, ordered by recent native activity. Hide reviewed conversations through native review state; restore them from All conversations. Filter the list, then open the exact conversation with Enter or a click. Browsing does not subscribe to transcripts, and an unavailable host leaves healthy rows usable.
-
-### Work with the conversation in view
-
-Read streaming Markdown, compose a reply, inspect tools and changes, or answer a native request. Conversation and Info sidebars keep context close. Drafts, pending requests and operation identities survive supported returns; uncertain mutations require an explicit retry.
-
-### Review tasks in AgentBox
-
-Start with **Inbox**, then move between Working, Queued, Later, Reviewed, All and Unknown. **Completed** describes a run; **Reviewed** describes the native review disposition. File work into an existing project, launch with native defaults, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
-
-Priorities organize the client view; they do not schedule work after exit. Existing native runs and accepted message queues continue independently. See the [AgentBox guide](docs/agentbox.md) for the full workflow.
-
-![AgentBox Needs you view with a public task](docs/screenshots/native-violet-agentbox-inbox.png)
-
-### Switch modes without losing context
-
-Open Commands to move between Developer and AgentBox. Both views use the same native conversations and drafts.
-
-![AgentBox Commands palette showing the mode actions](docs/screenshots/native-violet-agentbox-commands.png)
-
-### Make the workspace yours
-
-Use `/theme` or **Settings → Appearance** to choose an environment's theme. Violet, cyan and lime provide fixed palettes; Terminal follows your terminal's colours. Profile-specific choices persist without changing terminal settings. See [appearance and configuration](NATIVE-GO.md) for theme roles and launch overrides.
-
-![Appearance picker with Electric violet highlighted](docs/screenshots/native-violet-theme-picker.png)
-
-
-## Installation
-
-Download [0.9.0 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.9.0), or build from source:
-
-Requirements: **Go 1.26.10+**, **Node 22.4+** on each adapter host, and an existing T3 instance. Remote profiles use your existing OpenSSH configuration.
+The client targets Linux and macOS. Build with a current stable Rust toolchain; the manifest declares Rust 1.88 as its minimum. The application has no Go runtime dependency. Each adapter host needs its existing Node 22.4+ installation and an existing T3 environment. Remote profiles use OpenSSH.
 
 ```sh
-git clone https://github.com/Xon333/t3oxide.git
-cd t3oxide
-bash scripts/build-go.sh
-./dist/t3oxide envs
-./dist/t3oxide
+cargo build --locked --release
+./target/release/t3oxide envs
+./target/release/t3oxide
 ```
 
-Follow [installation](NATIVE.md) to configure host adapters and environment profiles, then [Go setup](NATIVE-GO.md) for executable installation and appearance. Preserve existing profiles and drafts when updating.
+Existing environment profiles remain usable. The bundled companion adds inclusive child metadata for full loaded-child filtering; older compatible companions retain native search and their supported operations until explicitly updated. For a new setup, follow [installation and configuration](NATIVE.md). Building the application does not install or restart T3. The small, dependency-free Node companion is retained for the verified T3 authentication, RPC, compact snapshot and durable receipt boundary; [contract evidence](docs/rust-contracts.md) explains that decision.
 
-Building the client does not install or restart T3. See [verification](docs/verification.md) for tested versions and known limits, and [native contracts](docs/native-workflows.md) for the adapter boundary.
+```sh
+# Open a known source directly.
+t3oxide --env desk --thread THREAD_ID
 
-## Usage
+# Use the attention-oriented view or your terminal's own colors.
+t3oxide --mode agentbox
+t3oxide --theme terminal
 
-Developer is the default for a new settings file. Open **Commands → AgentBox** or enter `/mode agentbox` for the task inbox; `/mode developer` returns to conversation browsing.
+# Read-only diagnostics; no interactive mutation commands are exposed by the CLI.
+t3oxide doctor --env desk --json
+t3oxide threads --env desk --json-envelope --limit 100
+```
 
-| Action | Portable default |
+## One place to find and finish work
+
+**Find a conversation across hosts.** The navigator combines bounded native metadata from configured environments. A failed host leaves healthy sources usable and reports its own failure. Expand authoritative child conversations, filter loaded titles, search native recent messages explicitly, or preview a highlighted conversation without changing the active draft or Stop target. Project scope, priorities and saved reading positions are local presentation preferences.
+
+**Keep the work readable.** Ratatui renders streaming Markdown with a bounded cache. Split, Focus and Wide layouts adapt to terminal size; the highlighted border shows keyboard focus. The composer supports Unicode, wrapping, selection, mouse cursor placement and undo/redo through the maintained Ratatui textarea. Long request prompts and recovery payloads have their own scrollable review pane.
+
+**Act on native state.** Send with native Auto, Queue or Steer delivery, stop the reviewed active run with queue hold, inspect source tools and diffs, and answer the exact approval or question offered by T3. Model and option pickers use the host's live catalog and exact provider instance. Favorites and one-message overrides preserve that identity. Unsupported host capabilities remain explicit.
+
+**File work with a review.** New chooses an existing native project and resolves its defaults before Create. AgentBox requests native isolation by default. Title, message, model/options and workspace remain reviewable; an empty message creates a filed conversation without starting a run. Filing multiple human-authored tasks proceeds through explicit per-task launch reviews and keeps receipts and remaining drafts.
+
+**Review intentionally.** Attention, Working, Reviewed and All are views of the same conversations. Opening a thread never marks it reviewed. Settling, restoring, pinning and snoozing use native revision-bound actions. Local priority changes do not schedule execution.
+
+## Controls that stay consistent
+
+| Action | Key |
 | --- | --- |
-| Commands | Ctrl+Space; Ctrl+P fallback |
-| Conversations / Info | Ctrl+O / Ctrl+L |
-| Newline / Send | Enter / Ctrl+] |
-| Literal send | Ctrl+\ |
-| Stop with native queue hold | Ctrl+S, including over dialogs |
-| Move focus / dismiss / exit | Tab or Shift+Tab / Esc / Ctrl+Q |
-| AgentBox navigation | J/K or arrows, Enter, R reply, N file, V views |
+| Search commands | **Ctrl+P** or **Ctrl+Space** |
+| Switch Developer / AgentBox | **F2** |
+| Cycle Split / Focus / Wide | **F3** |
+| Move pane focus | **Tab** / **Shift+Tab** |
+| Conversations / Details | **Ctrl+O** / **Ctrl+L** |
+| Select and open a conversation | **↑↓** or **j/k**, then **Enter**; or click |
+| Filter loaded conversations | **/** in the navigator |
+| Native conversation search / loaded transcript search | **Ctrl+F**, according to focused pane |
+| Newline / send | **Enter** / **Ctrl+]** |
+| Stop active native run and hold its queue | **Ctrl+S**, including over dialogs |
+| Review native requests | **Ctrl+Y** |
+| Edit the active draft externally | **Ctrl+E** using `VISUAL` or `EDITOR` |
+| Return to live follow | **End** in the transcript |
+| Save and exit | **Ctrl+Q** |
 
-Enter in the composer inserts a newline. Delivered Command equivalents are available on macOS; terminals and the OS may intercept them. The [complete shortcut reference](docs/shortcuts.md) covers context-specific controls, steering, distinct Enter combinations and the optional shortcut file.
+The [shortcut reference](docs/shortcuts.md) covers context, mouse interaction, forms, source inspection and read-only CLI commands. The command palette is the complete action catalog. Paste is always literal text; the composer never interprets pasted slash commands.
 
-## Development
+## Drafts and recovery
+
+The Rust client stores drafts and recovery records in `~/.config/t3oxide/rust-state.json`, independently of T3. When that file is absent, the client validates and imports the previous terminal client's `go-drafts.json` and supported sidecars without changing their contents. An existing Rust state file always wins. Keep unresolved operation records and host-side receipts when updating.
+
+Every mutation is saved with its exact environment, operation ID and payload before dispatch. A disconnect does not trigger a retry. **Recover saved operations** shows the original payload and offers explicit reconciliation with the same identity. Stop has a separate pending lane so an uncertain ordinary operation does not block it. Acknowledgements clear only the matching record and submitted text; a newer draft is retained. Save failures remain visible and prevent a normal quit from discarding edits.
+
+Exiting detaches this client and its helper processes. Native T3 work and accepted queues continue.
+
+## Development and evidence
 
 ```sh
-bash scripts/check-go.sh
-bash scripts/check.sh
-bash scripts/check-security.sh
-bash scripts/build-go.sh
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --locked --release
+node --test --test-concurrency=1 tests/*.test.mjs
+python3 tests/rust_terminal.py
 ```
 
-The Go checks cover formatting, tests, vet and race detection. Shared checks cover the Node adapter, scripts and Python measurement tests. Run the checks affected by your change; documentation changes need no app build.
+Read [architecture](docs/architecture.md), [source reuse decisions](docs/rust-source-reuse.md), [current T3 contracts](docs/rust-contracts.md) and the [verification record](docs/rust-verification.md). The record separates deterministic protocol/PTY evidence from checks that require an installed host, its credentials, SSH route or a particular terminal emulator. Full T3 remains available for complete history, attachments and capabilities not advertised through this companion.
 
-Read [architecture](docs/architecture.md) for the protocol boundary, [state and recovery](docs/state-recovery.md) before changing persistence, and [verification](docs/verification.md) for portable tests versus installed-instance evidence. Remaining native acceptance is tracked in [native remainder](NATIVE-REMAINDER.md).
-
-Third-party attribution is in [NOTICE](NOTICE) and [LICENSES/](LICENSES/). This repository has no top-level license grant; third-party notices do not establish a blanket license for t3oxide.
-
-The visual feature walkthrough follows the layout of [LazyGit's README](https://github.com/jesseduffield/lazygit#readme), with original t3oxide prose.
+[NOTICE](NOTICE), [LICENSES/rust-third-party.txt](LICENSES/rust-third-party.txt) and [the locked source inventory](docs/dependencies.json) contain dependency attribution, including the unmodified MPL-2.0 fuzzy matcher. Third-party notices do not establish a blanket license for t3oxide's original application code.

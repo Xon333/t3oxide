@@ -1,4 +1,7 @@
-# Verification
+# Historical verification
+
+For the active Rust application, see [current verification](rust-verification.md).
+The records below describe earlier implementations at their stated commits.
 
 ## Sidebar navigation correction, 2026-11-02
 

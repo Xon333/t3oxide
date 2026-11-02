@@ -1,0 +1,104 @@
+   Compiling t3oxide v0.11.0 (/workspace/scratch/6362103e6570/t3oxide)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.89s
+     Running unittests src/lib.rs (target/debug/deps/t3oxide-2fbb65fb7aabef3a)
+
+running 81 tests
+test app::input::tests::identical_approval_labels_cannot_retarget_a_drawn_request_identity ... ok
+test app::input::tests::oversized_paste_is_transactional_and_unicode_safe ... ok
+test app::input::tests::filter_limits_characters_without_cutting_unicode ... ok
+test app::input::tests::failed_unrelated_form_save_does_not_prevent_stop_dispatch ... ok
+test app::input::tests::explicit_filtering_prevents_typing_from_changing_navigation_intent ... ok
+test app::input::tests::new_lines_and_focus_switch_do_not_send ... ok
+test app::input::tests::queued_keys_after_quit_cannot_dispatch_an_action ... ok
+test app::input::tests::pane_cycle_and_layout_are_reversible ... ok
+test app::input::tests::legacy_control_bytes_and_enhanced_send_keys_share_submit_action ... ok
+test app::input::tests::stop_is_global_and_does_not_close_or_submit_a_dialog ... ok
+test app::input::tests::rejected_required_answer_keeps_the_original_question_visible ... ok
+test app::input::tests::reading_review_detail_never_changes_selected_action ... ok
+test app::lifecycle_tests::lifecycle_refresh_is_source_specific_and_ignores_text_chunks_and_search_pages ... ok
+test app::input::tests::stale_modal_click_cannot_select_reused_row ... ok
+test app::input::tests::palette_fuzzy_query_does_not_execute_a_pasted_command ... ok
+test app::native::tests::answers_respect_native_options_and_required_flags ... ok
+test app::native::tests::custom_multi_answer_edits_retain_native_choices_and_replace_only_custom ... ok
+test app::lifecycle_tests::stale_host_results_never_replace_a_newer_scope ... ok
+test app::native::tests::catalog_never_switches_accounts ... ok
+test app::lifecycle_tests::obsolete_navigation_ack_cannot_unlock_the_current_live_transition ... ok
+test app::native::tests::multi_answers_cannot_duplicate ... ok
+test app::recovery_tests::launch_acknowledgement_is_bound_to_original_generated_identity ... ok
+test app::lifecycle_tests::two_hanging_hosts_do_not_delay_a_healthy_third_metadata_source ... ok
+test app::recovery_tests::local_resolution_requires_opening_exact_record_and_explicit_choice ... ok
+test app::recovery_tests::favorite_removal_is_source_exact_and_cannot_erase_a_changed_selection ... ok
+test app::recovery_tests::legacy_stop_recovers_in_its_original_normal_lane ... ok
+test app::lifecycle_tests::delayed_autosave_cannot_resurrect_acknowledged_text ... ok
+test app::recovery_tests::recovery_never_retargets_or_changes_original_payload ... ok
+test app::recovery_tests::saved_launch_discard_is_explicit_and_cannot_erase_a_newer_edit ... ok
+test app::tests::acknowledgements_cannot_retarget ... ok
+test app::workspace::tests::batch_ranges_preserve_leading_blanks_unicode_and_refuse_excess ... ok
+test app::workspace::tests::clipboard_is_explicit_bounded_and_encodes_terminal_controls ... ok
+test app::workspace::tests::code_copy_preserves_exact_complete_fences ... ok
+test app::workspace::tests::ranking_preserves_native_tree_and_stable_ties ... ok
+test app::workspace::tests::review_hash_matches_original_serialization_and_rejects_clipping ... ok
+test cli::tests::bounds_are_enforced ... ok
+test cli::tests::cli_is_read_only ... ok
+test cli::tests::exact_source_required ... ok
+test config::tests::profile_rejects_ssh_options_and_credential_urls ... ok
+test config::tests::provider_policy_distinguishes_absence_from_empty ... ok
+test config::tests::ssh_command_has_no_local_shell_and_quotes_remote_paths ... ok
+test domain::tests::collapsed_children_remain_searchable_and_hosts_do_not_alias ... ok
+test domain::tests::cycle_is_reachable ... ok
+test domain::tests::duplicate_identity_is_rejected ... ok
+test domain::tests::viewing_does_not_settle_and_unknown_is_explicit ... ok
+test projection::tests::delta_is_atomic_and_requires_exact_revision ... ok
+test projection::tests::duplicate_order_wrong_source_and_oversize_never_replace_view ... ok
+test projection::tests::reconnect_restarts_revision_and_borrowed_rows_keep_source_identity ... ok
+test state::tests::ack_atomically_preserves_newer_same_byte_draft_and_newer_override ... ok
+test state::tests::acknowledged_batch_advances_only_its_exact_human_text ... ok
+test state::tests::failed_update_preserves_memory_and_disk ... ok
+test state::tests::import_retains_unknown_fields_and_does_not_change_original ... ok
+test state::tests::imported_form_ack_retires_only_unchanged_original_and_preserves_newer_text ... ok
+test state::tests::imports_exact_local_priorities_without_changing_original_sidecar ... ok
+test state::tests::interrupted_prompt_checkpoint_imports_attempt_without_touching_source ... ok
+test app::recovery_tests::imported_launch_is_accessible_and_project_forms_do_not_overwrite_each_other ... ok
+test state::tests::malformed_checkpoint_blocks_import_and_preserves_pending ... ok
+test app::recovery_tests::negative_retry_keeps_saved_operation_and_draft ... ok
+test state::tests::model_presets_and_launches_use_the_native_selection_schema ... ok
+test ui::tests::display_controls_are_removed_without_changing_source ... ok
+test state::tests::locking_ack_and_separate_stop_preserve_concurrent_edits ... ok
+test state::tests::same_id_with_changed_payload_is_rejected ... ok
+test app::lifecycle_tests::late_ack_event_after_host_switch_cannot_clear_same_thread_id_elsewhere ... ok
+test ui::tests::markdown_cache_is_bounded_and_stream_updates_invalidate ... ok
+test ui::tests::reading_anchors_use_wrapped_message_identity ... ok
+test app::recovery_tests::native_review_restores_only_matching_source_hashes ... ok
+test ui::tests::modal_selection_is_visible_and_mouse_addressable ... ok
+test ui::tests::follow_and_manual_scroll_use_wrapped_line_counts ... ok
+test ui::tests::recovery_payload_and_long_prompt_are_readable_without_changing_choice ... ok
+test wire::process_tests::final_ack_survives_immediate_adapter_exit ... ok
+test wire::process_tests::handshake_rejects_early_connected_status_and_wrong_protocol ... ok
+test wire::process_tests::explicit_cancel_releases_waiter_and_cannot_cancel_a_mutation ... ok
+test wire::tests::event_budget_is_released_only_after_last_packet_clone ... ok
+test wire::tests::reader_rejects_unterminated_or_oversized_frames ... ok
+test wire::process_tests::identity_mismatch_and_oversized_frames_fail_closed ... ok
+test ui::tests::layouts_and_hit_targets_survive_resize_and_both_modes ... ok
+test wire::process_tests::read_timeout_sends_negotiated_cancellation_for_original_id ... ok
+test app::recovery_tests::batch_receipts_advance_exact_items_and_require_each_native_launch_review ... ok
+test app::lifecycle_tests::acknowledged_send_preserves_newer_identical_human_draft ... ok
+test app::recovery_tests::successful_same_id_recovery_preserves_identical_new_draft_with_or_without_cache ... ok
+test wire::process_tests::stop_overtakes_an_unacknowledged_ordinary_request_without_rewriting_id ... ok
+
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+     Running unittests src/main.rs (target/debug/deps/t3oxide-1f0b81bfd69abe6e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rust_protocol_state.rs (target/debug/deps/rust_protocol_state-df083625ad976a85)
+
+running 3 tests
+test unavailable_host_does_not_poison_independent_healthy_transport ... ok
+test lost_ack_survives_restart_and_recovers_with_one_native_effect ... ok
+test real_companion_stream_and_history_remain_source_qualified ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
