@@ -298,7 +298,7 @@ func (m *Model) rebuildUnifiedNavigator() {
 		if filter == "" {
 			items = append(items, h)
 		}
-		if !n.collapsed[shelf] {
+		if filter != "" || !n.collapsed[shelf] {
 			for _, row := range group {
 				items = append(items, row)
 			}

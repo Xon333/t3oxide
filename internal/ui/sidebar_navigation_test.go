@@ -112,3 +112,20 @@ func TestSidebarFrozenInterleavedShelvesDrawOnce(t *testing.T) {
 		t.Fatal("intra-group order changed", ids)
 	}
 }
+
+func TestSidebarFilterIncludesCollapsedLoadedThreads(t *testing.T) {
+	m := navigatorFixture(t, 120, 35)
+	m.navigator.focused = true
+	m.toggleNavigatorShelf("Conversations")
+	m.Update(keyPress('/'))
+	m.Update(tea.PasteMsg{Content: "documentation"})
+	if len(m.navigator.list.VisibleItems()) != 1 {
+		t.Fatal("collapsed loaded thread omitted from explicit filter")
+	}
+	if !m.navigator.collapsed["Conversations"] {
+		t.Fatal("filter changed saved collapse state")
+	}
+	if _, ok := m.navigator.list.SelectedItem().(navigatorItem); !ok {
+		t.Fatal("filter did not offer exact conversation")
+	}
+}
