@@ -75,23 +75,6 @@ jobs:
         run: |
           node --test tests/*.test.mjs
           for file in adapter/*.mjs scripts/*.mjs; do node --check "$file"; done
-          bash -n scripts/build-go.sh scripts/check-go.sh scripts/check-portable-core.sh scripts/build-mac.sh scripts/check.sh
+          bash -n scripts/build-go.sh scripts/check-go.sh scripts/check-portable-core.sh scripts/check.sh
           python3 -m py_compile scripts/measure.py
           python3 -m unittest discover -s tests -p test_measure.py
-  mac:
-    name: Legacy Swift rollback client
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Legacy Swift model check
-        run: |
-          swiftc -swift-version 5 mac/Model.swift tests/ModelTests.swift -o /tmp/t3oxide-model
-          /tmp/t3oxide-model
-      - name: Build legacy AppKit client and check transport
-        run: bash scripts/build-mac.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: t3oxide-legacy-swift-macos-arm64
-          path: dist/t3oxide-macos-arm64.zip
-          retention-days: 14

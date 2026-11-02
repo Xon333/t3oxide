@@ -20,7 +20,7 @@ Go owns the CLI, terminal presentation, session coordination and durable client 
 
 `scripts/build-go.sh` builds the primary `dist/t3oxide` executable. `scripts/check-go.sh` checks formatting, tests, vet and race detection with the production dependency graph. Shared adapter/script checks remain in `scripts/check.sh`. CI publishes `t3oxide-terminal-macos-arm64` with `NOTICE` and `LICENSES/`.
 
-The Swift/AppKit source remains in `mac/` as a legacy rollback. Its native text selection, editing, windowing and menus remain available through `scripts/build-mac.sh`; CI retains its model and transport checks and AppKit build, publishing `t3oxide-legacy-swift-macos-arm64`. See [installation](../NATIVE.md) for both clients.
+The deprecated Swift/AppKit source remains untouched in `mac/`. Active development, checks and release artifacts cover the Go TUI and its shared adapter; CI does not build or test Swift.
 
 Go uses `go-drafts.json` and appearance settings in `terminal.json`; Swift keeps `drafts.json`. The first normal Go launch imports validated Swift state only when the Go file is absent and never modifies the Swift original. Later Go drafts, presets and pending operations are not transferred back to Swift. Preserve both client state files and the shared host `operations-v1/` journal when changing clients.
 
