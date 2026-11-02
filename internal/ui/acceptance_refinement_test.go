@@ -161,6 +161,7 @@ func TestPacketReviewPositionRestoresOnlyExactSourceAndCompleteDiffHashes(t *tes
 	review := wire.ThreadReview{ThreadID: target.ThreadID, ProjectID: target.ProjectID, Workspace: "/synthetic/work", GeneratedAt: "2026-10-30T00:00:00Z", Sources: []wire.ReviewSource{{Kind: "working-tree", Title: "Workspace", Hash: strings.Repeat("a", 64)}}, Diff: strings.Repeat("+ synthetic line\n", 100)}
 	open := func(v wire.ThreadReview) {
 		m.inboxReviewFinished(inboxReviewMsg{generation: m.generation, serial: m.agentbox.reviewSerial, target: target, review: v, title: "Synthetic review"})
+		m.reviewNavigate(m.reviewIndex.Digest + ":raw")
 	}
 	open(review)
 	m.detailViewport.SetYOffset(17)

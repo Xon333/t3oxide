@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -40,7 +41,11 @@ func (m *Model) agentboxView() tea.View {
 	w, h := m.width, m.height
 	geometry := m.inboxGeometry()
 	left, right := geometry.left, geometry.right
-	header := p.active().Render("AgentBox") + "  " + p.plain().Bold(true).Render(inboxViewLabel(m.agentbox.view))
+	searchMode := "Loaded"
+	if m.agentbox.serverSearch {
+		searchMode = "Server"
+	}
+	header := p.subtle().Render(searchMode) + " · " + p.active().Render("AgentBox") + "  " + p.plain().Bold(true).Render(inboxViewLabel(m.agentbox.view))
 	counts := fmt.Sprintf("%d", len(m.agentbox.rows))
 	if m.agentbox.loading {
 		counts = "Loading…"
@@ -58,7 +63,8 @@ func (m *Model) agentboxView() tea.View {
 	composer := m.inboxComposerView()
 	bodyHeight := geometry.body
 	list := m.inboxListView(left, bodyHeight)
-	detail := m.inboxDecisionView(right, bodyHeight)
+	decision := m.inboxDecisionLayout(right, bodyHeight)
+	detail := decision.content
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", detail)
 	parts := []string{header, body}
 	if op != "" {
@@ -67,7 +73,8 @@ func (m *Model) agentboxView() tea.View {
 	if feedback != "" {
 		parts = append(parts, feedback)
 	}
-	if controls := m.inboxComposerControls(); controls.content != "" {
+	controls := m.inboxComposerControls()
+	if controls.content != "" {
 		parts = append(parts, controls.content)
 	}
 	if composer != "" {
@@ -84,7 +91,7 @@ func (m *Model) agentboxView() tea.View {
 	if m.dialog != nil || m.detail != "" {
 		m.recordModalHits()
 	} else {
-		m.hitZones = m.agentboxHitZones()
+		m.hitZones = m.agentboxPreparedHits(decision, controls)
 	}
 	return m.terminalView(clipBlock(canvas, w, h))
 }
@@ -241,11 +248,25 @@ func (m *Model) inboxDecisionView(width, height int) string {
 }
 
 func (m *Model) inboxChoiceLabels() []string {
-	if m.status.Requests > 0 {
-		return []string{"Requests", "Conversation", "Later"}
+	row, ok := m.selectedInbox()
+	if !ok {
+		return nil
+	}
+	if m.inboxAttached(row) && m.status.Requests > 0 || row.Thread.Inbox != nil && (row.Thread.Inbox.PendingRequestCount > 0 || row.Thread.Inbox.PendingChildRequest) {
+		return []string{"Requests", "Conversation"}
 	}
 	if m.agentbox.ack != nil {
 		return []string{"Next", "Back to inbox"}
+	}
+	if row.Thread.Inbox == nil || m.inboxSourceLoading(row.Target.ProfileID) {
+		return []string{"Conversation"}
+	}
+	bucket := client.InboxBucket(row, time.Now())
+	if m.inboxAttached(row) && m.status.ActiveRunID != "" || bucket == "working" || bucket == "queued" {
+		return []string{"Changes", "Reply"}
+	}
+	if row.Thread.Inbox.Settled {
+		return []string{"Changes", "Reply", "Reopen"}
 	}
 	return []string{"Changes", "Reply", "Reviewed"}
 }
@@ -420,6 +441,15 @@ func (m *Model) agentboxMouse(msg tea.MouseClickMsg) (bool, tea.Cmd) {
 
 func (m *Model) agentboxHitZones() []hitZone {
 	g := m.inboxGeometry()
+	return m.agentboxHits(m.inboxDecisionLayout(g.right, g.body))
+}
+
+func (m *Model) agentboxHits(decision renderedSurface) []hitZone {
+	return m.agentboxPreparedHits(decision, m.inboxComposerControls())
+}
+
+func (m *Model) agentboxPreparedHits(decision, controls renderedSurface) []hitZone {
+	g := m.inboxGeometry()
 	var hits []hitZone
 	y := g.firstRow
 	if len(m.agentbox.rows) == 0 {
@@ -434,7 +464,7 @@ func (m *Model) agentboxHitZones() []hitZone {
 		y += height
 	}
 	if row, ok := m.selectedInbox(); ok && !m.inboxSourceLoading(row.Target.ProfileID) {
-		hits = append(hits, moveHits(m.inboxDecisionLayout(g.right, g.body).hits, g.left+2, 1)...)
+		hits = append(hits, moveHits(decision.hits, g.left+2, 1)...)
 	}
 	controlsY := 1 + g.body
 	if m.operationLine() != "" {
@@ -446,7 +476,10 @@ func (m *Model) agentboxHitZones() []hitZone {
 	if m.feedbackVisible() || m.agentbox.error != "" {
 		controlsY++
 	}
-	hits = append(hits, moveHits(m.inboxComposerControls().hits, 0, controlsY)...)
+	hits = append(hits, moveHits(controls.hits, 0, controlsY)...)
+	if m.agentbox.reply {
+		hits = append(hits, hitZone{x: 0, y: controlsY + 1, width: m.width, height: m.composer.Height() + 2, action: "composer"})
+	}
 	for i := range hits {
 		hits[i].serial = m.agentbox.serial
 	}

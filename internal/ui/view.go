@@ -329,6 +329,17 @@ func (m *Model) terminalView(content string) tea.View {
 	if m.mouse {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
+	if m.focused {
+		if editor, z, ok := m.drawnEditor(); ok {
+			if cursor := editor.Cursor(); cursor != nil {
+				cursor.Position.X += z.x
+				cursor.Position.Y += z.y
+				if z.contains(cursor.Position.X, cursor.Position.Y) {
+					v.Cursor = cursor
+				}
+			}
+		}
+	}
 	return v
 }
 

@@ -154,3 +154,14 @@ func lineAtSource(offsets []int, source int) int {
 	}
 	return line
 }
+
+// prepare reuses sanitized row search lines. The viewport still performs its
+// maintained full-page width scan; this removes repeated sanitation/lowercasing.
+// Call only on the single render worker after a successful render.
+func (r *transcriptRenderer) prepare(content string, width int, term string) *preparedTranscript {
+	prepared := prepareTranscriptViewport(content, width)
+	prepared.lowerLines = append([]string(nil), r.searchLines...)
+	prepared.term = term
+	prepared.matches = findTranscriptLines(prepared.lowerLines, term)
+	return prepared
+}

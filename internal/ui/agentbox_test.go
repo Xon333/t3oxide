@@ -50,7 +50,7 @@ func TestAgentBoxSessionSwitchRetiresReviewReads(t *testing.T) {
 		t.Fatal("stale completion changed the new review")
 	}
 	m.Update(inboxReviewMsg{generation: m.generation, serial: m.agentbox.reviewSerial, target: target, review: wire.ThreadReview{ThreadID: "b", Diff: "new changes"}, title: "New review"})
-	if m.agentbox.reviewLoading || m.agentbox.review == nil || m.agentbox.reviewTarget != target || !strings.Contains(m.detail, "new changes") {
+	if m.agentbox.reviewLoading || m.agentbox.review == nil || m.agentbox.reviewTarget != target || (m.reviewIndex == nil || !strings.Contains(m.reviewIndex.Raw, "new changes")) {
 		t.Fatal("current review did not finish on the new session")
 	}
 }

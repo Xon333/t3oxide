@@ -11,7 +11,7 @@ import (
 func (m *Model) inboxServerSearchOffered() bool {
 	a := &m.agentbox
 	query := strings.TrimSpace(a.query.Value())
-	return !a.reply && !a.loading && len(a.rows) == 0 && len(query) >= 2 && len(query) <= 200
+	return !a.reply && !a.loading && (a.serverSearch || len(a.rows) == 0) && len(query) >= 2 && len(query) <= 200
 }
 
 func (m *Model) inboxEmptySearchSurface(width int) renderedSurface {
@@ -55,7 +55,10 @@ func (m *Model) applyInboxQuery(previous string) {
 	// Every changed query retires old result and editor callbacks immediately;
 	// typing itself performs no native read. Loaded metadata is filtered locally.
 	a.serial++
-	a.serverSearch = false
+	if a.serverSearch {
+		a.page, a.rows, a.loaded = client.InboxPage{}, nil, false
+		a.readQuery = ""
+	}
 	a.offer = nil
 	if m.session != nil {
 		for _, source := range m.session.InboxSources() {

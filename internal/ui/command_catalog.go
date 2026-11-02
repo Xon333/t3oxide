@@ -26,12 +26,16 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"new-same", "New in same project", "[title]", "Carries only project; uses native launch defaults", k.NewSame},
 		{"review", "Review", "", "Requests or actual changes for the current task", m.actionBinding("agentbox.diff")},
 		{"switch", "Conversations", "[words]", "", k.Threads},
+		{"recent-conversations", "Recent conversations", "", "Return to a source-qualified conversation", key.Binding{}},
+		{"previous-conversation", "Previous conversation", "", "Restore its draft and reading position", key.Binding{}},
+		{"loaded-outline", "Loaded messages", "", "Search and jump within the loaded page", key.Binding{}},
 		{"mode", "Mode", "[developer|agentbox]", "Same T3 conversations and drafts", k.Mode},
 		{"inbox", "Inbox", "[needs-you|working|queued|later|reviewed|all]", "Native task state and review disposition", m.actionBinding("agentbox.inbox")},
 		{"file", "File work", "", "Review a native task launch", m.actionBinding("agentbox.file")},
 		{"file-many", "File multiple tasks", "", "One task per line; review each native launch", key.Binding{}},
 		{"destination", "Creation destination", "", "Pin/change/reset environment and project; reload native defaults on every New", key.Binding{}},
 		{"native-defaults", "Native defaults", "", "Project on environment or Environment · reported values and inheritance", key.Binding{}},
+		{"browse-scope", "Browse environment / project", "", "Exact bounded browsing; creation destination stays separate", key.Binding{}},
 		{"batch-receipts", "Batch receipts", "", "Acknowledged / Needs recovery / Remaining draft", key.Binding{}},
 		{"send", "Send", "", "Send the current draft using selected delivery", k.Send},
 		{"steer", "Steer", "", "Explicit one-message steering; same conversation", k.Steer},
@@ -70,7 +74,7 @@ func (m *Model) commandCatalog() []commandSpec {
 		{"sidebar", "Context pane", "[on|off]", "", k.Sidebar},
 		{"context", "Conversation context", "", "", key.Binding{}},
 		{"navigator", "Conversation sidebar", "[on|off]", "", key.Binding{}},
-		{"copy", "Copy", "[page|draft|answer|error|detail]", "Last agent message by default", k.Copy},
+		{"copy", "Copy", "[code|input|result|page|draft|answer|error|detail]", "Last agent message by default", k.Copy},
 		{"reconnect", "Reconnect", "", "Never replays writes", key.Binding{}},
 		{"web", "Show T3 address", "", "Configured address for this environment", key.Binding{}},
 		{"keyboard", "Keyboard shortcuts", "modern|legacy", "Modern Ctrl+P Commands; legacy editor Ctrl+P", key.Binding{}},
@@ -192,7 +196,7 @@ func (m *Model) paletteItems() []list.Item {
 			case "keyboard":
 				variants = []struct{ args, label string }{{"modern", "Ctrl+P Commands fallback"}, {"legacy", "Editor Ctrl+P"}}
 			case "copy":
-				variants = []struct{ args, label string }{{"", "Last agent message (loaded page)"}, {"page", "Loaded page (bounded)"}, {"draft", "Exact draft"}, {"answer", "Current answer"}, {"error", "Error details"}, {"detail", "Open details"}}
+				variants = []struct{ args, label string }{{"code", "Loaded code block"}, {"input", "Tool input source"}, {"result", "Tool result source"}, {"", "Last agent message (loaded page)"}, {"page", "Loaded page (bounded)"}, {"draft", "Exact draft"}, {"answer", "Current answer"}, {"error", "Error details"}, {"detail", "Open details"}}
 			default:
 				variants = []struct{ args, label string }{{"", "ordinary action"}, {"stop", "Stop operation"}}
 			}
@@ -244,6 +248,10 @@ func (m *Model) validateCommand(name, args string) error {
 	switch name {
 	case "help", "keys", "env", "earlier", "latest", "stop", "requests", "parent", "runtime", "pending", "recover", "destination", "native-defaults", "batch-receipts", "delivery-menu", "reconnect", "web", "quit", "edit", "clear", "error", "settings", "details", "info", "context", "shortcuts", "review", "file", "file-many", "send", "send-literal", "steer", "refresh":
 		valid = args == ""
+	case "browse-scope":
+		valid = args == ""
+	case "batch-receipt-item":
+		valid = len(args) <= 1024
 	case "mode":
 		valid = args == "" || args == "developer" || args == "agentbox"
 	case "inbox":
@@ -261,7 +269,7 @@ func (m *Model) validateCommand(name, args string) error {
 	case "retry", "resolve":
 		valid = args == "" || args == "stop"
 	case "copy":
-		valid = args == "" || args == "page" || args == "draft" || args == "answer" || args == "error" || args == "detail"
+		valid = args == "code" || args == "input" || args == "result" || args == "" || args == "page" || args == "draft" || args == "answer" || args == "error" || args == "detail"
 	case "filter":
 		valid = args == "" || args == "all" || args == "main" || args == "subagents" || args == "forks"
 	case "override":

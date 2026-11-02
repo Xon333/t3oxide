@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from '../adapter/main.mjs';
+import { Rpc } from '../adapter/wire.mjs';
 import { LIMIT } from '../adapter/core.mjs';
 import { T3 } from '../adapter/t3.mjs';
 import { Journal, journalScope } from '../adapter/journal.mjs';
@@ -254,4 +255,76 @@ test('installed current symlink invokes the adapter entrypoint',async()=>{
     assert.equal(child.status,1,child.error?.message);
     assert.match(child.stderr,/t3oxide: Could not initialize host configuration/);
   } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('negotiated read cancellation skips queued reads, aborts active reads and ignores mutation/stale IDs', async t => {
+  const starts=[], gate=deferred(); let activeSignal;
+  const h=await session(t,()=>({
+    probe:async()=>({protocol:1}),
+    read:(signal,work)=>{activeSignal=signal;return work();},
+    list:()=>{starts.push('list');return new Promise((resolve,reject)=>activeSignal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}));},
+    projects:async()=>{starts.push('projects');return {};},
+    act:async(op,a)=>{starts.push(a.id);if(a.id==='mutation')await gate.promise;return {sequence:1};}
+  }));
+  h.send('hello','hello');await tick();assert.equal(h.reply('hello').result.features.readCancellation,true);
+  h.send('list','active');await tick();
+  h.send('projects','queued');
+  h.send('cancel-read','control-1',{requestId:'queued'});
+  h.send('cancel-read','control-2',{requestId:'active'});await tick();
+  assert.deepEqual(starts,['list']);
+  for(const id of ['active','queued'])assert.equal(h.reply(id).error.code,'cancelled');
+  h.send('send','mutation');await tick();
+  h.send('cancel-read','control-3',{requestId:'mutation'});
+  h.send('cancel-read','control-4',{requestId:'active'});
+  h.send('stop','stop');await tick();assert.ok(h.reply('stop').result);
+  assert.equal(h.reply('mutation'),undefined);gate.resolve();await tick();assert.ok(h.reply('mutation').result);
+  assert.equal(h.reply('control-1'),undefined);assert.deepEqual(h.failures,[]);
+});
+
+test('T3 read scope aborts HTTP and interrupts unary RPC without cancelling later reads', async()=>{
+  const b=new T3({baseUrl:'http://127.0.0.1:1',token:'fixture'},()=>{}, {fetch:async(_url,{signal})=>
+    new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}))});
+  const http=new AbortController();const pending=b.read(http.signal,()=>b.http('/fixture'));
+  http.abort();await assert.rejects(pending,e=>e.code==='cancelled');assert.equal(b.controllers.size,0);
+  let interrupted=0;const rpc=deferred();
+  b.rpc={call:()=>({promise:rpc.promise,cancel(){interrupted++;rpc.resolve(null);}})};
+  const controller=new AbortController();const result=b.read(controller.signal,()=>b.readCall('server.getConfig',{}).promise);
+  controller.abort();await assert.rejects(result,e=>e.code==='cancelled');assert.equal(interrupted,1);
+  b.rpc={call:()=>({promise:Promise.resolve({ok:true}),cancel(){throw new Error('stale cancellation');}})};
+  assert.deepEqual(await b.read(new AbortController().signal,()=>b.readCall('server.getConfig',{}).promise),{ok:true});
+  controller.abort();assert.equal(interrupted,1);
+});
+
+
+test('read cancellation emits exact native Interrupt and late RPC exit is harmless', async()=>{
+  class Socket extends EventTarget {
+    readyState=1; sent=[];
+    send(data){this.sent.push(JSON.parse(data));}
+    close(){this.readyState=3;}
+  }
+  const socket=new Socket(),rpc=new Rpc(socket),b=new T3({},()=>{});
+  b.rpc=rpc;
+  try {
+    const controller=new AbortController();
+    const read=b.read(controller.signal,()=>b.readCall('server.getConfig',{}).promise);
+    const mutation=rpc.call('orchestration.dispatchCommand',{commandId:'saved-mutation'});
+    controller.abort();await assert.rejects(read,e=>e.code==='cancelled');
+    assert.deepEqual(socket.sent.filter(p=>p._tag==='Interrupt'),[{_tag:'Interrupt',requestId:'1'}]);
+    const exit=(id,value)=>socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify(
+      {_tag:'Exit',requestId:id,exit:{_tag:'Success',value}})}));
+    exit('1',{stale:true});exit('2',{sequence:42});
+    assert.deepEqual(await mutation.promise,{sequence:42});assert.equal(rpc.pending.size,0);
+  } finally {rpc.close();}
+});
+
+test('read cancellation leaves shared connection bootstrap available to Stop', async()=>{
+  const ticket=deferred(),signals=[];
+  const b=new T3({baseUrl:'http://127.0.0.1:1'},()=>{}, {connectSocket:async()=>({close(){}})});
+  b.probe=async()=>{signals.push(b.readSignal());return {};};
+  b.http=async()=>{signals.push(b.readSignal());await ticket.promise;return {ticket:'fixture'};};
+  const controller=new AbortController();
+  const read=b.read(controller.signal,()=>b.connect());await tick();
+  const stopConnection=b.connect();controller.abort();ticket.resolve();
+  await Promise.all([read,stopConnection]);
+  assert.ok(b.rpc);assert.ok(signals.every(signal=>signal==null));b.close();
 });

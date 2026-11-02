@@ -63,3 +63,38 @@ Thread status badges use the same labels as Developer: Active, Waiting, Failed, 
 After a successful Reviewed or Later action, the current attachment stays open with an acknowledgement. **Next** deliberately opens the next eligible source-qualified item in the frozen list order. **Back to inbox** leaves the acknowledgement. A failure or uncertain result keeps the current item and its recovery cue. Ordinary Up/Down selection does not attach a conversation.
 
 The reply composer has a separate **Send** control and **Auto / Queue / Steer** intent menu. Choosing intent stages one message; it does not submit or change the saved delivery setting. Auto means **T3 decides** until native evidence reports an outcome. A late acknowledgement cannot clear a newer draft or override.
+
+
+## Bounded review and precise navigation
+
+Changes opens a searchable file list and per-file hunk list. Inspect a file or
+hunk, or stage its citation in the existing editable reply; only Send submits
+that reply. Binary, rename/copy, mode-only, malformed and clipped patches retain
+a raw inspection route. A changed source digest invalidates navigation tokens
+while human draft text stays saved. Inspection and notes do not mark work
+Reviewed. Ordinary completed-conversation opening retains its existing lifecycle.
+
+The command palette exposes Recent conversations, Previous conversation, Loaded
+messages, Browse environment / project and Batch receipts. Recent entries retain
+source identity and use existing draft/caret/reading return state. Loaded messages
+searches the current bounded page and jumps to its exact row. Loaded and Server
+search stay explicit; editing a Server query does not run it or silently switch
+to local filtering. Project browsing uses deliberate bounded native project pages;
+it does not alter New's creation destination or claim exhaustive server search.
+
+Batch receipt items reopen their exact acknowledged thread, review their original
+saved operation, or edit a still-matching remaining draft. Recovery remains
+explicit and uses the original operation identity. No filing scheduler is added.
+
+`/copy code` selects original loaded fenced-code bytes. `/copy input` and
+`/copy result` select a loaded activity and deliberately read its bounded structured
+source. Copy retains available source bytes rather than styled wrapping, applies
+redaction and clipboard limits, and rejects changed source offers. Shortened or
+omitted output remains labeled. Large request option sets have searchable choices;
+small approvals retain their compact exact form. Use exact answer stages rejected
+exact input inside its original form; Submit remains a separate action.
+
+Mouse-enabled editors use drawn textarea geometry for caret and drag selection;
+grapheme boundaries apply to navigation, deletion and selection. Resize, blur,
+attachment and modal replacement retire gestures. Mouse-off terminal selection
+retains its existing behavior. Physical terminal acceptance remains separate.

@@ -237,3 +237,84 @@ export function launch(a, p, modelSelection = p.thread?.modelSelection) {
       ...(p.thread.branch ? { branch: p.thread.branch } : {}) } : { type: 'root' },
     initialMessage: { messageId: `${id}:message`, text: message, attachments: [] } };
 }
+
+// Narrow adaptation of native T3 bounded snapshot restoration (MIT).
+// Source: pingdotgg/t3code a773dc38ac75177b6cd133d27df00ca0a83f9480,
+// orchestrationV2{IdTable,BoundedSnapshot,DedupedBodies}.ts. See NOTICE/LICENSES.
+const snapshotObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+const snapshotCheck = (ok) => requireThat(ok, 'Malformed compact bounded snapshot.', 'incompatible');
+
+// Decode only native record boundaries, never arbitrary tool/user JSON.
+export function restoreBoundedSnapshot(snapshot) {
+  snapshotCheck(snapshotObject(snapshot) && snapshotObject(snapshot.projection));
+  const p = snapshot.projection;
+  if (Object.hasOwn(snapshot, 'ids')) {
+    const ids = snapshot.ids;
+    snapshotCheck(Array.isArray(ids) && ids.every(v => typeof v === 'string' || Number.isSafeInteger(v)));
+    const ref = v => {
+      if (typeof v !== 'number') return v;
+      snapshotCheck(Number.isSafeInteger(v) && v >= 0 && v < ids.length);
+      return ids[v];
+    };
+    const record = r => {
+      for (const key of Object.keys(r)) {
+        const v = r[key];
+        if (key === 'id' || key.endsWith('Id')) r[key] = ref(v);
+        else if (key.endsWith('Ids') && Array.isArray(v)) r[key] = v.map(ref);
+        else if (key === 'item' && snapshotObject(v)) record(v);
+      }
+    };
+    for (const v of Object.values(p)) {
+      if (Array.isArray(v)) { for (const r of v) if (snapshotObject(r)) record(r); }
+      else if (snapshotObject(v)) record(v);
+    }
+    delete snapshot.ids;
+  }
+  snapshotCheck(snapshotObject(p.thread) && Array.isArray(p.visibleTurnItems) && (p.turnItems === undefined || Array.isArray(p.turnItems)));
+  snapshotCheck(snapshot.turnItemsOmitLocalVisible === undefined || snapshot.turnItemsOmitLocalVisible === true);
+  const local = row => row.visibility === 'local' || row.sourceThreadId === p.thread.id;
+  if (snapshot.turnItemsOmitLocalVisible === true) {
+    snapshotCheck(Array.isArray(p.turnItems));
+    p.turnItems = [...p.visibleTurnItems.filter(local).map(row => row.item), ...p.turnItems];
+    delete snapshot.turnItemsOmitLocalVisible;
+  }
+  // Lazy indexes keep ordinary snapshots on the existing path.
+  const indexes = new Map();
+  const source = (name, id) => {
+    if (!indexes.has(name)) {
+      snapshotCheck(Array.isArray(p[name]));
+      const index = new Map();
+      for (const r of p[name]) { snapshotCheck(snapshotObject(r) && !index.has(r.id)); index.set(r.id, r); }
+      indexes.set(name, index);
+    }
+    const r = indexes.get(name).get(id); snapshotCheck(snapshotObject(r)); return r;
+  };
+  const mapped = new Map();
+  const restore = item => {
+    snapshotCheck(snapshotObject(item));
+    if (mapped.has(item)) return mapped.get(item);
+    let out = item;
+    const body = (marker, key, name, id, valid) => {
+      if (item[marker] !== true) return;
+      const r = source(name, id);
+      snapshotCheck(r[marker] !== true && valid(r[key]));
+      if (out === item) out = {...item};
+      out[key] = r[key]; delete out[marker];
+    };
+    if (item.type === 'user_message' || item.type === 'assistant_message')
+      body('textOmitted', 'text', 'messages', item.messageId, v => typeof v === 'string');
+    else if (item.type === 'checkpoint')
+      body('filesOmitted', 'files', 'checkpoints', item.checkpointId, Array.isArray);
+    else if (item.type === 'subagent') {
+      body('promptOmitted', 'prompt', 'subagents', item.subagentId, v => typeof v === 'string');
+      body('resultOmitted', 'result', 'subagents', item.subagentId, v => v === null || typeof v === 'string');
+    }
+    mapped.set(item, out); return out;
+  };
+  p.visibleTurnItems = p.visibleTurnItems.map(row => {
+    if (!local(row)) return row; // Inherited records live in their source thread.
+    const item = restore(row.item); return item === row.item ? row : {...row,item};
+  });
+  if (p.turnItems) p.turnItems = p.turnItems.map(restore);
+  return snapshot;
+}

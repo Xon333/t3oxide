@@ -395,7 +395,26 @@ func (m *Model) slash(text string) tea.Cmd {
 }
 
 func (m *Model) dispatch(name, args string) tea.Cmd {
+	if handled, cmd := m.dispatchBrowseSlice(name, args); handled {
+		return cmd
+	}
 	switch name {
+	case "recent-conversations":
+		return m.recentConversationsMenu(false)
+	case "previous-conversation":
+		return m.recentConversationsMenu(true)
+	case "recent-open":
+		return m.openRecentConversation(args)
+	case "loaded-outline":
+		return m.loadedOutline()
+	case "loaded-jump":
+		return m.loadedJump(args)
+	case "copy-tool-source":
+		return m.copyToolSource(args)
+	case "copy-code-source":
+		return m.copyLoadedCode(args)
+	case "review-nav":
+		return m.reviewNavigate(args)
 	case "delivery-menu":
 		return m.openDeliveryMenu()
 	case "next-delivery":
@@ -540,6 +559,12 @@ func (m *Model) dispatch(name, args string) tea.Cmd {
 		m.refreshSearch(true)
 		return nil
 	case "copy":
+		if args == "input" || args == "result" {
+			return m.copyToolSource("")
+		}
+		if args == "code" {
+			return m.copyLoadedCode("")
+		}
 		return m.copyText(args)
 	case "edit":
 		return m.editDraft()

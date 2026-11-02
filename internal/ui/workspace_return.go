@@ -23,6 +23,8 @@ type workspaceReturn struct {
 func workspaceIdentity(environment, thread string) string { return environment + "\x00" + thread }
 
 func (m *Model) rememberWorkspace() {
+	m.rememberRecentConversation()
+	m.cancelEditorGesture()
 	if m.status.EnvironmentID == "" || m.status.ThreadID == "" {
 		return
 	}

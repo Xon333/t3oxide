@@ -296,6 +296,9 @@ func (m *Model) activateModalHit(z hitZone) tea.Cmd {
 		m.attention.armed = true
 		if z.action == "request-action" {
 			switch z.args {
+			case "use-exact":
+				m.stageRequestExactInput()
+				return nil
 			case "back":
 				return m.advanceRequest(true)
 			case "next":

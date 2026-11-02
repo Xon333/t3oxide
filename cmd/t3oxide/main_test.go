@@ -32,7 +32,7 @@ func TestHelpAndBareJSONDoNotOpenConfigurationOrState(t *testing.T) {
 		{"help-missing-at-end", []string{"--help", "--thread"}, help},
 		{"help-bad-command-theme", []string{"send", "--theme", "invalid", "-h"}, help},
 		{"help-before-version-json", []string{"--version", "--json", "--help"}, help},
-		{"version-before-bare-json", []string{"--json", "--version"}, "t3oxide " + version + " · Bubble Tea v2.1.0\n"},
+		{"version-before-bare-json", []string{"--json", "--version"}, "t3oxide " + version + " · Bubble Tea v2.1.1\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

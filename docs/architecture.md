@@ -124,3 +124,27 @@ Visual updates coalesce within 80 ms. New structural content starts a bounded re
 ## Integrated mode state and reuse
 
 The default new preference is Developer. AgentBox mode is an optional field in the existing terminal settings; task/project priorities use a separate bounded versioned CAS sidecar. No legacy Swift state file is modified. See [state/recovery](state-recovery.md). New AgentBox behavior and tests are independently authored; its GPL source/assets are not copied. Existing T3 and t3term attribution stays in NOTICE/LICENSES. The absence of a top-level t3oxide license remains explicit.
+
+
+## Lossless snapshot transport and read cancellation
+
+Bounded HTTP reads request `compactTurnItems=1`, `dedupeBodies=1` and
+`compactIds=1`. The adapter restores native record-boundary IDs, local visible
+turn items and marked bodies before thread identity validation and projection.
+Inherited rows, out-of-window requests and opaque cursors retain their native
+meaning. Ordinary responses without compact markers remain supported; malformed
+references fail closed. These options do not request compression, deferred work
+or omitted work bodies. Installed-host support must be qualified separately.
+
+Companion hello advertises `features.readCancellation`. After negotiation, Go
+may send a one-way `cancel-read` with the original exact request ID. The adapter
+tracks queued and active reads and aborts request-local HTTP and unary RPC work.
+Old companions receive no cancellation controls. Cancellation cannot target
+mutations; mutation journals, ordering, uncertainty and Stop's independent lane
+retain their existing owners. Shared connection bootstrap is outside a read's
+abort scope. A stalled writer can prevent best-effort cancellation admission.
+
+The adapter retains Node's standard WebSocket. `ws` could enforce receive-time
+payload/fragment limits before delivery, but the pinned evidence does not justify
+its added runtime dependency and packaging maintenance here. The existing
+post-delivery cap remains; no pre-allocation bound or measured savings is claimed.

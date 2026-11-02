@@ -30,14 +30,15 @@ type rowSignature struct {
 // role and truncation changes must not invoke the Markdown parser again.
 // An overflow entry keeps only its bounded source signature, never its output.
 type cachedRow struct {
-	signature rowSignature
-	bodyText  string
-	plain     bool
-	body      string
-	rendered  string
-	lines     int
-	overflow  bool
-	reading   *rowReadingMap
+	signature  rowSignature
+	bodyText   string
+	plain      bool
+	body       string
+	rendered   string
+	lines      int
+	overflow   bool
+	reading    *rowReadingMap
+	lowerLines *[]string
 }
 type transcriptInputRow struct {
 	key       string
@@ -79,16 +80,17 @@ func pageIdentity(snapshot *wire.Snapshot) renderPageIdentity {
 }
 
 type transcriptRenderer struct {
-	width    int
-	theme    string
-	markdown *glamour.TermRenderer
-	cache    map[string]cachedRow
-	rows     []renderedRow
-	layout   transcriptLayout
-	inputs   []transcriptInputRow
-	content  string
-	complete bool
-	counters renderCounters
+	width       int
+	theme       string
+	markdown    *glamour.TermRenderer
+	cache       map[string]cachedRow
+	rows        []renderedRow
+	layout      transcriptLayout
+	inputs      []transcriptInputRow
+	content     string
+	complete    bool
+	searchLines []string
+	counters    renderCounters
 }
 type renderRequest struct {
 	generation, revision, serial uint64
@@ -146,6 +148,7 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 	}
 	r.complete = false
 	r.rows = nil
+	r.searchLines = nil
 	next := make(map[string]cachedRow, min(len(req.snapshot.Items), wire.MaxRows))
 	limitNotice := layout.wrap(p.subtle().Render("Display limit · Details in full T3"))
 	var out strings.Builder
@@ -201,6 +204,8 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 				cached = cachedRow{signature: signature, bodyText: row.Text, plain: plain, overflow: true}
 			} else {
 				cached.reading = prepareRowReading(row.Text, rendered)
+				lowerLines := strings.Split(strings.ToLower(safeText(rendered)), "\n")
+				cached.lowerLines = &lowerLines
 			}
 		}
 		separator := ""
@@ -216,10 +221,18 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 			if out.Len() > 0 {
 				out.WriteString("\n\n")
 			}
+			if len(r.searchLines) > 0 {
+				r.searchLines = append(r.searchLines, "")
+			}
+			r.searchLines = append(r.searchLines, strings.Split(strings.ToLower(safeText(limitNotice)), "\n")...)
 			out.WriteString(limitNotice)
 			break
 		}
 		next[row.Key] = cached
+		if out.Len() > 0 {
+			r.searchLines = append(r.searchLines, "")
+		}
+		r.searchLines = append(r.searchLines, (*cached.lowerLines)...)
 		r.rows = append(r.rows, renderedRow{key: row.Key, start: line, lines: cached.lines, plain: cached.plain, reading: cached.reading})
 		line += cached.lines + 1
 		out.WriteString(separator)
@@ -230,6 +243,9 @@ func (r *transcriptRenderer) render(ctx context.Context, req renderRequest) (str
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if len(req.snapshot.Items) == 0 {
+		r.searchLines = strings.Split(strings.ToLower(safeText(out.String())), "\n")
 	}
 	r.cache = next
 	r.inputs = captureTranscriptRows(req.snapshot)
@@ -277,12 +293,18 @@ type preparedTranscript struct {
 }
 
 func prepareTranscript(content string, width int, term string) *preparedTranscript {
+	prepared := prepareTranscriptViewport(content, width)
+	lines := strings.Split(strings.ToLower(safeText(content)), "\n")
+	prepared.lowerLines, prepared.term, prepared.matches = lines, term, findTranscriptLines(lines, term)
+	return prepared
+}
+
+func prepareTranscriptViewport(content string, width int) *preparedTranscript {
 	v := viewport.New(viewport.WithWidth(width), viewport.WithHeight(1))
 	v.SoftWrap = false
 	v.FillHeight = true
 	v.SetContent(content)
-	lines := strings.Split(strings.ToLower(safeText(content)), "\n")
-	return &preparedTranscript{content: content, viewport: v, lowerLines: lines, term: term, matches: findTranscriptLines(lines, term)}
+	return &preparedTranscript{content: content, viewport: v}
 }
 
 func anchorAt(rows []renderedRow, line int) readingAnchor {

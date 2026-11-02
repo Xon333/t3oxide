@@ -327,6 +327,11 @@ func (m *Model) navigatorAction(action string) tea.Cmd {
 		return nil
 	case "actions":
 		return m.openNavigatorActions()
+	case "loaded-search":
+		n.serverSearch = false
+		n.query = ""
+		m.applyNavigatorFilter("\x00")
+		return nil
 	case "search":
 		query := n.list.FilterInput.Value()
 		if len(strings.TrimSpace(query)) < 2 {
@@ -551,9 +556,15 @@ func (m *Model) openNavigatorActions() tea.Cmd {
 		choiceItem{title: "Pin / unpin selected thread", description: "Native revision-bound action · p outside filter", command: "navigator-action", args: "pin"},
 		choiceItem{title: "Preview selected thread", description: "One bounded read · Space outside filter", command: "navigator-action", args: "preview"},
 		choiceItem{title: "Creation destination", description: "Pin/change/reset environment and project independently of browsing", command: "destination"},
+		choiceItem{title: "Previous conversation", command: "previous-conversation"},
+		choiceItem{title: "Recent conversations", command: "recent-conversations"},
+		choiceItem{title: "Loaded message outline", command: "loaded-outline"},
+		choiceItem{title: "Copy loaded code", command: "copy", args: "code"},
+		choiceItem{title: "Search loaded metadata", command: "navigator-action", args: "loaded-search"},
 		choiceItem{title: "Native defaults", description: "Reported defaults and inheritance by explicit scope", command: "native-defaults"},
 		choiceItem{title: "Refresh", command: "navigator-action", args: "refresh"},
 	}
+	items = append(items, BrowseScopeItems()...)
 	if selected && row.Inbox != nil && row.Inbox.NativeRevision != "" {
 		action, label := "settle", "Hide reviewed conversation"
 		if row.Inbox.Settled {
@@ -728,7 +739,7 @@ func (m *Model) applyNavigatorFilter(previous string) {
 		m.cancelNavigatorPreview()
 		n.serial++
 		n.review = nil
-		n.serverSearch, n.loading = false, false
+		n.loading = false
 		n.query, n.page.Query = "", ""
 		if n.failures == nil {
 			n.failures = make(map[string]string)
@@ -737,6 +748,7 @@ func (m *Model) applyNavigatorFilter(previous string) {
 			n.failures[profile] = "Previous server search canceled while editing; explicitly search or refresh this source"
 		}
 		n.pending = nil
+		m.resetNavigatorMembership()
 	}
 	if n.serverSearch || query == "" {
 		n.list.ResetFilter()
@@ -782,6 +794,11 @@ func (m *Model) navigatorView(width, height int) string {
 		}
 		headingLine = edgeLine(headingLine, p.subtle().Render(fitLine("Attached: "+safeText(target), max(1, w-ansi.StringWidth(heading)-2))), w)
 	}
+	searchMode := "Loaded"
+	if n.serverSearch {
+		searchMode = "Server"
+	}
+	headingLine = edgeLine(headingLine, p.subtle().Render(searchMode), w)
 	parts := []string{headingLine, p.plain().Bold(true).Render(fitLine(label+" ▾", w)), p.plain().Render(fitLine("New  More  "+m.creationDestinationLabel(), w)), ansi.Truncate(n.list.FilterInput.View(), w, "")}
 	if operations := m.compactNavigatorOperations(w); operations.content != "" {
 		parts = append(parts, operations.content)
@@ -800,6 +817,9 @@ func (m *Model) navigatorView(width, height int) string {
 		text := "No conversations"
 		if n.list.FilterInput.Value() != "" {
 			text = "No loaded matches\nEnter · Search server conversations"
+			if n.serverSearch && n.query != strings.TrimSpace(n.list.FilterInput.Value()) {
+				text = "Server query not submitted\nEnter · Search server conversations"
+			}
 			if n.serverSearch && n.query == strings.TrimSpace(n.list.FilterInput.Value()) {
 				text = "No server matches in returned scope\n" + m.navigatorHealth()
 			}

@@ -61,6 +61,7 @@ func (i choiceItem) FilterValue() string {
 }
 
 type dialog struct {
+	requestSource             *dialog
 	serial                    uint64
 	prompt                    *client.Prompt
 	kind                      client.Kind
@@ -70,6 +71,7 @@ type dialog struct {
 	details                   bool
 	detailText                string
 	preservedInitial          string
+	requestExact              *requestExactInput
 	filterQuery               string
 	finishFocused             bool
 	actionFocus               int // 0 is the native list/editor; 1..N visible page controls
@@ -207,6 +209,9 @@ func (m *Model) openPrompt(p *client.Prompt) {
 }
 
 func (m *Model) cancelDialog() tea.Cmd {
+	if m.dialog != nil && m.dialog.requestSource != nil {
+		return m.restoreRequestChoices(false)
+	}
 	if err := m.storeTextDraft(); err != nil {
 		m.problem = "Draft save: " + safeText(err.Error())
 		return nil
@@ -261,6 +266,9 @@ func (m *Model) chooseDialog() tea.Cmd {
 		return nil
 	}
 	d := m.dialog
+	if d.requestSource != nil {
+		return m.restoreRequestChoices(true)
+	}
 	if d.settingsForm != nil {
 		return m.applyModelSettings()
 	}
@@ -356,7 +364,7 @@ func (m *Model) chooseDialog() tea.Cmd {
 		m.restorePaletteSource()
 		return m.dispatch(selected.command, selected.args)
 	}
-	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && !strings.HasPrefix(d.local, "navigator-") && !strings.HasPrefix(d.local, "inbox-") && d.local != "context" && selected.command != "" {
+	if m.browserDialog == nil && d.local != "theme" && d.local != "recall" && d.local != "" && d.local != "palette" && !strings.HasPrefix(d.local, "navigator-") && !strings.HasPrefix(d.local, "inbox-") && d.local != "context" && !strings.HasPrefix(d.local, "review-") && !strings.HasPrefix(d.local, "loaded-") && d.local != "copy-code" && d.local != "recent-conversations" && selected.command != "" {
 		m.pushLocalSurface(d)
 	}
 	m.dialog = nil
@@ -465,6 +473,9 @@ func (m *Model) dialogKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.modelSettingsKey(msg)
 	}
 	if m.dialog.requestForm != nil && !m.dialog.details {
+		if msg.String() == "ctrl+shift+v" && m.stageRequestExactInput() {
+			return nil
+		}
 		return m.requestFormKey(msg)
 	}
 	if m.dialog.launch != nil && !m.dialog.details {

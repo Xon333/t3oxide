@@ -85,6 +85,7 @@ func TestAgentBoxProgramModeReplyReviewUndoAndIndependentStop(t *testing.T) {
 	waitWorkspaceFrame(t, r, func(v string) bool { return strings.Contains(v, "1 Changes") && !strings.Contains(v, "Loading…") }, "ready decision after reply and Stop")
 	r.send("1")
 	r.waitText("export.go")
+	r.send("\r") // Explicit raw-source selection from the bounded file navigator.
 	r.waitText("selected destination")
 	r.send("\x1b")
 	waitWorkspaceFrame(t, r, func(v string) bool { return !strings.Contains(v, "╭─ Changes") && strings.Contains(v, "1 Changes") }, "native changes dismissal")
@@ -176,6 +177,9 @@ func TestAgentBoxProgramHealthyHostUsableWhileOtherMetadataIsPending(t *testing.
 	}, "independent healthy source before slow host")
 	r.send("\r")
 	r.waitText("1 Changes")
+	waitWorkspaceFrame(t, r, func(v string) bool {
+		return !strings.Contains(v, "Command pending") && !strings.Contains(v, "reconnecting")
+	}, "healthy thread open acknowledged before sending")
 	r.send("r")
 	waitProgramReply(t, r, "Alpha")
 	r.send("use the healthy host now\x1d")

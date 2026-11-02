@@ -497,3 +497,67 @@ Working takes precedence over pinning; completed/unreviewed metadata belongs in 
 The shared macOS shortcut formatter renders Apple modifier glyphs. Help defaults to Option-H (Control-Option-H remains an alias), with no Command-H alias; manual bindings still own dispatch and hints. The navigation footer uses registry hints and a down-arrow continuation cue.
 
 The default Command-N alias was removed after native acceptance of the prior candidate showed stock Ghostty intercepting it. New uses the existing context Control binding; explicit manual overrides remain available. No terminal configuration was changed.
+
+
+### Accepted research transport source checks (2026-11-02)
+
+The transport implementation passed the 229-test Node suite, final eight-case
+snapshot suite, wire race tests and vet, client tests, and changed-module syntax
+checks. Fixtures cover exact restored projection equality, inherited rows,
+retained requests, source bytes/cursors, malformed/stale references, decoding
+before identity validation, ordinary old-host snapshots, negotiated exact-ID
+cancellation and mutation exclusion. These are source/fixture results, not
+installed-host acceptance or resource measurements.
+
+Owner acceptance remains: verify hello identity/protocol and `readCancellation`;
+compare ordinary and restored compact snapshots at the same native sequence,
+including inherited rows, requests, full bodies and cursors, and record the
+returned markers. Cancel HTTP and unary RPC reads and verify a subsequent read
+works; stale cancellation must be harmless. Check unchanged journals without
+issuing productive mutations. Desktop/input acceptance remains separately owned.
+
+
+The final shared `scripts/check.sh` run passed: 231 Node tests, adapter/script
+syntax, retained Swift model and transport subprocess checks, and five Python
+measurement-tool tests. Targeted metadata-host integration checks passed all nine
+host/cycle cases and the lazy/offline-source check. The earlier full-Go stall
+was not reproduced; its original cause is unconfirmed. A new actual-helper
+regression passed normally and under race: canceling Go's exact read ID reaches
+stdio/Node/HTTP, retires a held handler, frees the regular lane, and performs no
+mutation, replay or detailed attachment. The held-metadata independent Stop and
+request regression, entire wire suite and 27 focused Node tests also passed.
+
+
+### Accepted research UI integration (2026-11-02)
+
+UI/client tests, vet and race checks passed for review anchors/raw fallbacks,
+source-bound receipt recovery, bounded browse scope, exact tool/code copying,
+grapheme selection/deletion/paste, stale forms and exact request recovery.
+Prepared AgentBox decision/control content is reused for frame hit geometry;
+context surfaces retain complete bounded keys and search rows reuse their prepared
+projection. These changes establish reduced repeated computation in source, not
+a measured runtime savings percentage. Bubble Tea 2.1.1 is the focused upstream
+resize-allocation update; go-gitdiff 0.9.0 supplies parsing with retained MIT notices.
+
+Final integration exposed a program-test synchronization race: reply controls
+appeared while the preceding open action was still pending, and explicit Send
+correctly retained the draft. The test now waits for open acknowledgement before
+sending; the focused regression passed. No source mutation retry was added.
+
+Owner native acceptance: compact/wide file/hunk navigation and changed-diff notes;
+physical pointer/caret/clipboard with Unicode and mouse-off selection; exact
+request recovery, searchable choices and independent Stop/Submit; source-qualified
+recent switching with drafts/reading positions; native project paging and exact
+receipt recovery. VoiceOver, IME, physical input and performance gains are unclaimed.
+
+
+Final parent integration checks passed on Go 1.27.2 darwin/arm64: fresh UI,
+client and wire package tests plus vet; CLI tests; AgentBox integration tests,
+actual read cancellation and metadata/independent-Stop cases (12.655s). Child
+UI/client/wire race evidence applies to unchanged production code. Module tidy
+and verification and whitespace checks passed. `scripts/build-go.sh` produced
+Mach-O ARM64; strict ad-hoc signature verification and `--version` passed.
+Artifact SHA-256: `b391a2c0074b20cbc8934f0e8e4c0dacb8bf425a10cc1d40818046b32e9fabc5`.
+No install, native desktop action or service restart was performed. The earlier
+full `check-go.sh` was not represented as passed; focused affected checks above
+and retained baseline evidence are the verification boundary.

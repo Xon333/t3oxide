@@ -215,3 +215,74 @@ func (a *Session) FileMany(ctx context.Context) (Result, error) {
 	}
 	return finish(fmt.Sprintf("Filed %d native task(s).", len(filed))), nil
 }
+
+// BatchReceiptAction resolves a receipt and item again at dispatch. No receipt
+// label, row number or current attachment can substitute for its exact source.
+func (a *Session) BatchReceiptAction(ctx context.Context, receiptID string, index int) (Result, error) {
+	for _, receipt := range a.BatchReceipts() {
+		if receipt.ID != receiptID {
+			continue
+		}
+		if index < 0 || index >= len(receipt.Items) {
+			break
+		}
+		item := receipt.Items[index]
+		switch item.State {
+		case config.BatchAcknowledged:
+			for _, env := range a.manager.Environments {
+				if env.EnvironmentID != item.EnvironmentID {
+					continue
+				}
+				page, err := a.NavigatorRead(ctx, env.ID, item.ThreadID)
+				if err != nil {
+					return Result{}, err
+				}
+				for _, row := range page.Page.Threads {
+					if row.ID == item.ThreadID && row.ProjectID == item.ProjectID {
+						next, err := a.NavigatorOpenReviewed(ctx, page, item.ThreadID)
+						return Result{Next: next}, err
+					}
+				}
+				return Result{}, errors.New("receipt thread absent from bounded source read; refresh Conversations")
+			}
+			return Result{}, errors.New("receipt environment no longer configured")
+		case config.BatchNeedsRecovery:
+			pending := a.manager.State.Pending(item.EnvironmentID, false)
+			if pending == nil || stringValue(pending["id"]) != item.OperationID || stringValue(pending["threadId"]) != item.ThreadID {
+				return Result{}, errors.New("original saved operation changed; receipt retained")
+			}
+			return a.ReviewSavedOperation(ctx, item.EnvironmentID, item.OperationID)
+		case config.BatchRemainingDraft:
+			first := index
+			for i, candidate := range receipt.Items {
+				if candidate.State == config.BatchRemainingDraft {
+					first = i
+					break
+				}
+			}
+			before := a.manager.State.Draft(receipt.EnvironmentID, receipt.Source)
+			if before == "" || receipt.Items[first].Start < 0 || receipt.Items[first].Start > len(receipt.Original) || before != receipt.Original[receipt.Items[first].Start:] {
+				return Result{}, errors.New("remaining draft is no longer present; original receipt retained")
+			}
+			store := func(text string) error {
+				if len(text) > 32*1024 || !utf8.ValidString(text) {
+					return errors.New("remaining draft exceeds UTF-8/32 KiB bound")
+				}
+				if a.manager.State.Draft(receipt.EnvironmentID, receipt.Source) != before {
+					return errors.New("remaining draft changed; reopen before editing")
+				}
+				if err := a.manager.State.SetDraft(receipt.EnvironmentID, receipt.Source, text); err != nil {
+					return err
+				}
+				before = text
+				return nil
+			}
+			answer, err := a.asker.Ask(ctx, Question{Kind: EnterText, Title: "Remaining human draft", Prompt: "Exact saved batch remainder. Editing does not submit or resume filing.", Initial: before, StoreText: store})
+			if err != nil || answer.Cancelled {
+				return Result{}, err
+			}
+			return Result{Text: "Remaining draft saved; nothing submitted."}, store(answer.Text)
+		}
+	}
+	return Result{}, errors.New("batch receipt item unavailable")
+}

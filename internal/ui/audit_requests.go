@@ -263,6 +263,9 @@ func (m *Model) requestFormKey(msg tea.KeyPressMsg) tea.Cmd {
 	d := m.dialog
 	f := d.requestForm
 	q := f.questions[f.index]
+	if msg.String() == "/" && f.focus == 0 && len(q.Options) > 8 {
+		return m.searchRequestChoices()
+	}
 	if key.Matches(msg, m.actionBinding("info")) {
 		return m.dispatch("info", "")
 	}
@@ -423,6 +426,9 @@ func (m *Model) requestFormLayout(width, height int) renderedSurface {
 		}
 	}
 	heading := fmt.Sprintf("Question %d/%d · %s · %s", f.index+1, len(f.questions), required, kind)
+	if len(q.Options) > 8 {
+		heading += " · / find choice"
+	}
 	if m.attention.automatic && !m.attention.armed {
 		heading = "Tab or click to choose · Esc closes"
 	}
@@ -503,6 +509,9 @@ func (m *Model) requestFormLayout(width, height int) renderedSurface {
 			label = "[" + label + "]"
 		}
 		controls = append(controls, surfaceControl{label: label, action: "request-action", args: []string{"back", "next", "cancel"}[i]})
+	}
+	if d.requestExact != nil {
+		controls = append(controls, surfaceControl{label: "Use exact answer", action: "request-action", args: "use-exact"})
 	}
 	buttons := controlSurface(width, controls)
 	footer := buttons.content

@@ -69,6 +69,21 @@ func (a *Session) ReviewSavedAction(ctx context.Context) (Result, error) {
 			return Result{}, errors.New("saved action was not offered")
 		}
 	}
+	return a.reviewSavedAction(ctx, chosen)
+}
+
+// ReviewSavedOperation preserves an exact receipt identity without making the
+// user reconstruct the target in a second global chooser.
+func (a *Session) ReviewSavedOperation(ctx context.Context, environment, operation string) (Result, error) {
+	for _, action := range a.SavedActions() {
+		if action.EnvironmentID == environment && action.OperationID == operation {
+			return a.reviewSavedAction(ctx, action)
+		}
+	}
+	return Result{}, errors.New("original saved operation is unavailable; receipt retained")
+}
+
+func (a *Session) reviewSavedAction(ctx context.Context, chosen SavedAction) (Result, error) {
 	raw, _ := json.MarshalIndent(chosen.Record, "", "  ")
 	answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "May already be sent — Review saved action", Prompt: fmt.Sprintf("Original target: %s · %s\nType: %s\nOperation: %s\n\n%s\n\nReconcile uses this exact operation ID, payload and native revision. It does not create a replacement action. Closing keeps everything saved.", chosen.EnvironmentID, chosen.ThreadID, chosen.Kind, chosen.OperationID, raw), Choices: []Choice{{ID: "keep", Label: "Keep saved action"}, {ID: "reconcile", Label: "Reconcile original operation"}}})
 	if err != nil || answer.Cancelled {

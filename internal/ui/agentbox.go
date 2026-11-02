@@ -567,6 +567,10 @@ func (m *Model) agentboxAction(name, args string) tea.Cmd {
 		return m.inboxPages()
 	case "info":
 		return m.inboxInfo()
+	case "loaded-search":
+		m.agentbox.serverSearch = false
+		m.filterInbox()
+		return nil
 	case "server-search":
 		return m.searchInboxServer()
 	}
@@ -663,7 +667,7 @@ func (m *Model) inboxViews() tea.Cmd {
 }
 
 func (m *Model) inboxFilters() tea.Cmd {
-	items := []list.Item{choiceItem{title: "Every environment", command: "inbox", args: "environment:"}, choiceItem{title: "Every project", command: "inbox", args: "project:"}}
+	items := []list.Item{choiceItem{title: "Loaded search mode", command: "inbox", args: "loaded-search"}, choiceItem{title: "Submit server search", command: "inbox", args: "server-search"}, choiceItem{title: "Every environment", command: "inbox", args: "environment:"}, choiceItem{title: "Every project", command: "inbox", args: "project:"}}
 	for _, source := range m.agentbox.page.Sources {
 		items = append(items, choiceItem{title: "Environment · " + source.Label, command: "inbox", args: "environment:" + source.ProfileID})
 	}

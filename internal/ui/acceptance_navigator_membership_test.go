@@ -195,7 +195,7 @@ func TestAcceptanceNavigatorServerContentResultsAndLocalQueryRetirement(t *testi
 				}
 				m.Update(keyPress(tea.KeyEnd))
 				m.Update(keyPress('u', tea.ModCtrl))
-				if m.navigator.serverSearch || m.navigator.serial == serial || m.navigator.loading || len(m.navigator.pending) != 0 {
+				if !m.navigator.serverSearch || m.navigator.serial == serial || m.navigator.loading || len(m.navigator.pending) != 0 {
 					t.Fatal("changed input did not retire the old server search generation")
 				}
 				// Old native replies and delayed editor events belong to the
@@ -214,12 +214,10 @@ func TestAcceptanceNavigatorServerContentResultsAndLocalQueryRetirement(t *testi
 				}
 				m.View()
 				page, row, ok = m.navigatorSource()
-				if !ok || page.ProfileID != "alpha" || row.ID != "fork" || len(m.navigator.list.VisibleItems()) != 1 || len(m.navigator.pages) != 1 || m.navigator.list.FilterInput.Value() != query || m.navigator.query != "" {
-					t.Fatal("new local query was changed by retired server results or ignored its current loaded filter", page, row, ok)
+				if ok || len(m.navigator.list.VisibleItems()) != 0 || m.navigator.list.FilterInput.Value() != query || !m.navigator.serverSearch || m.currentDraft() != draft {
+					t.Fatal("retired search changed unsent Server query or draft")
 				}
-				if m.currentDraft() != draft || !strings.Contains(m.navigatorHealth(), "Loaded search results") || !strings.Contains(m.navigatorHealth(), "incomplete") {
-					t.Fatal("query editing changed the attached draft or concealed partial loaded-search scope")
-				}
+
 			})
 		}
 	}
