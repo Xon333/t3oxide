@@ -616,6 +616,14 @@ visible terminal caret, but exposed lost drag selection. The parent found that
 Update invalidated drawn geometry on motion/release, cancelling the gesture.
 Those pointer events now consume the unchanged drawn frame. A regression through
 Update/View/release/text replacement preserves the exact selected range and
-surrounding Unicode. Physical drag replacement remains pending its focused
-recheck. The rebuilt ARM64 executable passed strict signature verification:
+surrounding Unicode. The focused physical recheck subsequently passed at wide and compact sizes: selecting `fghij` and typing `R` persisted exactly `ABCDE R 👩🏽‍💻 é omega`, preserving all surrounding UTF-8 bytes. Clipboard was restored and owned windows closed. The rebuilt ARM64 executable passed strict signature verification:
 `45c5643ee14b4398ce46575ffe23ef00719f0d9e2e52ac63120d63b6687c6c7e`.
+
+
+Final hosted CI passed both active jobs on production revision
+`501f6ae2d61e91259c524faaa232bcdae1501250`: complete `scripts/check-go.sh`
+(formatting, all Go packages, vet and race), ARM64 build/artifact, and shared
+adapter/script checks. The prior failed head is not acceptance evidence; its
+failures were diagnosed and corrected above. This final verification-record
+update changes documentation only and reuses that exact unchanged-code evidence.
+M4 installation remains held for the owner's connection check.
