@@ -172,7 +172,7 @@ func (a *Session) pickLaunchSelectionWithDefaults(ctx context.Context, c *ModelC
 		for _, m := range c.Models {
 			choices = append(choices, Choice{ID: m.Slug, Label: m.Name, Description: m.Slug})
 		}
-		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Model · New conversation", Choices: choices, Initial: base.Model})
+		answer, err := a.asker.Ask(ctx, Question{Kind: ChooseOne, Title: "Model · New conversation · " + c.ProviderSummary(), Choices: choices, Initial: base.Model})
 		if err != nil || answer.Cancelled {
 			return base, err
 		}

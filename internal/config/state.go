@@ -421,6 +421,16 @@ func (s *State) Acknowledge(env string, stop bool, id, thread, message string) e
 	}
 	delete(lane, env)
 	if old["op"] == "launch-project" {
+		if old["compactMessageDraft"] == true {
+			key := draftKey("t3oxide-client", "new-message")
+			if draft, ok := next.LaunchDrafts[key]; ok && draft.Title == old["title"] && draft.Message == old["message"] {
+				delete(next.LaunchDrafts, key)
+				messageKey := draftKey("t3oxide-client", "\x00new/new-message")
+				if next.Drafts[messageKey] == draft.Message {
+					delete(next.Drafts, messageKey)
+				}
+			}
+		}
 		form, _ := old["formSource"].(string)
 		key := draftKey(env, form)
 		if saved, ok := next.LaunchDrafts[key]; ok && saved.Title == old["title"] && saved.Message == old["message"] && saved.ProjectID == old["projectId"] && saved.NativeDefaultsRevision == old["defaultsRevision"] && launchSelectionMatches(saved.Selection, old["modelSelection"]) && launchWorkspaceMatches(saved.WorkspaceStrategy, old["workspaceStrategy"]) {

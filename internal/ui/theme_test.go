@@ -2,7 +2,9 @@ package ui
 
 import (
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/lipgloss/v2"
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -42,12 +44,21 @@ func TestThemeSemanticSlotPalettes(t *testing.T) {
 
 // Default text and basic ANSI accents work with either light or dark terminal
 // palettes. Reject fixed RGB, 256-color grays and painted backgrounds in every
-// rendered surface, including nested Markdown styles and upstream defaults.
+// rendered surface, except the explicit, fixed critical-status symbol palette.
 func assertTerminalPalette(t *testing.T, content string) {
 	t.Helper()
 	allowed := map[string]bool{"": true, "0": true, "1": true, "2": true, "3": true, "4": true, "7": true, "9": true, "22": true, "23": true, "24": true, "27": true, "29": true, "31": true, "32": true, "33": true, "34": true, "35": true, "36": true, "39": true, "49": true, "59": true}
 	for _, match := range regexp.MustCompile("\x1b\\[([0-9;:]*)m").FindAllStringSubmatch(content, -1) {
-		for _, parameter := range strings.Split(match[1], ";") {
+		parameters := ";" + match[1] + ";"
+		for _, role := range []string{"operation", "completed", "warning", "error", "background"} {
+			value, prefix := statusColor(role), "38"
+			if role == "background" {
+				value, prefix = statusBackground, "48"
+			}
+			r, g, b, _ := lipgloss.Color(value).RGBA()
+			parameters = strings.ReplaceAll(parameters, fmt.Sprintf(";%s;2;%d;%d;%d;", prefix, r>>8, g>>8, b>>8), ";")
+		}
+		for _, parameter := range strings.Split(parameters, ";") {
 			if !allowed[parameter] {
 				t.Fatalf("terminal theme painted a fixed color: %q", match[0])
 			}

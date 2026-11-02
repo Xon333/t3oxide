@@ -421,7 +421,7 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 		if stale {
 			unavailable = "Native defaults changed. Choose Defaults to review their current values before Create."
 		}
-		review := &LaunchReview{Stage: "ready", Input: input, Location: location, Selection: &selected, Summary: selected.Summary() + " · " + d.RuntimeMode + " · " + d.InteractionMode, Actions: actions, Unavailable: unavailable, StoreDraft: store}
+		review := &LaunchReview{Stage: "ready", Input: input, Location: location, Selection: &selected, Summary: d.Catalog.ProviderSummary() + " · " + selected.Summary() + " · " + d.RuntimeMode + " · " + d.InteractionMode, Actions: actions, Unavailable: unavailable, StoreDraft: store}
 		answer, err := a.asker.Ask(ctx, Question{Surface: SurfaceLaunch, Kind: EnterText, Title: "New conversation", LaunchReview: review})
 		if err != nil {
 			return Result{}, err
@@ -514,15 +514,13 @@ func (a *Session) newConversationInEnvironment(ctx context.Context, title, proje
 			id := wire.NewID()
 			thread := wire.NewID()
 			fields := map[string]any{"threadId": thread, "newThreadId": thread, "projectId": project.ID, "title": input.Title, "message": input.Message, "modelSelection": selected, "workspaceStrategy": d.WorkspaceStrategy, "workspaceRoot": d.WorkspaceRoot, "workspaceMode": workspaceMode, "isolated": isolated, "defaultsRevision": d.Revision, "formSource": formSource}
+			if seed != nil && batchLaunchContext(ctx) == nil {
+				fields["compactMessageDraft"] = true
+			}
 			bindBatchLaunch(ctx, fields)
 			reply, err := a.performProjectLaunch(ctx, conn, env, fields, id, false)
 			if err != nil {
 				return Result{}, err
-			}
-			if seed != nil && batchLaunchContext(ctx) == nil {
-				if err := a.manager.State.ClearLaunchDraft("t3oxide-client", "new-message", config.LaunchDraft{Title: input.Title, Message: input.Message}); err != nil {
-					return Result{}, fmt.Errorf("launch acknowledged; clear message draft: %w", err)
-				}
 			}
 			target, err := a.Target(env.ID, stringValue(reply["threadId"]))
 			return Result{Next: target}, err

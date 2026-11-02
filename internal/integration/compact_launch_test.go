@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"github.com/Xon333/t3oxide/internal/client"
 	"testing"
 	"time"
@@ -47,5 +48,58 @@ func TestCompactNewStagesPreserveNativeDefaultsAndClearAcknowledgedMessage(t *te
 	defer result.result.Next.Close()
 	if _, ok := state.LaunchDraft("t3oxide-client", "new-message"); ok {
 		t.Fatal("acknowledged message remains in next New")
+	}
+}
+
+func TestCompactLaunchLostAckRecoveryClearsSubmittedMessage(t *testing.T) {
+	f := newFixture(t)
+	_, state, a, _ := startFeatureSession(t, f, "thread-a")
+	started, release := f.holdNextLaunchAck()
+	defer release()
+	launch := featureCommand(a, "new", "")
+	next := func() *client.Prompt {
+		t.Helper()
+		select {
+		case p := <-a.Prompts():
+			return p
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing compact launch prompt")
+			return nil
+		}
+	}
+	p := next()
+	input := client.LaunchInput{Title: "Recovered", Message: " exact recovery draft\n"}
+	p.Respond(client.Answer{Action: "continue", Launch: &input})
+	p = next()
+	p.Respond(client.Answer{ChoiceIDs: []string{"project-a"}})
+	p = next()
+	p.Respond(client.Answer{Action: "create", Launch: &input})
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("launch not received")
+	}
+	pending := state.Pending("env-a", false)
+	if pending["compactMessageDraft"] != true {
+		t.Fatal("compact draft binding was not journaled")
+	}
+	f.closeSockets()
+	release()
+	if reply := featureReply(t, launch); reply.err == nil {
+		t.Fatal("lost acknowledgment inferred success")
+	}
+	if _, ok := state.LaunchDraft("t3oxide-client", "new-message"); !ok {
+		t.Fatal("uncertain launch lost its message")
+	}
+	result, err := a.RetryLaunch(context.Background())
+	if err != nil || result.Next == nil {
+		t.Fatalf("recovery failed: %v", err)
+	}
+	defer result.Next.Close()
+	if _, ok := state.LaunchDraft("t3oxide-client", "new-message"); ok {
+		t.Fatal("recovered message returned in New")
+	}
+	if effects, dispatches := f.counts(); effects != 1 || dispatches != 1 {
+		t.Fatalf("recovery duplicated launch: %d/%d", effects, dispatches)
 	}
 }
