@@ -1,5 +1,11 @@
 # Verification
 
+## Sidebar navigation correction, 2026-11-02
+
+The Bubbles navigator now selects real shelf headings as well as thread rows, including collapsed shelves. One grouped projection supplies drawing, keyboard selection and mouse hit geometry; frozen intra-shelf order and Working/Finished read holds remain intact. Space toggles a selected heading and retains thread preview behavior on a thread. Loaded filtering requires explicit `/` activation; ordinary typing and paste do not focus the editor, and Escape retains the query and selected result. Search results retain their existing flat match projection and explicit Loaded/Server semantics.
+
+Source checks on macOS ARM64: `go test -count=1 ./...` (all six packages, including actual-adapter/program integration), UI regressions, UI race tests, `go vet ./...`, formatting and whitespace checks passed. The Go-only `darwin/arm64` build passed. Regressions cover collapsed keyboard traversal, heading/row crossings, frozen interleaved shelves, explicit filter focus/paste/Escape, metadata updates and mouse selection at compact and wide widths. Installed application, physical GUI and service behavior were not exercised; no install, native configuration or state changes were made.
+
 ## 0.10.0 source refinement, 2026-11-02
 
 The Go client now uses a compact message/project/launch flow with optional model and effort changes, native inherited defaults, fixed-height status-symbol rows, native review/hide/restore, and shortcut-only command palettes. Reported provider identity remains distinct from account telemetry in Info. Optional per-profile `allowedProviderInstanceIds` restricts new client execution without changing native global providers or historical identities; [configuration](../NATIVE-GO.md) records its recovery and request-answer limits.

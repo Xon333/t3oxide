@@ -67,7 +67,7 @@ func (m *Model) updateComponent(kind string, id uint64, message tea.Msg) tea.Cmd
 	var cmd tea.Cmd
 	switch kind {
 	case "navigator":
-		if id != m.navigator.serial || !m.navigator.focused || !m.navigationVisible() || m.dialog != nil || m.detail != "" {
+		if !m.navigator.editing || id != m.navigator.serial || !m.navigator.focused || !m.navigationVisible() || m.dialog != nil || m.detail != "" {
 			return nil
 		}
 		previous := m.navigator.list.FilterInput.Value()

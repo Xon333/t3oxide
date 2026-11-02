@@ -67,7 +67,7 @@ func unifiedStartupActivation(t *testing.T, size [2]int, activation string) {
 			}
 		}
 	}
-	r.send("Second alpha")
+	r.send("/Second alpha")
 	deadline := time.Now().Add(5 * time.Second)
 	filtered := false
 	for time.Now().Before(deadline) {

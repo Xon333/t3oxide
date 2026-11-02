@@ -61,7 +61,7 @@ func TestWorkspaceProgramRailAndToolClickPreserveAttachmentUntilOpen(t *testing.
 	r.send("Earlier history\r")
 	r.waitText("Earlier page for thread-a")
 	before := f.requestCounts()
-	r.send("\x0fBeta")
+	r.send("\x0f/Beta")
 	waitNavigatorQuery(t, r, "Beta")
 	if !strings.Contains(r.views.text(), "Earlier page for thread-a") || !session.Status().Historical || session.Status().ThreadID != "thread-a" || session.Draft() != draft {
 		t.Fatal("filtering navigation replaced historical attachment or exact draft")

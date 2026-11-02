@@ -120,8 +120,8 @@ func (m *Model) freezeNavigatorRows(canonical []navigatorItem) []navigatorItem {
 		out = append(out, row)
 		nativeSeen[row.nativeIdentity()] = true
 	}
-	// Existing hit positions are a stable prefix. A new result for an earlier
-	// shelf is appended as a continued section until canonical order is applied.
+	// Keep existing intra-shelf order and append new arrivals. The visible
+	// projection groups these held rows under one heading per shelf.
 	// Retain at most two bounded 200-row pages per known source while focused.
 	limit := max(len(n.ordered), 400*max(1, len(n.pages)+len(n.pending)))
 	for _, row := range canonical {
@@ -155,6 +155,12 @@ func (m *Model) toggleNavigatorShelf(shelf string) tea.Cmd {
 	n := &m.navigator
 	if n.collapsed == nil {
 		n.collapsed = map[string]bool{}
+	}
+	for i, raw := range n.list.VisibleItems() {
+		if h, ok := raw.(navigatorHeading); ok && h.shelf == shelf {
+			n.list.Select(i)
+			break
+		}
 	}
 	n.collapsed[shelf] = !n.collapsed[shelf]
 	m.rebuildUnifiedNavigator()
@@ -221,75 +227,39 @@ func (m *Model) navigatorRowsLayout(width, height int) renderedSurface {
 	n := &m.navigator
 	p := colors(m.navigatorTheme())
 	items := n.list.VisibleItems()
-	ordered := n.ordered
-	if len(ordered) == 0 {
-		for _, raw := range items {
-			if row, ok := raw.(navigatorItem); ok {
-				if row.shelf == "" {
-					row.shelf = nativeShelf(row.thread)
-				}
-				ordered = append(ordered, row)
-			}
-		}
-	}
-	counts, requests := map[string]int{}, map[string]int{}
-	visible := make(map[string]int, len(items))
-	for index, raw := range items {
-		if row, ok := raw.(navigatorItem); ok {
-			visible[row.identity()] = index
-		}
-	}
-	for _, item := range ordered {
-		counts[item.shelf]++
-		if !item.stale && item.thread.Inbox != nil {
-			requests[item.shelf] += item.thread.Inbox.PendingRequestCount
-			if item.thread.Inbox.PendingChildRequest {
-				requests[item.shelf]++
-			}
-		}
-	}
 	var lines []string
 	var hits []hitZone
 	selectedStart, selectedEnd := 0, 0
-	seenShelf := map[string]bool{}
-	lastShelf := ""
-	for _, item := range ordered {
-		shelf := item.shelf
-		if shelf == "" {
-			shelf = nativeShelf(item.thread)
-		}
-		if shelf != lastShelf {
+	for index, raw := range items {
+		start := len(lines)
+		if h, ok := raw.(navigatorHeading); ok {
 			marker := "▾ "
-			if n.collapsed[shelf] {
+			if n.collapsed[h.shelf] {
 				marker = "▸ "
 			}
-			label := fmt.Sprintf("%s%s (%d)", marker, shelf, counts[shelf])
-			if seenShelf[shelf] {
-				label += " · continued"
+			label := fmt.Sprintf("%s%s (%d)", marker, h.shelf, h.count)
+			if h.requests > 0 {
+				label += fmt.Sprintf(" · ?%d", h.requests)
 			}
-			if requests[shelf] > 0 {
-				label += fmt.Sprintf(" · ?%d", requests[shelf])
+			style := p.subtle().Bold(true)
+			if index == n.list.Index() && n.focused {
+				style = p.active().Bold(true)
+				label = "> " + label
 			}
-			hits = append(hits, hitZone{x: 0, y: len(lines), width: width, height: 1, action: "navigator-shelf", args: shelf, serial: n.serial})
-			lines = append(lines, p.subtle().Bold(true).Render(fitLine(label, width)))
-			seenShelf[shelf], lastShelf = true, shelf
+			lines = append(lines, style.Render(fitLine(label, width)))
+			hits = append(hits, hitZone{x: 0, y: start, width: width, height: 1, action: "navigator-shelf", args: h.shelf, serial: n.serial})
+		} else if item, ok := raw.(navigatorItem); ok {
+			var line strings.Builder
+			attached := m.status.ProfileID + "\x00" + m.status.ThreadID
+			navigatorDelegate{theme: m.navigatorTheme(), focused: n.focused, attached: attached}.Render(&line, n.list, index, item)
+			lines = append(lines, line.String())
+			hits = append(hits, hitZone{x: 0, y: start, width: width, height: 1, action: "navigator-row", args: item.identity(), serial: n.serial})
+			if !item.stale && item.thread.ChildCount > 0 {
+				hits = append(hits, hitZone{x: 0, y: start, width: 2, height: 1, action: "navigator-toggle", args: item.identity(), serial: n.serial})
+			}
 		}
-		index, shown := visible[item.identity()]
-		if n.collapsed[shelf] || !shown {
-			continue
-		}
-		start := len(lines)
-		var line strings.Builder
-		attached := m.status.ProfileID + "\x00" + m.status.ThreadID
-		navigatorDelegate{theme: m.navigatorTheme(), focused: n.focused, attached: attached}.Render(&line, n.list, index, item)
-		lines = append(lines, line.String())
-		if index == n.list.Index() && n.focused {
-			selectedStart = start
-			selectedEnd = len(lines)
-		}
-		hits = append(hits, hitZone{x: 0, y: start, width: width, height: len(lines) - start, action: "navigator-row", args: item.identity(), serial: n.serial})
-		if !item.stale && item.thread.ChildCount > 0 {
-			hits = append(hits, hitZone{x: 0, y: start, width: 2, height: 1, action: "navigator-toggle", args: item.identity(), serial: n.serial})
+		if index == n.list.Index() {
+			selectedStart, selectedEnd = start, len(lines)
 		}
 	}
 	offset := max(0, selectedEnd-height)

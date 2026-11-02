@@ -28,7 +28,7 @@ func TestBubbleTeaStartupBrowserOpensSelectedConversationAndKeepsLaterBrowseInde
 	if view := r.views.text(); strings.Contains(view, "Initial Markdown") || strings.Contains(view, "Message") || strings.Contains(view, "╭─ Conversations") {
 		t.Fatalf("startup is not the metadata list and initially empty conversation: %s", view)
 	}
-	r.send("Beta")
+	r.send("/Beta")
 	r.waitText("Beta")
 	r.send("\r")
 	r.waitText("Initial Markdown for Beta")

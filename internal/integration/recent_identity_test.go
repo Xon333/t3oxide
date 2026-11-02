@@ -67,10 +67,10 @@ func TestPreviousConversationCompletesBrowserSwitchAndRestoresDraft(t *testing.T
 	}
 	r, _ := startAppTUI(t, session)
 	r.waitText("Alpha")
-	r.send("Alpha\r")
+	r.send("/Alpha\r")
 	r.waitText("Initial Markdown for Alpha")
 	r.waitText("exact alpha draft")
-	r.send("\x0f\x15Beta\r")
+	r.send("\x0f/\x15Beta\r")
 	r.waitText("Initial Markdown for Beta")
 	intuitiveCommand(r, "Previous conversation")
 	r.waitText("Initial Markdown for Alpha")
