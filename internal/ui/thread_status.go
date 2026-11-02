@@ -45,6 +45,12 @@ func threadStatusBadge(row client.Thread) statusBadge {
 	return statusBadge{"? Unknown", "plain"}
 }
 
+// Compact keeps the full textual status available in Info and decision details.
+func (b statusBadge) compact() statusBadge {
+	b.label = strings.Fields(b.label)[0]
+	return b
+}
+
 // Start from the row style so selection/focus stays visible behind the badge.
 // Terminal uses the existing ANSI roles, never fixed RGB colors.
 func (b statusBadge) style(p palette, base lipgloss.Style) lipgloss.Style {

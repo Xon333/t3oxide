@@ -1,5 +1,11 @@
 # Verification
 
+## 0.10.0 source refinement, 2026-11-02
+
+The Go client now uses a compact message/project/launch flow with optional model and effort changes, native inherited defaults, fixed-height status-symbol rows, native review/hide/restore, and shortcut-only command palettes. Reported provider identity remains distinct from account telemetry in Info. Optional per-profile `allowedProviderInstanceIds` restricts new client execution without changing native global providers or historical identities; [configuration](../NATIVE-GO.md) records its recovery and request-answer limits.
+
+`bash scripts/check-go.sh` passed formatting, all six package suites, vet and the complete race run on macOS ARM64 with Go 1.27.2. The integration suite completed in 110.198 seconds normally and 191.555 seconds under race. Focused UI, configuration, client and actual-adapter launch tests cover untouched option omission, acknowledged-only message-draft clearing, exact native review guards and original uncertain-operation replay. Real Bubble Tea mouse journeys pass in both modes at 60×16, 80×24, 120×35 and 170×40. The macOS ARM64 source build reports `0.10.0-bubbletea`. These are source/fixture results; installed profiles, native account routing and owner interaction acceptance require separate validation. Adapter, Node and retained Swift sources are unchanged, so prior covering evidence for those inputs is retained.
+
 ## M1 source integration for 0.9.0, 2026-10-30
 
 The prepared native checkout reconciled to PR #2 at `6d581ae13e476b6aebaf5198b8b154270cdb52c0` without replacing later source. The owner selected `0.9.0-bubbletea`, then made Ctrl+Space the displayed Commands default after Terminal consumed Cmd+P as Print. The shipped Cmd+P alias was removed; contextual Ctrl+P fallback, legacy editor ownership and explicit manual overrides remain. Registry-driven hints, CLI help and current control documentation were aligned. Creation-destination documentation now includes the existing saved-pin precedence. No dependency, protocol, Swift rollback, installer or native service change is part of these corrections.

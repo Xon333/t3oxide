@@ -17,21 +17,25 @@ import (
 const MaxConfigBytes = 64 * 1024
 
 type Environment struct {
-	ID             string  `json:"id"`
-	Label          string  `json:"label"`
-	EnvironmentID  string  `json:"environmentId"`
-	SSHDestination *string `json:"sshDestination"`
-	Node           string  `json:"node"`
-	Adapter        string  `json:"adapter"`
-	HostConfig     string  `json:"hostConfig"`
-	WebURL         *string `json:"webURL,omitempty"`
-	Enabled        bool    `json:"enabled"`
-	DefaultForNew  bool    `json:"defaultForNew,omitempty"`
+	ID                         string   `json:"id"`
+	Label                      string   `json:"label"`
+	EnvironmentID              string   `json:"environmentId"`
+	SSHDestination             *string  `json:"sshDestination"`
+	Node                       string   `json:"node"`
+	Adapter                    string   `json:"adapter"`
+	HostConfig                 string   `json:"hostConfig"`
+	WebURL                     *string  `json:"webURL,omitempty"`
+	Enabled                    bool     `json:"enabled"`
+	DefaultForNew              bool     `json:"defaultForNew,omitempty"`
+	AllowedProviderInstanceIDs []string `json:"allowedProviderInstanceIds,omitempty"`
 }
 
 var sshAlias = regexp.MustCompile(`^[A-Za-z0-9_.@-]+$`)
 
 func (e Environment) Validate() error {
+	if err := e.validateProviderPolicy(); err != nil {
+		return err
+	}
 	if e.ID == "" || e.EnvironmentID == "" || len(e.ID) > 4096 || len(e.EnvironmentID) > 4096 || strings.IndexFunc(e.ID+e.EnvironmentID, func(r rune) bool { return r < 32 }) >= 0 {
 		return errors.New("environment needs a nonempty profile and environment identity")
 	}

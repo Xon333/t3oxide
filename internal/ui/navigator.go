@@ -115,6 +115,7 @@ func (d navigatorDelegate) Render(w io.Writer, model list.Model, index int, raw 
 	if i.stale {
 		badge = statusBadge{"· Stale", "plain"}
 	}
+	badge = badge.compact()
 	status := badge.label
 	if row.Lineage.Type() == "fork" {
 		prefix += "fork "
@@ -288,6 +289,14 @@ func (m *Model) navigatorAction(action string) tea.Cmd {
 		return m.execute("destination", "")
 	case "preview":
 		return m.previewNavigator()
+	case "settle", "unsettle":
+		if !selected || !m.navigatorPageLive(page) {
+			return nil
+		}
+		session := m.session
+		return m.navigatorRun("navigator-review", func(ctx context.Context) (client.Result, error) {
+			return session.NavigatorReview(ctx, page, row.ID, action)
+		})
 	case "pin":
 		if !selected || !m.navigatorPageLive(page) {
 			return nil
@@ -374,6 +383,14 @@ func (m *Model) reviewedNavigatorAction(token string) tea.Cmd {
 	switch action {
 	case "new":
 		return m.execute("new", "")
+	case "settle", "unsettle":
+		if m.session == nil || !r.selected {
+			return nil
+		}
+		session := m.session
+		return m.navigatorRun("navigator-review", func(ctx context.Context) (client.Result, error) {
+			return session.NavigatorReview(ctx, r.page, r.thread.ID, action)
+		})
 	case "pin":
 		if m.session == nil || !r.selected {
 			return nil
@@ -526,6 +543,13 @@ func (m *Model) openNavigatorActions() tea.Cmd {
 		choiceItem{title: "Native defaults", description: "Reported defaults and inheritance by explicit scope", command: "native-defaults"},
 		choiceItem{title: "Refresh", command: "navigator-action", args: "refresh"},
 	}
+	if selected && row.Inbox != nil && row.Inbox.NativeRevision != "" {
+		action, label := "settle", "Hide reviewed conversation"
+		if row.Inbox.Settled {
+			action, label = "unsettle", "Restore conversation"
+		}
+		items = append(items, choiceItem{title: label, command: "navigator-action", args: action})
+	}
 	if selected && row.ChildCount > 0 {
 		action, label := "expand", "Show working children"
 		if row.Expanded {
@@ -534,7 +558,7 @@ func (m *Model) openNavigatorActions() tea.Cmd {
 		items = append(items, choiceItem{title: label, command: "navigator-action", args: action})
 	}
 	for _, scope := range []string{"active", "all", "completed", "failed"} {
-		items = append(items, choiceItem{title: "Scope · " + scope, command: "navigator-action", args: scope})
+		items = append(items, choiceItem{title: map[string]string{"active": "Inbox", "all": "All conversations", "completed": "Completed", "failed": "Failed"}[scope], command: "navigator-action", args: scope})
 	}
 	if m.navigator.page.Tree {
 		for _, kind := range []string{"all", "main", "subagents", "forks"} {

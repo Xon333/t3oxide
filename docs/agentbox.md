@@ -12,11 +12,11 @@ An empty first message files an empty native thread. A nonempty first message st
 
 ## Inbox and decisions
 
-The inbox defaults to **Needs you**. `V` or Commands changes view; `/` filters loaded metadata locally. With no matching rows, **Search server conversations** or Enter explicitly searches bounded native message content across configured sources. This switches the presentation to All while retaining environment, project and minimum priority filters. Healthy sources appear progressively, and pending, failed and incomplete sources remain visible. Native message matches remain visible even when the query is absent from their titles. Editing the query retires old results and returns to local filtering without another read; Enter with loaded matches or Refresh explicitly reloads metadata. Additional native pages remain explicit. Every row keeps environment/project/thread identity and the native revision; duplicate thread IDs across environments cannot alias.
+The inbox defaults to **Inbox**. `V` or Commands changes view; `/` filters loaded metadata locally. With no matching rows, **Search server conversations** or Enter explicitly searches bounded native message content across configured sources. This switches the presentation to All while retaining environment, project and minimum priority filters. Healthy sources appear progressively, and pending, failed and incomplete sources remain visible. Native message matches remain visible even when the query is absent from their titles. Editing the query retires old results and returns to local filtering without another read; Enter with loaded matches or Refresh explicitly reloads metadata. Additional native pages remain explicit. Every row keeps environment/project/thread identity and the native revision; duplicate thread IDs across environments cannot alias.
 
 | View | Evidence |
 | --- | --- |
-| Needs you | A native formal request, blocked/failed work, or unsettled inactive work requiring review. |
+| Inbox | A native formal request, blocked/failed work, or unsettled inactive work requiring review. |
 | Working | Reported active/preparing/starting/running state. |
 | Queued | A native queued state or explicitly reported queued count. No local filed draft is presented as an accepted native queue. |
 | Later | Native `snoozedUntil` in the future. |
@@ -38,7 +38,7 @@ Requests retain the existing exact request ID, revision, allowed answers and val
 
 Changes uses native `review.getDiffPreview` over the exact thread's reported worktree or project root. The adapter validates returned cwd, clips the diff/file projection to its wire budget, and retains native hashes and linked PR metadata. Truncation and unavailable capabilities are explicit. A model's completion message does not substitute for Git data.
 
-Reviewed uses native settle/unsettle. It refuses active/queued work or a pending formal request. A later native event can move the thread back into Needs you. No commit, push, merge or worktree deletion is performed. PR metadata may be stale or absent according to the native source; opening full T3 is the existing supported route for broader Git actions.
+Reviewed uses native settle/unsettle. It refuses active/queued work or a pending formal request. A later native event can move the thread back into Inbox. No commit, push, merge or worktree deletion is performed. PR metadata may be stale or absent according to the native source; opening full T3 is the existing supported route for broader Git actions.
 
 Later uses native snooze/unsnooze with an exact timestamp. Its backend remains responsible for visibility and wake behavior. It does not schedule a new execution. The client gates hiding active work and unresolved formal requests, and the adapter revalidates fresh native state before dispatch.
 

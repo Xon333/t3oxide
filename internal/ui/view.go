@@ -104,9 +104,16 @@ func (m *Model) resizeDialog() {
 			m.modalInput.SetHeight(max(1, min(4, m.modalHeight-7)))
 			return
 		} else if m.dialog.launch != nil {
-			m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
-			m.modalInput.SetHeight(max(1, min(8, surfaceHeight-8)))
-			m.launchTitle.SetWidth(max(1, m.workspaceWidth()-12))
+			if m.dialog.launch.review.Stage == "" {
+				m.modalInput.SetWidth(max(1, m.workspaceWidth()-6))
+				m.modalInput.SetHeight(max(1, min(8, surfaceHeight-8)))
+				m.launchTitle.SetWidth(max(1, m.workspaceWidth()-12))
+			} else {
+				m.modalInput.SetWidth(max(1, m.modalWidth-6))
+				m.modalInput.SetHeight(3)
+				m.launchTitle.SetWidth(max(1, m.modalWidth-12))
+				m.modalHeight = min(m.modalHeight, 11)
+			}
 			return
 		} else if m.dialog.kind == client.EnterText {
 			m.modalHeight = min(m.modalHeight, questionHeight+8)
@@ -235,7 +242,7 @@ func (m *Model) View() tea.View {
 		state = "Read only · " + state
 	}
 	stateWidth := min(ansi.StringWidth(state), max(16, inner*2/3))
-	model := p.plain().Bold(true).Render(fitLine(modelStatusLine(m.status.ModelName), max(1, inner-stateWidth-2)))
+	model := p.plain().Bold(true).Render(fitLine(m.providerModelStatus(), max(1, inner-stateWidth-2)))
 	status := edgeLine(model, p.operational().Render(fitLine(state, stateWidth)), inner)
 	toolbar := m.toolbarView(inner)
 	body := m.bodyView()
@@ -389,6 +396,9 @@ func (m *Model) modalLayout() renderedSurface {
 	if d == nil {
 		return renderedSurface{}
 	}
+	if d.launch != nil && !d.details {
+		return m.frameSurface(d.title, m.launchLayout(w, h-helpHeight), w)
+	}
 	if d.settingsForm != nil && !d.details {
 		surface := m.modelSettingsLayout(w, h-helpHeight)
 		surface.content += localHelp
@@ -467,7 +477,7 @@ func (m *Model) modalLayout() renderedSurface {
 
 func (m *Model) pickerSelectionView(width int) string {
 	d := m.dialog
-	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" || d.surface == client.SurfaceNativeDefaults {
+	if d == nil || d.kind == client.EnterText || d.details || m.detail != "" || d.surface == client.SurfaceNativeDefaults || d.local == "palette" {
 		return ""
 	}
 	if item, ok := d.list.SelectedItem().(choiceItem); ok {

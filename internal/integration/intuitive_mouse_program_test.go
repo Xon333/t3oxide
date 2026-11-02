@@ -93,6 +93,9 @@ func TestIntuitiveMouseProgramLaunchFieldsChoosersCancelAndOneCreate(t *testing.
 		for _, mode := range []string{"developer", "agentbox"} {
 			t.Run(fmt.Sprintf("%s/%dx%d", mode, size[0], size[1]), func(t *testing.T) {
 				f := newFixture(t)
+				f.mu.Lock()
+				f.catalog["settings"].(object)["defaultModelSelection"] = object{"instanceId": "fixture-provider", "model": "fixture-model", "options": []any{object{"id": "reasoningEffort", "value": "medium"}, object{"id": "serviceTier", "value": "fast"}}}
+				f.mu.Unlock()
 				manager, state := newAppManager(t, f)
 				const sourceDraft = "  untouched source\nsecond line  "
 				if err := state.SetDraft("env-a", "thread-a", sourceDraft); err != nil {
@@ -109,54 +112,55 @@ func TestIntuitiveMouseProgramLaunchFieldsChoosersCancelAndOneCreate(t *testing.
 				r.waitText("Initial Markdown for Alpha")
 				sizeIntuitiveProgram(t, r, size, mode)
 				intuitiveCommand(r, "New conversation")
-				r.modalReady("Project")
-				clickIntuitiveControl(t, r, "Fixture project")
-				r.waitText("First message")
-				clickIntuitiveControl(t, r, "Title  ")
-				const title = "Mouse launch"
-				r.send("\x01\x0b" + title + "\r")
-				r.waitText("[Create thread]")
-				r.send("\x1b[C")
-				r.waitText("[Cancel]")
-				r.send("\x1b[A")
-				r.waitText("[Create thread]")
-				assertIntuitiveCounts(t, f, 0)
-				clickIntuitiveControl(t, r, "First message")
-				r.waitText("Enter newline")
+				r.modalReady("╭─ New ")
+				const title = "New conversation"
 				const message = "  exact mouse message\nsecond line  "
 				r.send("\x1b[200~" + message + "\x1b[201~")
 				r.waitText("second line")
+				assertIntuitiveCounts(t, f, 0)
+				clickIntuitiveControl(t, r, "Continue")
+				r.modalReady("Project")
+				clickIntuitiveControl(t, r, "Fixture project")
+				r.waitText("[Create & send]")
+				r.send("\x1b[C")
+				r.waitText("[Cancel]")
+				r.send("\x1b[A")
+				r.waitText("[Create & send]")
+				assertIntuitiveCounts(t, f, 0)
 				for _, choice := range []struct{ action, heading, value string }{
 					{"Model", "Model · New conversation", "Other Model"},
 					{"Effort", "Reasoning · New conversation", "High"},
-					{"Tier", "Service tier · New conversation", "Fast"},
-					{"Workspace", "╭─ Workspace", "Shared project root"},
 				} {
 					clickIntuitiveControl(t, r, choice.action)
 					r.modalReady(choice.heading)
 					clickIntuitiveControl(t, r, choice.value)
-					r.waitText("First message")
+					r.waitText("[Create & send]")
 					assertIntuitiveCounts(t, f, 0)
 				}
 				clickIntuitiveControl(t, r, "Cancel")
 				waitWorkspaceFrame(t, r, func(view string) bool {
-					return !strings.Contains(view, "First message") && !strings.Contains(view, "╭─ Workspace") && strings.Contains(view, "Alpha")
+					return !strings.Contains(view, "Create & send") && !strings.Contains(view, "╭─ New conversation") && strings.Contains(view, "Alpha")
 				}, "source after launch cancellation")
 				if a.Status().ThreadID != "thread-a" || a.Draft() != sourceDraft {
 					t.Fatal("Cancel changed the source identity or exact draft")
 				}
 				intuitiveCommand(r, "New conversation")
+				r.modalReady("╭─ New ")
+				r.waitText("second line")
+				clickIntuitiveControl(t, r, "Continue")
 				r.modalReady("Project")
 				clickIntuitiveControl(t, r, "Fixture project")
-				r.waitText("First message")
+				r.waitText("[Create & send]")
 				r.waitText(title)
-				r.waitText("second line")
+				if saved, ok := state.LaunchDraft("env-a", "project-launch/project-a"); !ok || saved.Message != message {
+					t.Fatal("cancelled launch lost exact persisted message")
+				}
 				assertIntuitiveCounts(t, f, 0)
 				clickIntuitiveControl(t, r, "Create & send")
 				// Create returns a new Session to the UI; the old source Session
 				// is intentionally closed. Observe the actual replacement view.
 				waitWorkspaceFrame(t, r, func(view string) bool {
-					return strings.Contains(view, title) && !strings.Contains(view, "First message") && state.Pending("env-a", false) == nil
+					return strings.Contains(view, title) && !strings.Contains(view, "Create & send") && state.Pending("env-a", false) == nil
 				}, "acknowledged newly created source")
 				f.mu.Lock()
 				var launch object
@@ -167,7 +171,7 @@ func TestIntuitiveMouseProgramLaunchFieldsChoosersCancelAndOneCreate(t *testing.
 				}
 				current := clone(f.threads["thread-a"]["thread"])
 				f.mu.Unlock()
-				selection := object{"instanceId": "fixture-provider", "model": "fixture-other", "options": []any{object{"id": "reasoningEffort", "value": "high"}, object{"id": "serviceTier", "value": "fast"}}}
+				selection := object{"instanceId": "fixture-provider", "model": "fixture-other", "options": []any{object{"id": "reasoningEffort", "value": "high"}, object{"id": "serviceTier", "value": "default"}}}
 				if launch == nil || launch["title"] != title || launch["initialMessage"].(object)["text"] != message || launch["projectId"] != "project-a" || !reflect.DeepEqual(launch["workspaceStrategy"], object{"type": "root"}) || !reflect.DeepEqual(launch["modelSelection"], selection) {
 					t.Fatalf("mouse Create changed reviewed payload: %+v", launch)
 				}
@@ -424,11 +428,11 @@ func TestIntuitiveMouseProgramPlainTextSubmitCancelAndExactDraft(t *testing.T) {
 				clickIntuitiveControl(t, r, "Submit")
 				r.modalReady("╭─ Project")
 				clickIntuitiveControl(t, r, "Fixture project")
-				r.waitText("First message")
+				r.waitText("[Create & send]")
 				r.waitText("First exact task")
 				assertIntuitiveCounts(t, f, 0)
 				clickIntuitiveControl(t, r, "Cancel")
-				waitWorkspaceFrame(t, r, func(view string) bool { return !strings.Contains(view, "First message") }, "paused explicit batch review")
+				waitWorkspaceFrame(t, r, func(view string) bool { return !strings.Contains(view, "Create & send") }, "paused explicit batch review")
 				if a.Status().ThreadID != "thread-a" || a.Draft() != draft || state.Draft("env-a", source) != tasks {
 					t.Fatal("plain Submit implicitly launched or consumed the reviewed list")
 				}

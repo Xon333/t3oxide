@@ -58,7 +58,7 @@ func TestThreadStatusRenderersDistinguishNativeStates(t *testing.T) {
 						d.Render(&nav, l, 0, item)
 						for _, output := range []string{nav.String(), strings.Split(m.inboxListView(width, 4), "\n")[0]} {
 							plain := ansi.Strip(output)
-							if !strings.HasSuffix(plain, tc.label) || !strings.Contains(plain, projectBubble(thread.Project, "unknown")) || !strings.Contains(plain, "I") || ansi.StringWidth(output) != width {
+							if !strings.HasSuffix(plain, strings.Fields(tc.label)[0]) || !strings.Contains(plain, projectBubble(thread.Project, "unknown")) || !strings.Contains(plain, "I") || ansi.StringWidth(output) != width {
 								t.Fatalf("width %d lost badge/title/identity or bounds: %q", width, plain)
 							}
 							if selected && !strings.HasPrefix(plain, ">") {
@@ -66,8 +66,9 @@ func TestThreadStatusRenderersDistinguishNativeStates(t *testing.T) {
 							}
 							p := colors(theme)
 							want := map[string]string{"operation": p.operation, "warning": p.warning, "error": p.error, "plain": p.fg}[tc.role]
-							assertSemanticSlotText(t, output, tc.label, want)
-							for _, cell := range semanticSlotCells(t, output, tc.label) {
+							badgeOutput := ansi.TruncateLeft(output, width-1, "")
+							assertSemanticSlotText(t, badgeOutput, strings.Fields(tc.label)[0], want)
+							for _, cell := range semanticSlotCells(t, badgeOutput, strings.Fields(tc.label)[0]) {
 								if cell.Style.Attrs&uv.AttrBold == 0 {
 									t.Fatal("badge lost bold emphasis")
 								}
@@ -98,7 +99,7 @@ func TestThreadStatusAgentBoxRealViewBoundsAndLiveDecision(t *testing.T) {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		out := m.View().Content
 		plain := ansi.Strip(out)
-		if !strings.Contains(plain, "! Failed") || !strings.Contains(plain, "1 request") || !strings.Contains(plain, "+ Completed") || !strings.Contains(plain, "> Active") {
+		if !strings.Contains(plain, "! Failed") || !strings.Contains(plain, "1 request") || !strings.Contains(plain, "  +") || !strings.Contains(plain, "  >") {
 			t.Fatalf("%v lost live failure/request or list distinctions: %q", size, plain)
 		}
 		geometry := m.inboxGeometry()

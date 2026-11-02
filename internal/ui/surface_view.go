@@ -193,6 +193,37 @@ func (m *Model) launchLayout(width, height int) renderedSurface {
 	if d.details {
 		return m.modalLayout()
 	}
+	if f.review.Stage != "" {
+		var parts []string
+		var hits []hitZone
+		if f.review.Stage == "message" || f.focus == 0 {
+			parts = append(parts, m.modalInput.View())
+			hits = append(hits, hitZone{x: 0, y: 0, width: width, height: m.modalInput.Height(), action: "launch-field", args: "message"})
+		} else {
+			parts = append(parts, p.plain().Render(fitLine(safeText(m.launchInput().Message), width)))
+		}
+		if f.focus == 1 {
+			parts = append(parts, m.launchTitle.View())
+		}
+		if f.review.Stage == "ready" {
+			parts = append(parts, p.subtle().Render(fitLine(launchLocation(f.review.Location), width)), p.plain().Render(fitLine(safeText(f.review.Summary), width)))
+		}
+		var controls []surfaceControl
+		for i, action := range m.launchActions() {
+			label := m.launchActionLabel(action)
+			if f.focus == i+2 {
+				label = p.selection().Render("[" + label + "]")
+			}
+			controls = append(controls, surfaceControl{label: label, action: "launch-action", args: action, disabled: action == "create" && f.review.Unavailable != ""})
+		}
+		buttons := controlSurface(width, controls)
+		hits = append(hits, moveHits(buttons.hits, 0, lipgloss.Height(strings.Join(parts, "\n")))...)
+		parts = append(parts, buttons.content)
+		if f.review.Unavailable != "" {
+			parts = append(parts, p.subtle().Render(fitLine(f.review.Unavailable, width)))
+		}
+		return renderedSurface{content: strings.Join(parts, "\n"), hits: hits}
+	}
 	location := launchLocation(f.review.Location)
 	message := m.modalInput.View()
 	if f.preservedMessage != "" {

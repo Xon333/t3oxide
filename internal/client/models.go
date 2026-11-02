@@ -272,6 +272,9 @@ func (a *Session) applyModel(ctx context.Context, c *ModelCatalog, selected conf
 	if env == nil || thread != c.ThreadID {
 		return result, errors.New("conversation changed while choosing a model")
 	}
+	if err := env.CheckProviderInstance(selected.InstanceID); err != nil {
+		return result, err
+	}
 	if next {
 		if !overrideEnabled {
 			return result, errors.New("this host does not support message model overrides")
@@ -304,6 +307,9 @@ func (a *Session) applyModel(ctx context.Context, c *ModelCatalog, selected conf
 func (a *Session) settings(ctx context.Context) (Result, error) {
 	catalog, err := a.Catalog(ctx)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := a.checkModelProviderPolicy(catalog.InstanceID); err != nil {
 		return Result{}, err
 	}
 	snapshot := a.snapshot()
@@ -352,6 +358,9 @@ func (a *Session) pickModel(ctx context.Context, args string) (Result, error) {
 	next, args := nextArgument(args)
 	c, err := a.Catalog(ctx)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := a.checkModelProviderPolicy(c.InstanceID); err != nil {
 		return Result{}, err
 	}
 	base := a.modelBase(c, next)
@@ -424,6 +433,9 @@ func (a *Session) pickOption(ctx context.Context, kind, args string) (Result, er
 	next, arg := nextArgument(args)
 	c, err := a.Catalog(ctx)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := a.checkModelProviderPolicy(c.InstanceID); err != nil {
 		return Result{}, err
 	}
 	base := a.modelBase(c, next)

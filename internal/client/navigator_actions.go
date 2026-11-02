@@ -135,20 +135,48 @@ func (a *Session) NavigatorPin(ctx context.Context, page NavigatorPage, thread s
 	if row.Inbox.PinnedAt != "" {
 		action = "unpin"
 	}
+	return a.navigatorDisposition(ctx, env, row, action)
+}
+
+// NavigatorReview uses the same revision-bound durable lane as native pinning.
+// The adapter rejects hiding active work or unanswered requests.
+func (a *Session) NavigatorReview(ctx context.Context, page NavigatorPage, thread, action string) (Result, error) {
+	env, row, err := a.navigatorOffered(page, thread)
+	if err != nil {
+		return Result{}, err
+	}
+	if action != "settle" && action != "unsettle" {
+		return Result{}, errors.New("review action was not offered")
+	}
+	if row.Inbox == nil || row.Inbox.NativeRevision == "" {
+		return Result{}, errors.New("native review revision unavailable; refresh before acting")
+	}
+	if action == "settle" && (row.Inbox.PendingRequestCount > 0 || row.Inbox.PendingChildRequest || row.Inbox.QueuedCount > 0 || row.Inbox.Working != nil && *row.Inbox.Working) {
+		return Result{}, errors.New("answer pending requests and finish native work before hiding this conversation")
+	}
+	return a.navigatorDisposition(ctx, env, row, action)
+}
+
+func (a *Session) navigatorDisposition(ctx context.Context, env config.Environment, row Thread, action string) (Result, error) {
+	thread := row.ID
 	conn, features, err := nativeConnectionCapabilities(ctx, env)
 	if err != nil {
 		return Result{}, err
 	}
 	defer closeNativeConnection(conn)
-	if !boolValue(features["threadPinning"]) {
-		return Result{}, errors.New("native pinning unavailable: this host does not advertise threadPinning; use native T3")
+	capability := "threadPinning"
+	if action == "settle" || action == "unsettle" {
+		capability = "nativeWorkflows"
+	}
+	if !boolValue(features[capability]) {
+		return Result{}, errors.New("native thread action unavailable on this host")
 	}
 	fields := map[string]any{"threadId": thread, "action": action, "expectedRevision": row.Inbox.NativeRevision}
 	key := env.EnvironmentID + "/normal"
 	a.manager.mu.Lock()
 	if a.manager.closed || a.manager.inFlight[key] || a.manager.State.Pending(env.EnvironmentID, false) != nil {
 		a.manager.mu.Unlock()
-		return Result{}, errors.New("a saved or pending action needs review before pinning")
+		return Result{}, errors.New("a saved or pending action needs review before changing visibility")
 	}
 	a.manager.inFlight[key] = true
 	a.manager.operations.Add(1)
@@ -163,7 +191,7 @@ func (a *Session) NavigatorPin(ctx context.Context, page NavigatorPage, thread s
 	id := wire.NewID()
 	record := map[string]any{"environmentId": env.EnvironmentID, "id": id, "op": "thread-action", "threadId": thread, "action": action, "expectedRevision": row.Inbox.NativeRevision}
 	if err = a.manager.State.SavePending(env.EnvironmentID, false, record); err != nil {
-		return Result{}, fmt.Errorf("nothing sent: preserve pin identity: %w", err)
+		return Result{}, fmt.Errorf("nothing sent: preserve thread action identity: %w", err)
 	}
 	reply, err := conn.Request(ctx, "thread-action", fields, id)
 	if err != nil {
@@ -175,7 +203,7 @@ func (a *Session) NavigatorPin(ctx context.Context, page NavigatorPage, thread s
 		return Result{}, err
 	}
 	if stringValue(reply["threadId"]) != thread || stringValue(reply["action"]) != action {
-		return Result{}, errors.New("pin acknowledgement identity mismatch; original action remains saved")
+		return Result{}, errors.New("thread action acknowledgement identity mismatch; original action remains saved")
 	}
 	if err = a.manager.State.Acknowledge(env.EnvironmentID, false, id, thread, ""); err != nil {
 		return Result{}, err
@@ -184,5 +212,11 @@ func (a *Session) NavigatorPin(ctx context.Context, page NavigatorPage, thread s
 	if action == "unpin" {
 		text = "Unpinned"
 	}
-	return Result{Text: text + " in native T3. Refresh applies the current shelf order."}, nil
+	if action == "settle" {
+		text = "Reviewed"
+	}
+	if action == "unsettle" {
+		text = "Restored"
+	}
+	return Result{Text: text}, nil
 }

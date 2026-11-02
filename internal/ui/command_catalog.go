@@ -175,6 +175,9 @@ func (m *Model) commandUnavailable(name string) string {
 func (m *Model) paletteItems() []list.Item {
 	var items []list.Item
 	for _, spec := range m.commandCatalog() {
+		if spec.name == "native-defaults" {
+			continue
+		}
 		if spec.name == "delivery" {
 			for _, mode := range []string{"auto", "queue", "steer"} {
 				items = append(items, choiceItem{title: "Delivery · " + mode, command: spec.name, args: mode})
@@ -218,6 +221,9 @@ func (m *Model) paletteItems() []list.Item {
 			description += spec.binding.Help().Key
 		}
 		row := choiceItem{title: spec.title, description: description, command: spec.name}
+		if spec.binding.Enabled() {
+			row.shortcut = spec.binding.Help().Key
+		}
 		if reason := m.commandUnavailable(spec.name); reason != "" {
 			row.disabled, row.description = true, description+" · "+reason
 		}

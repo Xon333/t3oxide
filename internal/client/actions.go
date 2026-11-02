@@ -90,6 +90,10 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 		return nil, errors.New("writes unavailable: select a connected, writable conversation")
 	}
 	conn, env, thread, sessionCtx := a.conn, *a.environment, a.thread, a.ctx
+	overrideSupported := a.features["messageModelOverride"]
+	if op == "launch" {
+		overrideSupported = a.features["launchModelSelection"]
+	}
 	// An explicit same-ID answer retry retains its original journaled target,
 	// even if a newer live projection has already removed that offer.
 	historicalAnswer := op == "answer" && s != nil && s.Metadata.Historical && s.Metadata.ThreadID == thread &&
@@ -112,6 +116,11 @@ func (a *Session) perform(ctx context.Context, op string, fields map[string]any,
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if savedID == "" {
+		if err := guardProviderOperation(env, op, fields, s, overrideSupported); err != nil {
+			return nil, err
+		}
 	}
 	requestCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

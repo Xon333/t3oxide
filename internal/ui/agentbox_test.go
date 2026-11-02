@@ -191,7 +191,7 @@ func TestAgentBoxRealViewSizesAndSyntheticCaptures(t *testing.T) {
 			m.restoreFocus()
 			view := m.View().Content
 			plain := ansi.Strip(view)
-			if !strings.Contains(plain, "AgentBox") || !strings.Contains(plain, "Needs you") || !strings.Contains(plain, "1 Changes") {
+			if !strings.Contains(plain, "AgentBox") || !strings.Contains(plain, "Inbox") || !strings.Contains(plain, "1 Changes") {
 				t.Fatalf("missing actionable inbox at %v:\n%s", size, plain)
 			}
 			lines := strings.Split(view, "\n")

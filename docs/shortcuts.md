@@ -121,7 +121,7 @@ The palette and slash completion use `internal/ui/command_catalog.go` plus the s
 
 | Command | Effect |
 | --- | --- |
-| `/new [title]` | Choose an existing project in the creation environment, resolve native defaults, and review before Create. |
+| `/new [title]` | Write a first message, choose an existing project, then launch with native defaults; model and effort changes are optional. |
 | `/new-same [title]` | Preselect only the current project's exact ID; environment, model/options and workspace still use creation defaults. |
 | `/switch [words]` | Open conversation navigation; optional words search its native metadata. Highlighting alone does not attach. |
 | `/env` | Choose an environment explicitly. |

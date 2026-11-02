@@ -832,6 +832,10 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 			m.openDetail(msg.result.DetailTitle, m.readableClientDetail(msg.name, msg.result.Detail))
 		}
 		if msg.err == nil {
+			if msg.name == "navigator-review" {
+				m.resetNavigatorMembership()
+				commands = append(commands, m.loadNavigator(m.navigator.profile, m.navigator.query, true))
+			}
 			if msg.name == "send" && msg.delivery == m.nextDelivery && msg.deliverySerial == m.deliverySerial {
 				m.nextDelivery = ""
 			}

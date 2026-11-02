@@ -16,6 +16,7 @@ func TestNativeSameProjectNewUsesCreationProfileAndOnlyProjectIdentity(t *testin
 	source := newFixture(t)
 	target := newEnvironmentFixture(t, "env-b", "creation", "Creation")
 	target.profile.DefaultForNew = true
+	target.profile.AllowedProviderInstanceIDs = []string{"fixture-provider"}
 	source.mu.Lock()
 	source.threads["thread-a"]["thread"].(object)["modelSelection"] = object{"instanceId": "fixture-provider", "model": "fixture-other", "options": []any{object{"id": "reasoningEffort", "value": "high"}}}
 	source.threads["thread-a"]["thread"].(object)["runtimeMode"] = "full-access"
@@ -43,6 +44,7 @@ func TestNativeSameProjectNewUsesCreationProfileAndOnlyProjectIdentity(t *testin
 	before := source.requestCounts()
 	launch := featureCommand(a, "new-same", "")
 	p := featurePrompt(t, a)
+
 	if p.Question.Surface != client.SurfaceLaunch || p.Question.LaunchReview.Location.ProfileID != target.profile.ID || p.Question.LaunchReview.Location.ProjectID != "project-a" || p.Question.LaunchReview.Location.ThreadID != "" || p.Question.LaunchReview.Location.Workspace != "/fixture/project-root" || p.Question.LaunchReview.Selection.Model != "fixture-model" || !strings.Contains(p.Question.LaunchReview.Summary, "approval-required") {
 		t.Fatalf("same-project carried non-project state: %+v", p.Question)
 	}

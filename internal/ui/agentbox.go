@@ -633,7 +633,7 @@ func (m *Model) fileInboxWork() tea.Cmd {
 
 func (m *Model) inboxViews() tea.Cmd {
 	items := []list.Item{}
-	for _, view := range []struct{ id, label string }{{"needs", "Needs you"}, {"working", "Working"}, {"queued", "Queued"}, {"later-view", "Later"}, {"done", "Reviewed"}, {"all", "All"}, {"unknown", "Unknown / unavailable"}} {
+	for _, view := range []struct{ id, label string }{{"needs", "Inbox"}, {"working", "Working"}, {"queued", "Queued"}, {"later-view", "Later"}, {"done", "Reviewed"}, {"all", "All"}, {"unknown", "Unknown / unavailable"}} {
 		items = append(items, choiceItem{title: view.label, command: "inbox", args: view.id})
 	}
 	items = append(items, choiceItem{title: "Environment, project, priority", command: "inbox", args: "filters"}, choiceItem{title: "More / previous native pages", command: "inbox", args: "pages"}, choiceItem{title: "Refresh", command: "inbox", args: "refresh"}, choiceItem{title: "Info", command: "inbox", args: "info"})

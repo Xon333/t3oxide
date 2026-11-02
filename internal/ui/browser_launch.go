@@ -466,7 +466,13 @@ func (m *Model) storeLaunchDraft() error {
 	return m.persistLaunchCheckpoint()
 }
 
-func newLaunchForm(review *client.LaunchReview) *launchForm { return &launchForm{review: review} }
+func newLaunchForm(review *client.LaunchReview) *launchForm {
+	f := &launchForm{review: review}
+	if review.Stage == "ready" {
+		f.focus = 2
+	}
+	return f
+}
 
 func (m *Model) initLaunchEditors() {
 	f := m.dialog.launch
@@ -567,6 +573,9 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.restoreFocus()
 		}
 	case "enter":
+		if f.review.Stage == "message" && f.focus == 0 {
+			return m.launchAction("continue")
+		}
 		if f.focus >= 2 {
 			if actions[f.focus-2] == "editor" {
 				return m.editLaunch()
@@ -591,8 +600,26 @@ func (m *Model) launchKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) launchActions() []string {
+	if m.dialog.launch.review.Stage != "" {
+		primary := "create"
+		if m.dialog.launch.review.Stage == "message" {
+			primary = "continue"
+		}
+		actions := []string{primary, "cancel"}
+		if m.dialog.launch.review.Stage == "ready" {
+			for _, action := range []string{"model", "effort"} {
+				if slices.Contains(m.dialog.launch.review.Actions, action) {
+					actions = append(actions, action)
+				}
+			}
+		}
+		if m.dialog.launch.review.Unavailable != "" && slices.Contains(m.dialog.launch.review.Actions, "defaults") {
+			actions = append(actions, "defaults")
+		}
+		return append(actions, "editor")
+	}
 	var actions []string
-	for _, action := range []string{"create", "cancel", "model", "effort", "tier", "workspace", "defaults", "native-defaults", "pin-destination", "destination", "project", "environment"} {
+	for _, action := range []string{"continue", "create", "cancel", "model", "effort", "tier", "workspace", "defaults", "pin-destination", "destination", "project", "environment"} {
 		if slices.Contains(m.dialog.launch.review.Actions, action) {
 			actions = append(actions, action)
 		}

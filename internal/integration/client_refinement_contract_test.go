@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/Xon333/t3oxide/internal/client"
 	"github.com/Xon333/t3oxide/internal/config"
 )
@@ -39,6 +41,9 @@ func offeredThreadID(t *testing.T, p *client.Prompt, thread string) string {
 func nativeLaunchReview(t *testing.T, a *client.Session) *client.Prompt {
 	t.Helper()
 	p := featurePrompt(t, a)
+	if p.Question.LaunchReview != nil && p.Question.LaunchReview.Stage == "ready" {
+		return p
+	}
 	if p.Question.Title != "Project" {
 		t.Fatalf("New did not offer the native project list: %+v", p.Question)
 	}
@@ -662,11 +667,9 @@ func TestRefinementLiveLaunchTypingCtrlQPersistsThroughStateReopen(t *testing.T)
 	program.send("\t\x10")
 	program.modalReady("Commands")
 	program.send("new\r")
-	program.modalReady("Project")
-	program.send("\r")
-	program.modalReady("First message")
+	program.modalReady("╭─ New ─")
 	message := "  unsent launch\nsecond line  "
-	program.send(message)
+	program.program.Send(tea.PasteMsg{Content: message})
 	program.waitText("second line")
 	program.send("\x11")
 	select {
@@ -689,7 +692,7 @@ func TestRefinementLiveLaunchTypingCtrlQPersistsThroughStateReopen(t *testing.T)
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if got := reopened.Draft("env-a", "\x00new/project-launch/project-a"); got != message {
+	if got := reopened.Draft("t3oxide-client", "\x00new/new-message"); got != message {
 		t.Fatalf("live launch draft lost on quit/reopen: %q", got)
 	}
 	if got := reopened.Draft("env-a", "thread-a"); got != source {

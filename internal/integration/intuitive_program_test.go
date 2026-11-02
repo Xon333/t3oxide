@@ -92,15 +92,18 @@ func TestIntuitiveTitleEnterFocusesCreateBeforeOneExactLaunch(t *testing.T) {
 	r.send("\t\x10") // Reading focus makes Ctrl+P a command action.
 	r.modalReady("Commands")
 	r.send("New conversation\r")
-	r.modalReady("Project")
-	r.send("\r")
-	r.waitText("First message")
+	r.modalReady("╭─ New ─")
 	const message = "  first message\nsecond line  "
 	const title = "Literal /model title"
 	r.program.Send(tea.PasteMsg{Content: message})
 	r.waitText("second line")
-	r.send("\t")
-	r.send("\x01\x0b" + title + "\r") // Replace the prefilled title using its native editor.
+	r.send("\r")
+	r.modalReady("Project")
+	r.send("\r")
+	r.waitText("[Create & send]")
+	r.send("\x1b[Z") // Optional title editor, immediately before Launch.
+	r.waitText("New conversation")
+	r.send("\x01\x0b" + title + "\r") // Enter returns to explicit Launch.
 	r.waitText("[Create & send]")
 	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
 		t.Fatal("finishing the title dispatched before explicit Create")

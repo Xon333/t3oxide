@@ -83,27 +83,26 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 	r, _ := startAppTUI(t, session)
 	r.waitText("Initial Markdown for Alpha")
 	r.send("/new\x1d")
-	r.modalReady("Project")
-	r.send("\r")
-	r.waitText("First message")
+	r.modalReady("╭─ New ─")
 	const message = "Exact first message before settings"
 	r.program.Send(tea.PasteMsg{Content: message})
 	r.waitText(message)
-	r.send(strings.Repeat("\t", 4)) // Title, Create, Cancel, Model.
+	r.send("\r")
+	r.modalReady("Project")
+	r.send("\r")
+	r.waitText("[Create & send]")
+	r.send("\t\t") // Optional Model.
 	r.waitText("[Model]")
 	r.send("\r")
 	r.modalReady("Model · New conversation")
 	r.send("\x1b")
-	r.waitText("First message")
+	r.waitText("[Create & send]")
 	r.waitText(message)
-	r.send(strings.Repeat("\t", 5)) // Title, Create, Cancel, Model, Effort.
-	for _, control := range []string{"Effort", "Tier", "Workspace", "Reset this launch", "Native defaults", "Pin destination", "Change destination", "Project", "Environment", "Editor"} {
-		r.waitText("[" + control + "]")
-		if control != "Editor" {
-			r.send("\t")
-		}
-	}
-	r.send(strings.Repeat("\t", 3)) // Message, Title, Create.
+	r.send("\t\t\t") // Optional Effort.
+	r.waitText("[Effort]")
+	r.send("\r")
+	r.modalReady("Reasoning · New conversation")
+	r.send("\x1b")
 	r.waitText("[Create & send]")
 	r.send("\t")
 	r.waitText("[Cancel]")
@@ -111,9 +110,12 @@ func TestBubbleTeaLaunchReviewReachesLocalSettingsBeforeCreate(t *testing.T) {
 		t.Fatal("local review/settings focus dispatched a mutation")
 	}
 	r.send("\r") // Explicit Cancel, never Create.
-	r.waitText("Initial Markdown for Alpha")
+	waitWorkspaceFrame(t, r, func(v string) bool {
+		return strings.Contains(v, "Initial Markdown for Alpha") && !strings.Contains(v, "╭─ New conversation")
+	}, "launch canceled")
+	r.waitEmptyComposer() // The command receipt clears only its own /new text.
 	if state.Draft("env-a", "\x00new/project-launch/project-a") != message || session.Draft() != "" {
-		t.Fatal("review cancellation crossed launch/source draft slots")
+		t.Fatalf("review cancellation crossed launch/source draft slots: launch=%q source=%q", state.Draft("env-a", "\x00new/project-launch/project-a"), session.Draft())
 	}
 	r.send("\x11")
 	select {

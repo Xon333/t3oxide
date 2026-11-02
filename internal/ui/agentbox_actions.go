@@ -89,7 +89,7 @@ func (m *Model) markInboxReviewed() tea.Cmd {
 	m.agentbox.offer = &target
 	items := []list.Item{choiceItem{title: "Inspect actual changes", command: "inbox", args: "diff"}}
 	if row.Thread.Inbox.Settled {
-		items = append(items, choiceItem{title: "Reopen in Needs you", command: "inbox", args: "unsettle"})
+		items = append(items, choiceItem{title: "Reopen in Inbox", command: "inbox", args: "unsettle"})
 	} else {
 		items = append(items, choiceItem{title: "Mark reviewed", description: "Settle this native thread; no commit, push or merge", command: "inbox", args: "settle"})
 	}

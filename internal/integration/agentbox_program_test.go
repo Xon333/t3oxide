@@ -121,13 +121,14 @@ func TestAgentBoxProgramFilesRealIsolatedTaskFromNativeReview(t *testing.T) {
 	r.send("\x1b[98;7u")
 	r.waitText("AgentBox")
 	r.send("n")
-	r.waitText("Project")
-	r.send("\r")
-	r.waitText("First message")
+	r.modalReady("╭─ New ─")
 	const brief = "  Investigate export handling\nkeep the selected path  "
 	r.program.Send(tea.PasteMsg{Content: brief})
 	r.waitText("keep the selected path")
-	r.send("\t\x01\x0bNative task from inbox\r")
+	r.send("\t\x01\x0bNative task from inbox")
+	r.send("\x1b[Z\r") // Back to message; Continue, then project.
+	r.modalReady("Project")
+	r.send("\r")
 	r.waitText("[Create & send]")
 	if effects, _ := f.counts(); effects != 0 {
 		t.Fatal("reviewed title or brief launched without Create")

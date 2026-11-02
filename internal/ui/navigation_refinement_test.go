@@ -54,7 +54,7 @@ func TestRefinementNavigatorFocusedSlotsSurviveNewShelfTitleAndRemoval(t *testin
 			t.Fatalf("metadata moved drawn target %q: before=%+v after=%+v", key, hit, next)
 		}
 	}
-	if !m.navigator.orderDeferred || !strings.Contains(plain, "! Failed") || !strings.Contains(plain, "?1") || !strings.Contains(plain, "unique end α") {
+	if !m.navigator.orderDeferred || !strings.Contains(plain, "  !") || !strings.Contains(plain, "?1") {
 		t.Fatalf("frozen order/title tail/request cue missing: %s", plain)
 	}
 	page.Page.Threads = page.Page.Threads[1:]
@@ -78,9 +78,9 @@ func TestRefinementNavigatorCollapsedShelfRetainsCueAndRealToggle(t *testing.T) 
 	page.Page.Threads[1].Inbox = &wire.InboxMetadata{PendingChildRequest: true}
 	m.navigator.focused = false
 	m.Update(navigatorMsg{generation: m.generation, serial: m.navigator.serial, profile: "source", page: page})
-	m.toggleNavigatorShelf("Needs you")
+	m.toggleNavigatorShelf("Inbox")
 	plain := ansi.Strip(m.View().Content)
-	if !strings.Contains(plain, "Needs you (2) · ?2") || strings.Contains(plain, "No conversations") {
+	if !strings.Contains(plain, "Inbox (2) · ?2") || strings.Contains(plain, "No conversations") {
 		t.Fatalf("collapsed last shelf hid its pending cue/toggle: %s", plain)
 	}
 	found := false
@@ -162,17 +162,52 @@ func TestRefinementNavigatorPinAndPreviewKeysDoNotStealFilterText(t *testing.T) 
 	}
 }
 
-func TestRefinementExpandedTitleKeepsDistinctUnicodeEndsWithinCells(t *testing.T) {
-	for _, width := range []int{1, 2, 22, 34} {
-		a := expandedTitleLines(strings.Repeat("Same prefix 界 ", 20)+"尾α", width)
-		b := expandedTitleLines(strings.Repeat("Same prefix 界 ", 20)+"尾β", width)
-		for _, line := range append(a[:], b[:]...) {
-			if ansi.StringWidth(line) > width {
-				t.Fatalf("expanded title exceeded cell width: %q", line)
-			}
+func TestSidebarSelectionKeepsOneLineRowsAndFullInfo(t *testing.T) {
+	m := refinementNavigation(t, 8)
+	before := navigatorRowHits(m)
+	m.navigator.list.Select(2)
+	after := navigatorRowHits(m)
+	for key, hit := range before {
+		if hit.height != 1 || after[key].height != 1 || hit.y != after[key].y {
+			t.Fatalf("selection shifted row %s", key)
 		}
-		if width >= 2 && a[1] == b[1] {
-			t.Fatal("same-prefix selected titles hid their distinct ending")
+	}
+	page, row, ok := m.navigatorSource()
+	if !ok {
+		t.Fatal("missing exact source")
+	}
+	m.showNavigatorDetail(page, row)
+	if !strings.Contains(m.detail, "Status: "+row.Status) || !strings.Contains(m.detail, row.Title) {
+		t.Fatal("Info lost textual status/title")
+	}
+}
+
+func TestNavigatorOffersNativeReviewAndRestoreForExactRow(t *testing.T) {
+	m := refinementNavigation(t, 2)
+	page := m.navigator.pages["source"]
+	page.Page.Threads[0].Inbox = &wire.InboxMetadata{NativeRevision: "native-review"}
+	m.Update(navigatorMsg{generation: m.generation, serial: m.navigator.serial, profile: "source", page: page})
+	m.openNavigatorActions()
+	found := false
+	for _, raw := range m.dialog.list.Items() {
+		if item, ok := raw.(choiceItem); ok && strings.HasSuffix(item.args, ":settle") {
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("review action unavailable for offered native revision")
+	}
+	m.dialog = nil
+	page.Page.Threads[0].Inbox.Settled = true
+	m.Update(navigatorMsg{generation: m.generation, serial: m.navigator.serial, profile: "source", page: page})
+	m.openNavigatorActions()
+	found = false
+	for _, raw := range m.dialog.list.Items() {
+		if item, ok := raw.(choiceItem); ok && strings.HasSuffix(item.args, ":unsettle") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("native reviewed conversation cannot be restored")
 	}
 }

@@ -17,7 +17,7 @@ import (
 func inboxViewLabel(view string) string {
 	switch view {
 	case "needs":
-		return "Needs you"
+		return "Inbox"
 	case "working":
 		return "Working"
 	case "queued":
@@ -130,7 +130,7 @@ func (m *Model) inboxGeometry() inboxGeometry {
 		queryRows = 1
 		g.firstRow++
 	}
-	g.rows = max(1, g.body-queryRows-2-m.inboxSelectionExtra(g.body-queryRows))
+	g.rows = max(1, g.body-queryRows-2)
 	g.start = max(0, max(0, m.inboxIndex())-g.rows+1)
 	return g
 }
@@ -151,8 +151,7 @@ func (m *Model) inboxListView(width, height int) string {
 	} else if a.query.Value() != "" {
 		lines = append(lines, p.subtle().Render(fitLine("/ "+a.query.Value(), width)))
 	}
-	extra := m.inboxSelectionExtra(height - len(lines))
-	available := max(1, height-len(lines)-2-extra)
+	available := max(1, height-len(lines)-2)
 	index := max(0, m.inboxIndex())
 	start := max(0, index-available+1)
 	end := min(len(a.rows), start+available)
@@ -162,7 +161,7 @@ func (m *Model) inboxListView(width, height int) string {
 		if n, ok := a.prefs.Tasks[row.Target.Key()]; ok {
 			priority = []string{"L", "M", "H", "U"}[n]
 		}
-		badge := threadStatusBadge(row.Thread)
+		badge := threadStatusBadge(row.Thread).compact()
 		prefix := "  "
 		if m.inboxAttached(row) {
 			prefix = "* "
@@ -208,23 +207,6 @@ func (m *Model) inboxListView(width, height int) string {
 		}
 		rendered := renderStatusRow(line, identity, badge, p, style, marker)
 		lines = append(lines, rendered)
-		if row.Target.Key() == a.selected && extra > 0 {
-			titleLines := expandedTitleLines(row.Thread.Title, max(1, width-2))
-			if extra == 3 {
-				lines = append(lines, p.selection().Render(fitLine("  "+titleLines[0], width)), p.selection().Render(fitLine("  "+titleLines[1], width)))
-			} else {
-				title := titleLines[1]
-				if strings.TrimSpace(title) == "" {
-					title = titleLines[0]
-				}
-				lines = append(lines, p.selection().Render(fitLine("  "+title, width)))
-			}
-			context := row.Thread.Project + " · " + row.Environment + " / " + row.Target.ProfileID
-			if row.Thread.ProviderInstanceID != "" {
-				context += " · " + row.Thread.ProviderInstanceID
-			}
-			lines = append(lines, p.subtle().Render(fitLine("  "+safeText(context), width)))
-		}
 	}
 	if len(a.rows) == 0 {
 		text := "No matching tasks"
@@ -441,13 +423,9 @@ func (m *Model) agentboxHitZones() []hitZone {
 	if len(m.agentbox.rows) == 0 {
 		hits = append(hits, moveHits(m.inboxEmptySearchSurface(g.left).hits, 0, g.firstRow+1)...)
 	}
-	extra := m.inboxSelectionExtra(g.body - (g.firstRow - 1))
 	for i := g.start; i < min(len(m.agentbox.rows), g.start+g.rows); i++ {
 		row := m.agentbox.rows[i]
 		height := 1
-		if row.Target.Key() == m.agentbox.selected {
-			height += extra
-		}
 		if !m.inboxSourceLoading(row.Target.ProfileID) {
 			hits = append(hits, hitZone{x: 0, y: y, width: g.left, height: height, action: "inbox-row", target: row.Target})
 		}
@@ -488,15 +466,6 @@ func (m *Model) inboxComposerControls() renderedSurface {
 	return controls
 }
 
-func (m *Model) inboxSelectionExtra(height int) int {
-	if height >= 8 && m.agentbox.selected != "" {
-		return 3
-	}
-	if height >= 7 && m.agentbox.selected != "" {
-		return 2
-	}
-	return 0
-}
 func (m *Model) inboxMachineKind(profile string) string {
 	for _, source := range m.agentbox.page.Sources {
 		if source.ProfileID == profile {

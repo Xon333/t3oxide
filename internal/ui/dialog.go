@@ -23,11 +23,16 @@ func (d compactChoiceDelegate) Render(w io.Writer, model list.Model, index int, 
 		model.SetFilterState(list.FilterApplied)
 		model.Select(selected)
 	}
+	if choice, ok := item.(choiceItem); ok && choice.shortcut != "" {
+		choice.title += "  " + choice.shortcut
+		item = choice
+	}
 	d.DefaultDelegate.Render(w, model, index, item)
 }
 
 type choiceItem struct {
 	id, title, description, command, args string
+	shortcut                              string
 	checked, multiple, disabled           bool
 }
 
@@ -134,7 +139,10 @@ func (m *Model) openPrompt(p *client.Prompt) {
 		}
 	}
 	if q.Surface == client.SurfaceLaunch && q.LaunchReview != nil {
-		m.launchPage = true
+		m.launchPage = q.LaunchReview.Stage == ""
+		if q.LaunchReview.Stage != "" {
+			m.browserPage = false
+		}
 		d.launch = newLaunchForm(q.LaunchReview)
 	}
 	if q.Kind == client.EnterText {
