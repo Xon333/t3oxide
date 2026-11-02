@@ -488,7 +488,7 @@ func (m *Model) startRender() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 	switch message.(type) {
-	case tea.MouseClickMsg:
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 	case tea.MouseWheelMsg:
 		// Pointer routing reads the last drawn bounds. A disabled or rejected
 		// wheel does not invalidate otherwise unchanged controls.
@@ -556,10 +556,17 @@ func (m *Model) Update(message tea.Msg) (model tea.Model, command tea.Cmd) {
 		if !ok || result.generation != m.generation || result.id != m.actionID {
 			return m, nil
 		}
-		if result.err == nil && client.CompletionReviewable(msg.row.Thread) {
+		reviewed := result.err == nil && msg.reviewed
+		if reviewed {
 			m.agentbox.reading = msg.row.Target.Key()
 		}
-		return m.Update(msg.message)
+		next, cmd := m.Update(msg.message)
+		if reviewed {
+			// Keep the reading row, but refresh its native revision and eligibility
+			// after the acknowledged visibility change before offering actions.
+			return next, tea.Batch(cmd, m.loadInbox(false))
+		}
+		return next, cmd
 	case toolSourceMsg:
 		return m, m.acceptToolSource(msg)
 	case navigatorOpenedMsg:

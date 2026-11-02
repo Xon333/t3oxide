@@ -392,7 +392,9 @@ func (m *Model) openInboxThread(reply bool) tea.Cmd {
 	if cmd == nil {
 		return nil
 	}
-	return func() tea.Msg { return inboxOpenedMsg{message: cmd(), row: row} }
+	return func() tea.Msg {
+		return inboxOpenedMsg{message: cmd(), row: row, reviewed: !reply && client.CompletionReviewable(row.Thread)}
+	}
 }
 
 func (m *Model) agentboxOwnsKeys() bool {
@@ -705,6 +707,7 @@ func (m *Model) inboxPages() tea.Cmd {
 }
 
 type inboxOpenedMsg struct {
-	message tea.Msg
-	row     client.InboxThread
+	reviewed bool
+	message  tea.Msg
+	row      client.InboxThread
 }

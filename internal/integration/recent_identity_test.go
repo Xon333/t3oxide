@@ -54,3 +54,32 @@ func TestRecentExactMetadataIgnoresTitleQueryAndBrowsePage(t *testing.T) {
 		t.Fatal("identity read mutated native work")
 	}
 }
+
+func TestPreviousConversationCompletesBrowserSwitchAndRestoresDraft(t *testing.T) {
+	f := newFixture(t)
+	manager, state := newAppManager(t, f)
+	if err := state.SetDraft(f.environmentID, "thread-a", "exact alpha draft"); err != nil {
+		t.Fatal(err)
+	}
+	session, err := manager.NewSession(f.profile.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := startAppTUI(t, session)
+	r.waitText("Alpha")
+	r.send("Alpha\r")
+	r.waitText("Initial Markdown for Alpha")
+	r.waitText("exact alpha draft")
+	r.send("\x0f\x15Beta\r")
+	r.waitText("Initial Markdown for Beta")
+	intuitiveCommand(r, "Previous conversation")
+	r.waitText("Initial Markdown for Alpha")
+	r.waitText("exact alpha draft")
+	if state.Draft(f.environmentID, "thread-a") != "exact alpha draft" {
+		t.Fatal("previous lost exact draft")
+	}
+	if effects, dispatches := f.counts(); effects != 0 || dispatches != 0 {
+		t.Fatal("running previous mutated work")
+	}
+	quitIntuitiveProgram(t, r)
+}

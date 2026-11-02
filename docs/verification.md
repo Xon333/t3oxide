@@ -601,3 +601,21 @@ physical latency, RAM or battery improvement is claimed.
 The deprecated Swift client is outside active checks and release artifacts. Its
 source and separate state remain untouched. Earlier Swift check results above
 predate the owner's explicit deprecation instruction.
+
+Final-head CI exposed stale integration assertions for Apple glyph hints and
+Finished-open settlement. The tests now verify the accepted behavior: explicit
+open clears once, Changes/Reply add no mutation, and explicit Reopen uses the
+exact native target. AgentBox refreshes native eligibility after that acknowledged
+open while retaining the reading row. Previous now completes in the browser
+operation lane; a full program regression verifies switching back and restoring
+the exact draft. Those four journeys and out-of-page lookup passed normally and
+under race detection; UI tests and vet passed.
+
+A physical recheck verified corrected compact/wide launch click offsets and the
+visible terminal caret, but exposed lost drag selection. The parent found that
+Update invalidated drawn geometry on motion/release, cancelling the gesture.
+Those pointer events now consume the unchanged drawn frame. A regression through
+Update/View/release/text replacement preserves the exact selected range and
+surrounding Unicode. Physical drag replacement remains pending its focused
+recheck. The rebuilt ARM64 executable passed strict signature verification:
+`45c5643ee14b4398ce46575ffe23ef00719f0d9e2e52ac63120d63b6687c6c7e`.
