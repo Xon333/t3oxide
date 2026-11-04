@@ -13,7 +13,7 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 | --- | --- |
 | Formatting and whitespace | `cargo fmt --all --check`, standalone vendor fmt, `git diff --check` passed |
 | Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo clippy --locked -p superlighttui --lib -- -D warnings` passed |
-| Rust tests | `cargo test --locked --all-targets`: **129 library + 4 forms + 3 protocol + 4 SLT activation** passed |
+| Rust tests | `cargo test --locked --all-targets`: **130 library + 4 forms + 3 protocol + 4 SLT activation** passed after the lock-release correction below |
 | Adapter/scripts | `scripts/check.sh`: **245 Node + 5 Python** passed at `529d9ec`, including syntax/compile checks; adapter/scripts unchanged since |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
@@ -25,6 +25,16 @@ The manifest minimum is deliberately **1.92**, required by ascii-dag; this is no
 a claim that a 1.92 toolchain was tested. The release is **8,916,720 bytes**;
 SHA-256 `8ec12829528ffeab999523c13526edc0330047318eff2b76161d1d7d541f0739`.
 No current performance or resource-saving comparison is claimed.
+
+The first hosted Ubuntu run failed two immediate state-reopen tests because a
+parallel helper's inherited descriptor could retain the advisory lock after
+the client owner closed. State teardown now explicitly releases its lock before
+closing the descriptor. A deterministic duplicate-descriptor regression failed
+before the fix and passes afterward: a live owner remains exclusive, owner exit
+allows reopening, and closing an old inherited descriptor cannot unlock the new
+owner. All 141 Rust tests, formatting and application Clippy passed locally after
+this correction. Hosted Linux confirmation is pending. The release hash above
+still identifies the frozen `39c09d0` native-acceptance artifact.
 
 The release PTYs use the actual `run_async_with` entry point at the configured
 60 FPS cap and synthetic native endpoints through the real adapter/journal.

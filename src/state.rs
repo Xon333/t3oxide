@@ -30,6 +30,15 @@ pub struct State {
     saved: Mutex<Value>,
 }
 
+impl Drop for State {
+    fn drop(&mut self) {
+        // A helper's fork can retain this open-file description until exec,
+        // even with close-on-exec. Release ownership before closing our file.
+        // SAFETY: the descriptor is owned and valid; LOCK_UN takes no pointers.
+        unsafe { libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 pub fn default_state_path() -> PathBuf {
     default_directory().join("rust-state.json")
 }
@@ -1545,6 +1554,30 @@ mod tests {
         assert_eq!(state.snapshot()["threadReads"][1]["generation"], next);
         assert!(state.pending_records().is_empty());
     }
+    #[test]
+    fn state_lock_release_follows_owner_with_an_inherited_helper_descriptor() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("state.json");
+        let state = State::open(&path).unwrap();
+        // A fork temporarily retains the same open-file description, even with
+        // close-on-exec. Duplicate it here without a timing-dependent child.
+        let inherited = state._lock.try_clone().unwrap();
+        assert!(
+            State::open(&path).is_err(),
+            "a live owner remains exclusive"
+        );
+        drop(state);
+        let next =
+            State::open(&path).expect("an inherited descriptor cannot extend owner lifetime");
+        drop(inherited);
+        assert!(
+            State::open(&path).is_err(),
+            "old descriptor cannot unlock the new owner"
+        );
+        drop(next);
+        assert!(State::open(&path).is_ok());
+    }
+
     #[test]
     fn activity_eviction_expires_stale_read_markers_atomically_across_restart() {
         let directory = tempfile::TempDir::new().unwrap();
