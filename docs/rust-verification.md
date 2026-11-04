@@ -3,26 +3,27 @@
 Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`
 and relevant later preserved UX behavior into the isolated SLT client. The
 active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
-v0.26.0, with maintained vendored patch `ordered-activation-v1`. The checked
-implementation head is `529d9ec9bbfe892bca1408e3aa2aa4ebf096b7bc`, preserving
-`5941463` geometry/modal/provenance and `b58644d` search fixes. No installed
+v0.26.0, with maintained vendored patch `ordered-activation-v2`. The checked
+implementation head is `e730911`, preserving
+`529d9ec` submission/compact controls, `5941463` geometry/modal/provenance and
+`b58644d` search fixes. No installed
 launcher, GUI, configuration or T3 service was changed by these checks.
 
 | Check | Current result |
 | --- | --- |
 | Formatting and whitespace | `cargo fmt --all --check`, standalone vendor fmt, `git diff --check` passed |
 | Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo clippy --locked -p superlighttui --lib -- -D warnings` passed |
-| Rust tests | `cargo test --locked --all-targets`: **122 library + 4 forms + 3 protocol + 3 SLT activation** passed |
-| Adapter/scripts | `scripts/check.sh`: **245 Node + 5 Python** passed, including syntax/compile checks |
+| Rust tests | `cargo test --locked --all-targets`: **126 library + 4 forms + 3 protocol + 4 SLT activation** passed |
+| Adapter/scripts | `scripts/check.sh`: **245 Node + 5 Python** passed at `529d9ec`, including syntax/compile checks; adapter/scripts unchanged since |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
-| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **13 outcomes** passed |
+| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **14 outcomes** passed |
 | Locked attribution | 290 upstream packages inventoried, including the local SLT base/patch and modified-file hashes; both upstream MIT notices retained; registry archives have Cargo checksums |
 
 Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
 The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
-a claim that a 1.92 toolchain was tested. The release is **8,900,304 bytes**;
-SHA-256 `347038c656170ac802a9c09018f08d50f847fb849bdf135d5bba05311ea34e09`.
+a claim that a 1.92 toolchain was tested. The release is **8,916,864 bytes**;
+SHA-256 `8d2efac4af9316c29e55e82ed6ac9655e39f1728391ab1156ecc44e305772cde`.
 No current performance or resource-saving comparison is claimed.
 
 The release PTYs use the actual `run_async_with` entry point at the configured
@@ -34,7 +35,8 @@ uncertainty retains the exact original pending record. No restart retries it.
 Rejected attempted text remains source-qualified in Prompt recall, alongside
 the existing host journal; it is never restored over the next draft.
 
-The same suite verifies batched `/help` + Enter without newline/send, pointer
+The same suite verifies batched Ctrl+P + `help` + Enter and `/help` + Enter
+without newline/send, pointer
 Send around edits, keyboard and pointer modal Continue around edits and queued
 tail, exact multiline Unicode paste/plain Enter, independent restored tab
 drafts, source-backed question inventory and one explicit acknowledged answer.
@@ -50,6 +52,19 @@ Control/Super A/C; source tests distinguish unselected and unfocused input.
 Release PTY Control A/C Press/Release emits OSC52 with the exact selected draft
 and keeps the process alive. Unselected Ctrl+C also keeps it alive. This does
 not verify OS clipboard receipt, Rex key forwarding or native Cmd+A/C.
+
+The corrected source binds source-sensitive actions to actual SLT focus before
+capturing the mutation target. A focused runtime regression clicks the displayed
+conversation's textarea after highlighting another row, then verifies Ctrl+T
+settles only the displayed source. The opt-in runtime also isolates focus-changing
+Control/Super, Escape and function-key activations before their queued input tail.
+
+Search pages no longer own an already-open source's qualified project identity;
+the active snapshot and native project inventory retain Mode B graph navigation
+when that source is absent from search results. Additive persisted activity records
+retain the last actually observed substantive event through lifecycle-only shells.
+Reopen and accepted-page regressions verify read G0 → unopened G1 → running/null
+remains unread until G1 is opened. Unknown generations are never fabricated.
 
 Existing passing coverage retains source/revision-qualified acknowledgements,
 same-byte newer drafts, cancellation with fresh unsaved answers, graph
