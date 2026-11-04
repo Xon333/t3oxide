@@ -1,86 +1,45 @@
 # t3oxide
 
-A Rust terminal workspace for existing [T3 Code](https://github.com/pingdotgg/t3code) environments. Browse conversations, follow live work, answer native requests and review changes without giving another service control of your agents.
-
-**Developer and AgentBox share one workspace.** Developer emphasizes conversation navigation; AgentBox emphasizes attention, active work and explicit review. Switching views preserves the attached conversation, composer and reading position. T3 remains responsible for threads, agents, execution, permissions, queues and worktrees.
+A Rust terminal client for existing T3 Code environments. SLT v0.26.0 owns the terminal runtime, focus, editing and output. The retained Node adapter supplies native data, requests and durable operation receipts; T3 owns execution and orchestration.
 
 ## Build and connect
-
-The client targets Linux and macOS. Build with a current stable Rust toolchain; the manifest declares Rust 1.88 as its minimum. The application has no Go runtime dependency. Each adapter host needs its existing Node 22.4+ installation and an existing T3 environment. Remote profiles use OpenSSH.
 
 ```sh
 cargo build --locked --release
 ./target/release/t3oxide envs
 ./target/release/t3oxide
+./target/release/t3oxide --env desk --thread THREAD_ID
+./target/release/t3oxide --mode b
 ```
 
-Existing environment profiles remain usable. The bundled companion adds inclusive child metadata for full loaded-child filtering; older compatible companions retain native search and their supported operations until explicitly updated. For a new setup, follow [installation and configuration](NATIVE.md). Building the application does not install or restart T3. The small, dependency-free Node companion is retained for the verified T3 authentication, RPC, compact snapshot and durable receipt boundary; [contract evidence](docs/rust-contracts.md) explains that decision.
+Use a current stable Rust toolchain (declared minimum 1.92), existing environment profiles and Node 22.4+ on adapter hosts. Remote profiles use existing OpenSSH routes. See [installation](NATIVE.md). Building does not install a client or restart T3.
+
+## Conversations and human questions
+
+**A** combines Unread and Completed, with unread first. Completed means opened, inactive and unsettled. Running contains active work, needs input and failures; read state remains independent. Pins and the on-demand Settled explorer retain their native identity. Ordering follows meaningful native activity rather than token/tool churn. Context shows the actual native direct-subagent count when available.
+
+Search starts with a project and supports environment/name/native-content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
+
+**B** groups actual native human questions by project. Its persistent project-navigation region changes level in place; returning globally retains the selected project and content. Supporting Markdown and supported Mermaid flowcharts remain separate from navigation; unsupported diagram types retain their source. Open in A retains source identity. Answers autosave against the exact source/request revision, validate native values, and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID.
+
+Explicit `/context-save` captures a source-qualified decision, evidence, journal or local open loop. `/context` recalls those records; `/resume` adds protected drafts, original operations and native questions without executing them. [Context controls](docs/context-controls.md) describe durability, provenance, totals and degradation. Dependency synthesis requires explicit native evidence; current native offers leave coverage unknown.
+
+The revised presentation preferences live under `sltUi`; old presentation preferences remain recoverable without overriding this contract. Existing accounts, manual names, drafts and uncertain operations are preserved. Internal tabs are always available, including inside Rex.
+
+## Input
+
+Plain Enter inserts a newline. Typing `/` at the prompt opens completion; Enter selects the command. Esc retains unsent text, `//` stays literal, and pasted slash text stays literal. Cmd+Enter is preferred when delivered; Ctrl+Enter, Shift+Enter and Cmd+Shift+Enter are supported alternatives. An explicit Send button and portable Ctrl+] / Ctrl+\ path remain available. Ctrl+S is the independent Stop action. Native Rex delivery and pane-collision checks are separate acceptance work.
+
+See [shortcuts](docs/shortcuts.md), [content controls and examples](docs/content-controls.md), [architecture and flow map](docs/architecture.md), [source reuse](docs/rust-source-reuse.md) and [verification](docs/rust-verification.md).
+
+## Durable operations
+
+Drafts and journals remain in the client state file. Every mutation is saved with its exact operation ID and payload before dispatch. Disconnects never replay writes. Recover reconciles the original identity explicitly; an uncertain ordinary operation does not block Stop. Acknowledgement clears only the matching operation and submitted text, preserving newer edits. Exit detaches the client while native work continues.
 
 ```sh
-# Open a known source directly.
-t3oxide --env desk --thread THREAD_ID
-
-# Use the attention-oriented view or your terminal's own colors.
-t3oxide --mode agentbox
-t3oxide --theme terminal
-
-# Read-only diagnostics; no interactive mutation commands are exposed by the CLI.
-t3oxide doctor --env desk --json
-t3oxide threads --env desk --json-envelope --limit 100
+scripts/check-rust.sh
+scripts/check.sh
+scripts/build-rust.sh
 ```
 
-## One place to find and finish work
-
-**Find a conversation across hosts.** The navigator combines bounded native metadata from configured environments. A failed host leaves healthy sources usable and reports its own failure. Expand authoritative child conversations, filter loaded titles, search native recent messages explicitly, or preview a highlighted conversation without changing the active draft or Stop target. Project scope, priorities and saved reading positions are local presentation preferences.
-
-**Keep the work readable.** Ratatui renders streaming Markdown with a bounded cache. Split, Focus and Wide layouts adapt to terminal size; the highlighted border shows keyboard focus. The composer supports Unicode, wrapping, selection, mouse cursor placement and undo/redo through the maintained Ratatui textarea. Long request prompts and recovery payloads have their own scrollable review pane.
-
-**Act on native state.** Send with native Auto, Queue or Steer delivery, stop the reviewed active run with queue hold, inspect source tools and diffs, and answer the exact approval or question offered by T3. Model and option pickers use the host's live catalog and exact provider instance. Favorites and one-message overrides preserve that identity. Unsupported host capabilities remain explicit.
-
-**File work with a review.** New chooses an existing native project and resolves its defaults before Create. AgentBox requests native isolation by default. Title, message, model/options and workspace remain reviewable; an empty message creates a filed conversation without starting a run. Filing multiple human-authored tasks proceeds through explicit per-task launch reviews and keeps receipts and remaining drafts.
-
-**Review intentionally.** Attention, Working, Reviewed and All are views of the same conversations. Opening a thread never marks it reviewed. Settling, restoring, pinning and snoozing use native revision-bound actions. Local priority changes do not schedule execution.
-
-## Controls that stay consistent
-
-| Action | Key |
-| --- | --- |
-| Search commands | **Ctrl+P** or **Ctrl+Space** |
-| Switch Developer / AgentBox | **F2** |
-| Cycle Split / Focus / Wide | **F3** |
-| Move pane focus | **Tab** / **Shift+Tab** |
-| Conversations / Details | **Ctrl+O** / **Ctrl+L** |
-| Select and open a conversation | **↑↓** or **j/k**, then **Enter**; or click |
-| Filter loaded conversations | **/** in the navigator |
-| Native conversation search / loaded transcript search | **Ctrl+F**, according to focused pane |
-| Newline / send | **Enter** / **Ctrl+]** |
-| Stop active native run and hold its queue | **Ctrl+S**, including over dialogs |
-| Review native requests | **Ctrl+Y** |
-| Edit the active draft externally | **Ctrl+E** using `VISUAL` or `EDITOR` |
-| Return to live follow | **End** in the transcript |
-| Save and exit | **Ctrl+Q** |
-
-The [shortcut reference](docs/shortcuts.md) covers context, mouse interaction, forms, source inspection and read-only CLI commands. The command palette is the complete action catalog. Paste is always literal text; the composer never interprets pasted slash commands.
-
-## Drafts and recovery
-
-The Rust client stores drafts and recovery records in `~/.config/t3oxide/rust-state.json`, independently of T3. When that file is absent, the client validates and imports the previous terminal client's `go-drafts.json` and supported sidecars without changing their contents. An existing Rust state file always wins. Keep unresolved operation records and host-side receipts when updating.
-
-Every mutation is saved with its exact environment, operation ID and payload before dispatch. A disconnect does not trigger a retry. **Recover saved operations** shows the original payload and offers explicit reconciliation with the same identity. Stop has a separate pending lane so an uncertain ordinary operation does not block it. Acknowledgements clear only the matching record and submitted text; a newer draft is retained. Save failures remain visible and prevent a normal quit from discarding edits.
-
-Exiting detaches this client and its helper processes. Native T3 work and accepted queues continue.
-
-## Development and evidence
-
-```sh
-cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo build --locked --release
-node --test --test-concurrency=1 tests/*.test.mjs
-python3 tests/rust_terminal.py
-```
-
-Read [architecture](docs/architecture.md), [source reuse decisions](docs/rust-source-reuse.md), [current T3 contracts](docs/rust-contracts.md) and the [verification record](docs/rust-verification.md). The record separates deterministic protocol/PTY evidence from checks that require an installed host, its credentials, SSH route or a particular terminal emulator. Full T3 remains available for complete history, attachments and capabilities not advertised through this companion.
-
-[NOTICE](NOTICE), [LICENSES/rust-third-party.txt](LICENSES/rust-third-party.txt) and [the locked source inventory](docs/dependencies.json) contain dependency attribution, including the unmodified MPL-2.0 fuzzy matcher. Third-party notices do not establish a blanket license for t3oxide's original application code.
+[NOTICE](NOTICE), [dependency notices](LICENSES/rust-third-party.txt) and [locked inventory](docs/dependencies.json) retain source attribution. Restricted selected-source integrations and any replacement work are identified explicitly in the source-reuse record; basic SLT Markdown is not a claim of Mermaid rendering.

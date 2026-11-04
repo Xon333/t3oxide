@@ -20,7 +20,7 @@ Usage: t3oxide [COMMAND] [OPTIONS]
 
   t3oxide                                  open the workspace
   t3oxide --env desk --thread THREAD_ID     open an exact conversation
-  t3oxide --mode agentbox                   open the task inbox
+  t3oxide --mode a                          conversations (b for human questions)
 
 Read-only commands (never submit mutations):
   envs [--json]                            configured environments
@@ -36,7 +36,7 @@ Options:
   --state PATH        Rust state (default ~/.config/t3oxide/rust-state.json)
   --env ID            exact configured profile
   --thread ID         exact native conversation; requires --env
-  --mode MODE         developer or agentbox
+  --mode MODE         a or b; legacy dev/developer/agentbox accepted
   --theme NAME        terminal, violet, cyan or lime
   --no-mouse          keep native terminal selection
   --json              machine-readable read results
@@ -49,7 +49,7 @@ Options:
   --activity-cursor C activity: opaque earlier page cursor
   --version / --help
 
-Ctrl+P commands · F2 mode · Tab focus · / filter (navigator) · n new
+Ctrl+P commands · Alt+H help · Ctrl+T settle / unsettle · Tab focus
 Enter opens a conversation; in composer it inserts a newline.
 Ctrl+] send · Ctrl+S Stop + queue hold · Ctrl+Y requests · Ctrl+Q exit.
 Drafts are durable. Exit detaches; accepted native work continues.
@@ -171,8 +171,8 @@ impl Args {
         );
         result.query = words.join(" ");
         ensure!(
-            ["", "developer", "agentbox"].contains(&result.mode.as_str()),
-            "mode must be developer or agentbox"
+            ["", "a", "b", "dev", "developer", "agentbox"].contains(&result.mode.as_str()),
+            "mode must be a or b"
         );
         ensure!(
             ["", "terminal", "violet", "cyan", "lime"].contains(&result.theme.as_str()),
@@ -227,7 +227,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
     if args.iter().any(|a| a == "--version") {
-        println!("t3oxide {} · Rust / Ratatui", env!("CARGO_PKG_VERSION"));
+        println!("t3oxide {} · Rust / SLT", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let args = Args::parse(args)?;
@@ -270,7 +270,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 
 fn capabilities() -> Value {
     json!({"schemaVersion":1,"client":"t3oxide-rust","version":env!("CARGO_PKG_VERSION"),
-    "modes":["developer","agentbox"],"transport":"companion-v1 stdio / OpenSSH","orchestrationProtocol":2,
+    "modes":["dev"],"transport":"companion-v1 stdio / OpenSSH","orchestrationProtocol":2,
     "readCommands":["envs","threads","status","doctor","capabilities","activity","inspect"],
     "writes":"explicit human TUI actions only; host capabilities gate each action","recovery":"durable original IDs; explicit reconciliation only"})
 }

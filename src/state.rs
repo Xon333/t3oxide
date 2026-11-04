@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 pub const MAX_STATE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_DRAFT_BYTES: usize = 64 * 1024;
+const MAX_THREAD_READS: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub struct PendingRecord {
@@ -132,6 +133,87 @@ impl State {
     }
     pub fn snapshot(&self) -> Value {
         self.saved.lock().unwrap().clone()
+    }
+    /// Reading qualifies one exact source event and never changes native state.
+    pub fn is_thread_unread(
+        &self,
+        environment: &str,
+        thread: &str,
+        generation: Option<&str>,
+    ) -> bool {
+        let saved = self.saved.lock().unwrap();
+        !["threadReads", "completionReads"].iter().any(|field| {
+            saved[*field].as_array().is_some_and(|reads| {
+                reads.iter().any(|read| {
+                    read["environmentId"] == environment
+                        && read["threadId"] == thread
+                        && generation.is_none_or(|generation| read["generation"] == generation)
+                })
+            })
+        })
+    }
+
+    /// Persist an explicit verified open; absent events record only the open.
+    pub fn mark_thread_read(
+        &self,
+        environment: &str,
+        thread: &str,
+        generation: Option<&str>,
+    ) -> Result<()> {
+        ensure!(
+            valid_id(environment, 4096) && valid_id(thread, 4096),
+            "read marker needs exact source identity"
+        );
+        if !self.is_thread_unread(environment, thread, generation) {
+            return Ok(());
+        }
+        self.update(|value| {
+            let reads = value["threadReads"]
+                .as_array_mut()
+                .context("invalid thread reads")?;
+            let read =
+                json!({"environmentId":environment,"threadId":thread,"generation":generation});
+            if !reads.contains(&read) {
+                reads.push(read);
+                if reads.len() > MAX_THREAD_READS {
+                    reads.remove(0);
+                }
+            }
+            Ok(())
+        })
+    }
+    pub fn completion_read(&self, environment: &str, thread: &str, generation: &str) -> bool {
+        self.saved.lock().unwrap()["completionReads"]
+            .as_array()
+            .is_some_and(|reads| {
+                reads.iter().any(|read| {
+                    read["environmentId"] == environment
+                        && read["threadId"] == thread
+                        && read["generation"] == generation
+                })
+            })
+    }
+    pub fn save_completion_read(
+        &self,
+        environment: &str,
+        thread: &str,
+        generation: &str,
+    ) -> Result<()> {
+        if self.completion_read(environment, thread, generation) {
+            return Ok(());
+        }
+        self.update(|value| {
+            let reads = value["completionReads"]
+                .as_array_mut()
+                .context("invalid completion reads")?;
+            reads.push(
+                json!({"environmentId":environment,"threadId":thread,"generation":generation}),
+            );
+            if reads.len() > 512 {
+                reads.remove(0);
+            }
+            Ok(())
+        })
     }
 
     /// One copy-on-write transaction. Unknown schema fields survive every commit.
@@ -435,6 +517,12 @@ fn normalize(value: &mut Value) -> Result<()> {
     if root.get("promptHistory").is_none_or(Value::is_null) {
         root.insert("promptHistory".into(), json!([]));
     }
+    if root.get("completionReads").is_none_or(Value::is_null) {
+        root.insert("completionReads".into(), json!([]));
+    }
+    if root.get("threadReads").is_none_or(Value::is_null) {
+        root.insert("threadReads".into(), json!([]));
+    }
     Ok(())
 }
 
@@ -461,6 +549,52 @@ fn validate_record(environment: &str, record: &Value) -> Result<()> {
 }
 
 fn validate(value: &Value) -> Result<()> {
+    let thread_reads = value["threadReads"]
+        .as_array()
+        .context("invalid thread reads")?;
+    ensure!(
+        thread_reads.len() <= MAX_THREAD_READS,
+        "thread read limit exceeded"
+    );
+    let mut seen = HashSet::new();
+    for read in thread_reads {
+        let environment = read["environmentId"].as_str().unwrap_or("");
+        let thread = read["threadId"].as_str().unwrap_or("");
+        let generation = read["generation"].as_str();
+        ensure!(
+            valid_id(environment, 4096)
+                && valid_id(thread, 4096)
+                && (read["generation"].is_null()
+                    || generation.is_some_and(|generation| {
+                        generation.len() == 64
+                            && generation
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    }))
+                && seen.insert((environment, thread, generation)),
+            "invalid thread read identity"
+        );
+    }
+    let reads = value["completionReads"]
+        .as_array()
+        .context("invalid completion reads")?;
+    ensure!(reads.len() <= 512, "completion read limit exceeded");
+    let mut seen = HashSet::new();
+    for read in reads {
+        let environment = read["environmentId"].as_str().unwrap_or("");
+        let thread = read["threadId"].as_str().unwrap_or("");
+        let generation = read["generation"].as_str().unwrap_or("");
+        ensure!(
+            valid_id(environment, 4096)
+                && valid_id(thread, 4096)
+                && generation.len() == 64
+                && generation
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && seen.insert((environment, thread, generation)),
+            "invalid completion read identity"
+        );
+    }
     let drafts = object(value, "drafts")?;
     ensure!(
         drafts.len() <= 40,
@@ -1218,6 +1352,54 @@ mod tests {
     }
     fn operation(id: &str, op: &str) -> Value {
         json!({"id":id,"environmentId":"env","threadId":"thread","op":op,"message":"submitted"})
+    }
+    #[test]
+    fn source_event_reads_survive_reopen_without_settling_or_losing_recovery() {
+        let directory = temp();
+        let path = directory.join("rust-state.json");
+        let state = State::open(&path).unwrap();
+        state
+            .set_draft("env", "thread", "unsent human text")
+            .unwrap();
+        state
+            .save_pending("env", false, operation("original", "send"))
+            .unwrap();
+        state
+            .update(|value| {
+                value["futureNativePresentation"] = json!({"preserve":"exact"});
+                Ok(())
+            })
+            .unwrap();
+        let first = "a".repeat(64);
+        let next = "b".repeat(64);
+        assert!(state.is_thread_unread("env", "thread", None));
+        state
+            .mark_thread_read("env", "thread", Some(&first))
+            .unwrap();
+        assert!(!state.is_thread_unread("env", "thread", None));
+        assert!(!state.is_thread_unread("env", "thread", Some(&first)));
+        assert!(state.is_thread_unread("env", "thread", Some(&next)));
+        assert!(state.is_thread_unread("other-env", "thread", Some(&first)));
+        state
+            .mark_thread_read("env", "thread", Some(&next))
+            .unwrap();
+        state
+            .mark_thread_read("env", "thread", Some(&next))
+            .unwrap();
+        assert_eq!(state.snapshot()["threadReads"].as_array().unwrap().len(), 2);
+        drop(state);
+        let reopened = State::open(&path).unwrap();
+        assert!(!reopened.is_thread_unread("env", "thread", Some(&first)));
+        assert!(!reopened.is_thread_unread("env", "thread", Some(&next)));
+        assert_eq!(reopened.draft("env", "thread"), "unsent human text");
+        assert_eq!(reopened.pending("env", false).unwrap()["id"], "original");
+        assert_eq!(
+            reopened.snapshot()["futureNativePresentation"]["preserve"],
+            "exact"
+        );
+        assert!(reopened.snapshot().get("settled").is_none());
+        drop(reopened);
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn ack_atomically_preserves_newer_same_byte_draft_and_newer_override() {

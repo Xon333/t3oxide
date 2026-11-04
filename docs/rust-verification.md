@@ -1,3 +1,71 @@
+# Revised Rust/SLT integration — 2026-11-04
+
+Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`
+and relevant later preserved UX behavior into the isolated SLT client. The
+active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
+v0.26.0. No installed launcher or T3 service was changed by these checks.
+
+| Check | Current result |
+| --- | --- |
+| Formatting and whitespace | `cargo fmt --all --check`, `git diff --check` passed |
+| Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` passed |
+| Rust tests | `cargo test --locked --all-targets`: **114 library + 4 forms + 3 protocol** passed |
+| Adapter/scripts | `scripts/check.sh`: **244 Node + 5 Python** passed, including syntax/compile checks |
+| Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
+| Release | `cargo build --locked --release` passed on macOS ARM64 |
+| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **7 outcomes** passed |
+| Locked attribution | 290 upstream packages inventoried, exact Git pins/full licence texts retained; registry archives have Cargo checksums |
+
+Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
+The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
+a claim that a 1.92 toolchain was tested. The release is **8,900,336 bytes**;
+SHA-256 `f4b048bf13c72da0fccc56d0d40de78b8ba53476019423f042f50d70cf177988`.
+No current performance or resource-saving comparison is claimed.
+
+The PTY outcomes cover real adapter attachment/exit, exact multiline Unicode
+text with plain Enter, independent restored tab drafts, Ctrl+Enter
+Press+Release with exactly one native send/no extra newline, typed command
+Enter, actual human-question admission with zero-question project inventory,
+and one explicit acknowledged native answer from Mode B. Source tests settle
+editor focus before every accepted send chord and cover paste/command ownership,
+revision changes/cancellation with freshest unsaved answers, source-qualified
+acknowledgements, graph keyboard/mouse/Unicode/clipping, real TermiFlow drawing,
+context reopen/history/byte budgets/degradation/full-source hashes and retained
+publication recovery inputs. Context capture/resume controller fixtures prove
+no native dispatch and original source/operation retention.
+
+Native Rex/M1pro/M4 finished-client key delivery, pane preservation, Mac editing,
+owner UI acceptance and installed M4 adoption belong to the root acceptance
+pass. The PTYs are synthetic endpoint evidence; they never use a provider or
+certify a native Rex chord. Internal tabs are supported. A supported draft-safe
+native pop-out has not been established; no bridge or global pane binding is
+introduced here.
+
+Precise limits:
+
+- Native respond has no revision CAS. Adapter preflight checks the full original
+  offer before dispatch; it cannot provide server-side atomic revision checking.
+- Current native offers expose no dependency-edge/coverage capability. petgraph
+  retains source-qualified reasons/cycles when provided; active coverage is
+  **Unknown**, with native admission order retained. Lineage/prose/rank never
+  fabricates a dependency or a human obligation.
+- TermiFlow renders Mermaid flowcharts only, without per-node source colours.
+  Unsupported syntax/configuration, ambient behavior/debug overrides, viewport
+  overflow and rendering-budget limits retain original source. Explicit Config
+  avoids home configuration; observed process inputs qualify cache identity.
+- Local context captures completed non-excerpt source items explicitly. It does
+  not ingest transcripts automatically or claim a complete conversation.
+  File/directory fsync and recovery checks establish the syscall boundary,
+  not sudden-power-loss behavior of Apple storage. Damaged-store totals are
+  exact for safely parsed evidence and explicitly incomplete.
+- Native shell pages and project inventory are bounded with incompleteness
+  visible. Compact shells can omit unseen mid-run replies; no fabricated activity
+  timestamp or count is substituted for missing native evidence.
+
+The historical 2026-11-02 record below is retained unchanged as evidence for its Ratatui input. Its test totals, binary digest, PTY captures and comparative resource measurements do not describe this SLT revision.
+
+---
+
 # Rust implementation verification
 
 Verified on **2026-11-02**. All recorded source, protocol and synthetic terminal gates passed. These results do not certify an installed user environment.

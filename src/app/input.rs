@@ -2,7 +2,7 @@
 //! targets use the identities that were actually drawn rather than a reused row.
 use super::*;
 use crossterm::event::{
-    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 use ratatui_textarea::DataCursor;
@@ -34,6 +34,35 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let repeated = key.kind == KeyEventKind::Repeat;
+
+        if !repeated && (key.code == KeyCode::F(1) || alt && key.code == KeyCode::Char('h')) {
+            self.preserve_open_form()?;
+            return self.command("help");
+        }
+        if ctrl && key.code == KeyCode::Char('t') {
+            if !repeated {
+                ensure!(
+                    self.dialog.is_none() && !self.filtering,
+                    "Close the dialog or filter before settling a conversation"
+                );
+                let settled = if self.focus == Focus::Navigator {
+                    self.selected_thread()
+                        .context("Select a visible conversation first")?
+                        .reviewed()
+                } else {
+                    let active = self.active.as_ref().context("Open a conversation first")?;
+                    self.threads
+                        .iter()
+                        .find(|thread| {
+                            thread.profile == active.profile && thread.id == active.thread
+                        })
+                        .context("Refresh conversation metadata")?
+                        .reviewed()
+                };
+                self.command(if settled { "unsettle" } else { "settle" })?;
+            }
+            return Ok(());
+        }
 
         // Stop is global and remains addressed to the attached native run even
         // while another conversation is highlighted or a form is open.
@@ -108,24 +137,14 @@ impl App {
                 return Ok(());
             }
         }
-        if !repeated {
-            match key.code {
-                KeyCode::F(2) => {
-                    self.preserve_open_form()?;
-                    self.command("mode")?;
-                    return Ok(());
-                }
-                KeyCode::F(3) => {
-                    self.layout = match self.layout {
-                        LayoutMode::Split => LayoutMode::Focus,
-                        LayoutMode::Focus => LayoutMode::Wide,
-                        LayoutMode::Wide => LayoutMode::Split,
-                    };
-                    self.dirty = true;
-                    return Ok(());
-                }
-                _ => {}
-            }
+        if !repeated && key.code == KeyCode::F(3) {
+            self.layout = match self.layout {
+                LayoutMode::Split => LayoutMode::Focus,
+                LayoutMode::Focus => LayoutMode::Wide,
+                LayoutMode::Wide => LayoutMode::Split,
+            };
+            self.dirty = true;
+            return Ok(());
         }
         if alt && !repeated {
             let command = match key.code {
@@ -233,10 +252,11 @@ impl App {
             return Ok(());
         }
         let count = self.visible.len();
-        let page = (usize::from(self.hits.navigator.height.saturating_sub(5))
-            / if self.mode == Mode::AgentBox { 3 } else { 2 })
-        .max(1);
+        let page = (usize::from(self.hits.navigator.height.saturating_sub(5)) / 2).max(1);
         match key.code {
+            KeyCode::Char('c') if !repeated && self.lane == "Open" && !self.filtering => {
+                self.toggle_completed()?
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected = self.selected.saturating_add(1).min(count.saturating_sub(1))
             }
@@ -454,22 +474,6 @@ impl App {
         result
     }
 
-    fn preserve_open_form(&mut self) -> Result<()> {
-        self.flush_form()?;
-        self.preserve_workspace_position()
-    }
-
-    pub(super) fn flush_form(&mut self) -> Result<()> {
-        self.form_save_at = None;
-        if let Some(DialogKind::Text(target)) =
-            self.dialog.as_ref().map(|dialog| dialog.kind.clone())
-        {
-            let text = self.modal_editor.lines().join("\n");
-            self.preserve_form_edit(&target, &text)?;
-        }
-        Ok(())
-    }
-
     fn move_dialog(&mut self, amount: isize) {
         if let Some(dialog) = &mut self.dialog {
             dialog.selected = dialog
@@ -620,21 +624,9 @@ impl App {
             return Ok(());
         }
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
-            if let Some((_, mode)) = self
-                .hits
-                .mode_tabs
-                .iter()
-                .find(|(rect, _)| contains(*rect, point))
-                .copied()
-            {
-                if self.mode != mode {
-                    self.command(if mode == Mode::Developer {
-                        "mode developer"
-                    } else {
-                        "mode agentbox"
-                    })?;
-                }
-                return Ok(());
+            if contains(self.hits.completed, point) {
+                self.focus = Focus::Navigator;
+                return self.toggle_completed();
             }
             if let Some((_, layout)) = self
                 .hits
@@ -983,6 +975,27 @@ mod tests {
     }
 
     #[test]
+    fn settle_and_unsettle_are_discoverable_without_duplicate_actions() {
+        for (query, expected) in [("settle", "reviewed"), ("unsettle", "unreviewed")] {
+            let (_dir, mut app) = app();
+            app.palette();
+            app.input(Event::Paste(query.into())).unwrap();
+            let choices = &app.dialog.as_ref().unwrap().choices;
+            assert_eq!(
+                choices
+                    .iter()
+                    .filter(
+                        |choice| matches!(&choice.intent, Intent::Command(name) if name == expected)
+                    )
+                    .count(),
+                1,
+                "{query} must find the existing native disposition action"
+            );
+            assert!(app.state.pending_records().is_empty());
+        }
+    }
+
+    #[test]
     fn palette_fuzzy_query_does_not_execute_a_pasted_command() {
         let (_dir, mut app) = app();
         app.palette();
@@ -1100,6 +1113,59 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("choices changed"));
         assert!(app.state.pending_records().is_empty());
+    }
+
+    #[test]
+    fn current_help_exposes_input_and_recovery_without_changing_unsent_text() {
+        let (_dir, mut app) = app();
+        app.focus = Focus::Composer;
+        app.replace_text("/settle is literal draft text".into());
+        app.input(key(KeyCode::Char('h'), KeyModifiers::ALT))
+            .unwrap();
+        let help = &app.dialog.as_ref().unwrap().detail;
+        assert!(help.contains("Ctrl+T"));
+        assert!(help.contains("Cmd+Enter") && help.contains("Ctrl+Enter"));
+        assert!(help.contains("## Recovery"));
+        assert!(help.contains("Plain Enter") || help.contains("Prompt newline"));
+        assert_eq!(app.text(), "/settle is literal draft text");
+        app.dialog = None;
+        app.input(key(KeyCode::Tab, KeyModifiers::NONE)).unwrap();
+        assert_eq!(app.focus, Focus::Inspector);
+        app.input(key(KeyCode::F(1), KeyModifiers::NONE)).unwrap();
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        app.dialog = None;
+        app.command("shortcuts").unwrap();
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert!(app.state.pending_records().is_empty());
+    }
+
+    #[test]
+    fn superseded_preferences_remain_recoverable_without_overriding_new_contract() {
+        let (_dir, app) = app();
+        app.state
+            .update(|saved| {
+                saved["rustUi"] = json!({"mode":"agentbox","theme":"cyan","futureSetting":"keep"});
+                Ok(())
+            })
+            .unwrap();
+        let migrated = App::new(
+            Args {
+                mode: "agentbox".into(),
+                ..Args::default()
+            },
+            vec![],
+            app.state.clone(),
+        )
+        .unwrap();
+        assert_eq!(migrated.mode, Mode::Dev);
+        assert_eq!(migrated.lane, "Open");
+        assert!(!migrated.completed_collapsed);
+        migrated.save_ui().unwrap();
+        let reopened = App::new(Args::default(), vec![], app.state.clone()).unwrap();
+        assert_eq!(reopened.mode, Mode::Dev);
+        assert!(!reopened.completed_collapsed);
+        assert_eq!(reopened.theme, "violet");
+        assert_eq!(reopened.state.snapshot()["rustUi"]["futureSetting"], "keep");
     }
 
     #[test]

@@ -12,6 +12,21 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn load_pages(&mut self) {
+        self.app.refresh(false, false).unwrap();
+        self.drain_pages();
+    }
+    fn drain_pages(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while self.app.hosts.iter().any(|host| host.loading) {
+            let event = self
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("fixture metadata");
+            self.app.handle(event).unwrap();
+        }
+    }
     fn new(ack_delay: u64) -> Self {
         let directory = tempfile::TempDir::new().unwrap();
         let node = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
@@ -68,7 +83,11 @@ impl Fixture {
     }
 
     fn open(&mut self, profile: usize) {
-        self.app.open(profile, "thread-a".into()).unwrap();
+        self.open_thread(profile, "thread-a");
+    }
+
+    fn open_thread(&mut self, profile: usize, thread: &str) {
+        self.app.open(profile, thread.into()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while self
             .app
@@ -127,6 +146,408 @@ impl Drop for Fixture {
             connection.close();
         }
     }
+}
+
+#[test]
+fn settle_aliases_dispatch_exact_native_revision_and_refresh_visibility() {
+    let mut fixture = Fixture::new(0);
+    fixture.app.scope = Some(0);
+    fixture.open_thread(0, "thread-review");
+    fixture.app.replace_text("Retain this unsent draft".into());
+    fixture.app.flush_draft().unwrap();
+    fixture.app.refresh(false, false).unwrap();
+    for (index, (command, action, settled)) in [
+        ("settle", "settle", true),
+        ("unsettle", "unsettle", false),
+        ("reviewed", "settle", true),
+        ("unreviewed", "unsettle", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture.app.hosts[0].loading {
+            let event = fixture
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("native metadata refresh");
+            fixture.app.handle(event).unwrap();
+        }
+        let target = fixture
+            .app
+            .threads
+            .iter()
+            .find(|thread| thread.id == "thread-review")
+            .unwrap();
+        assert_eq!(target.reviewed(), !settled);
+        let revision = string(target.inbox(), "nativeRevision");
+        fixture.app.command(command).unwrap();
+        assert!(fixture.app.dialog.is_none());
+        let event = fixture.next_mutation();
+        let Background::Mutation {
+            context,
+            op,
+            fields,
+            result,
+            ..
+        } = &event
+        else {
+            panic!("disposition must use the durable native operation lane");
+        };
+        assert_eq!(context.profile, 0);
+        assert_eq!(op, "thread-action");
+        assert_eq!(fields["threadId"], "thread-review");
+        assert_eq!(fields["action"], action);
+        assert_eq!(fields["expectedRevision"], revision);
+        assert!(result.is_ok(), "{result:?}");
+        fixture.app.handle(event).unwrap();
+        let native: Value =
+            serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+        assert_eq!(native["effects"], index + 1);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture.app.hosts[0].loading {
+            let event = fixture
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("disposition metadata refresh");
+            fixture.app.handle(event).unwrap();
+        }
+        let target = fixture
+            .app
+            .threads
+            .iter()
+            .find(|thread| thread.id == "thread-review")
+            .unwrap();
+        assert_eq!(target.reviewed(), settled);
+        assert_eq!(target.matches_lane("Unreviewed"), !settled);
+        assert_eq!(target.matches_lane("Inbox"), !settled);
+        assert_eq!(target.matches_lane("Reviewed"), settled);
+        assert!(target.matches_lane("All"));
+        assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-review");
+        assert_eq!(fixture.app.text(), "Retain this unsent draft");
+        assert!(fixture.app.state.pending_records().is_empty());
+    }
+}
+
+#[test]
+fn unread_and_completed_use_durable_source_generations_and_independent_running_state() {
+    let mut fixture = Fixture::new(0);
+    let rows = [
+        ("fresh", "completed", true, false, false),
+        ("read", "completed", true, false, true),
+        ("idle", "idle", true, false, false),
+        ("stopped", "interrupted", true, false, false),
+        ("request", "waiting", true, true, false),
+        ("failed", "failed", true, false, false),
+        ("running", "running", false, false, false),
+        ("waiting", "waiting", true, false, false),
+        ("review", "completed", false, false, false),
+    ];
+    fixture.app.hosts[0].page.threads = rows.into_iter().map(|(id, status, working, request, pinned)| {
+        Thread::parse(0, json!({"id":id,"title":id,"status":status,"updatedAt":"2026-11-02T12:00:00Z",
+            "lineage":{"parentThreadId":null},"inbox":{"settled":false,"working":working,"pendingReview":id=="review",
+            "pendingRequestCount":u64::from(request),"queuedCount":0,"runId":format!("run-{id}"),"pinnedAt":if pinned {"native-pin"} else {""}}})).unwrap()
+    }).collect();
+    let seen = fixture.app.hosts[0]
+        .page
+        .threads
+        .iter()
+        .find(|thread| thread.id == "read")
+        .unwrap()
+        .completion_generation()
+        .unwrap();
+    fixture
+        .app
+        .state
+        .save_completion_read("native-0", "read", &seen)
+        .unwrap();
+    for thread in ["idle", "stopped", "waiting"] {
+        fixture
+            .app
+            .state
+            .mark_thread_read("native-0", thread, None)
+            .unwrap();
+    }
+    fixture.app.rebuild();
+    assert_eq!(
+        fixture
+            .app
+            .visible
+            .iter()
+            .map(|(index, _)| fixture.app.threads[*index].id.as_str())
+            .collect::<Vec<_>>(),
+        ["fresh", "idle", "read", "stopped", "waiting"]
+    );
+    assert_eq!(fixture.app.completed_count, 4);
+    assert_eq!(fixture.app.open_section(&fixture.app.threads[0]), "Unread");
+    assert!(!fixture.app.completed_collapsed);
+    let generation = fixture.app.hosts[0].page.threads[0]
+        .completion_generation()
+        .unwrap();
+    fixture
+        .app
+        .state
+        .mark_thread_read("native-1", "fresh", Some(&generation))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .app
+            .open_section(&fixture.app.hosts[0].page.threads[0]),
+        "Unread"
+    );
+    fixture
+        .app
+        .state
+        .mark_thread_read("native-0", "fresh", Some(&generation))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .app
+            .open_section(&fixture.app.hosts[0].page.threads[0]),
+        "Completed"
+    );
+    fixture.app.hosts[0].page.threads[0].raw["inbox"]["runId"] = json!("next-native-run");
+    assert_eq!(
+        fixture
+            .app
+            .open_section(&fixture.app.hosts[0].page.threads[0]),
+        "Unread"
+    );
+    fixture
+        .app
+        .dispatch(Intent::Lane("Running".into()))
+        .unwrap();
+    assert_eq!(
+        fixture
+            .app
+            .visible
+            .iter()
+            .map(|(index, _)| fixture.app.threads[*index].id.as_str())
+            .collect::<Vec<_>>(),
+        ["failed", "request", "review", "running"]
+    );
+    let failed = fixture
+        .app
+        .threads
+        .iter()
+        .find(|thread| thread.id == "failed")
+        .unwrap();
+    fixture
+        .app
+        .state
+        .mark_thread_read(
+            "native-0",
+            &failed.id,
+            failed.activity_generation().as_deref(),
+        )
+        .unwrap();
+    fixture.app.rebuild();
+    assert_eq!(
+        fixture.app.visible.len(),
+        4,
+        "reading cannot finish a native run or clear attention"
+    );
+    fixture.app.dispatch(Intent::Lane("Pins".into())).unwrap();
+    assert_eq!(fixture.app.selected_thread().unwrap().id, "read");
+}
+
+#[test]
+fn explicit_verified_open_records_only_its_source_read_and_never_settles() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.app.open(0, "thread-review".into()).unwrap();
+    assert!(
+        fixture.app.state.snapshot()["threadReads"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while fixture.app.active.as_ref().unwrap().navigating {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    fixture.drain_pages();
+    assert_eq!(
+        fixture.app.state.snapshot()["threadReads"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let target = fixture
+        .app
+        .threads
+        .iter()
+        .find(|thread| thread.profile == 0 && thread.id == "thread-review")
+        .unwrap();
+    assert_eq!(fixture.app.open_section(target), "Completed");
+    assert!(!target.reviewed());
+    assert_eq!(
+        fixture.app.state.snapshot()["threadReads"][0],
+        json!({"environmentId":"native-0","threadId":"thread-review","generation":target.activity_generation()})
+    );
+    assert!(
+        fixture.app.state.snapshot()["completionReads"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let other = fixture
+        .app
+        .threads
+        .iter()
+        .find(|thread| thread.profile == 1 && thread.id == "thread-review")
+        .unwrap();
+    assert_eq!(fixture.app.open_section(other), "Unread");
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert!(!fixture.native_states[0].exists());
+}
+
+#[test]
+fn settle_shortcut_targets_highlighted_source_without_detaching_the_draft() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(0);
+    fixture
+        .app
+        .replace_text("Keep the attached draft and its source".into());
+    fixture.app.focus = Focus::Navigator;
+    fixture.app.selected = fixture
+        .app
+        .visible
+        .iter()
+        .position(|(index, _)| {
+            fixture.app.threads[*index].profile == 1
+                && fixture.app.threads[*index].id == "thread-review"
+        })
+        .unwrap();
+    fixture
+        .app
+        .input(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )))
+        .unwrap();
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation { context, fields, result: Ok(_), .. } if context.profile == 1 && fields["threadId"] == "thread-review" && fields["action"] == "settle")
+    );
+    fixture.app.handle(event).unwrap();
+    fixture.drain_pages();
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-a");
+    assert_eq!(fixture.app.text(), "Keep the attached draft and its source");
+    assert_eq!(
+        fixture.app.state.draft("native-0", "thread-a"),
+        fixture.app.text()
+    );
+    fixture
+        .app
+        .dispatch(Intent::Lane("Settled".into()))
+        .unwrap();
+    fixture.app.selected = fixture
+        .app
+        .visible
+        .iter()
+        .position(|(index, _)| {
+            fixture.app.threads[*index].profile == 1
+                && fixture.app.threads[*index].id == "thread-review"
+        })
+        .unwrap();
+    fixture
+        .app
+        .input(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )))
+        .unwrap();
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation { fields, result: Ok(_), .. } if fields["action"] == "unsettle")
+    );
+    fixture.app.handle(event).unwrap();
+    fixture.drain_pages();
+    fixture.app.focus = Focus::Composer;
+    fixture
+        .app
+        .input(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )))
+        .unwrap();
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation { fields, result: Err(_), .. } if fields["threadId"] == "thread-a")
+    );
+    fixture.app.handle(event).unwrap();
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn uncertain_settlement_retains_original_id_and_reconciles_only_explicitly() {
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["dropAckOnce"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.app.scope = Some(0);
+    fixture.load_pages();
+    fixture.app.focus = Focus::Navigator;
+    fixture.app.selected = fixture
+        .app
+        .visible
+        .iter()
+        .position(|(index, _)| fixture.app.threads[*index].id == "thread-review")
+        .unwrap();
+    fixture.app.command("settle").unwrap();
+    let event = fixture.next_mutation();
+    assert!(matches!(
+        &event,
+        Background::Mutation { result: Err(_), .. }
+    ));
+    fixture.app.handle(event).unwrap();
+    let original = fixture.app.state.pending("native-0", false).unwrap();
+    fixture.load_pages();
+    assert_eq!(
+        fixture.app.state.pending("native-0", false),
+        Some(original.clone())
+    );
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(native["effects"], 1);
+    fixture.app.command("recover").unwrap();
+    let review = fixture.app.dialog.as_ref().unwrap().choices[0]
+        .intent
+        .clone();
+    fixture.app.dispatch(review).unwrap();
+    let retry = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| matches!(choice.intent, Intent::Recover(..)))
+        .unwrap()
+        .intent
+        .clone();
+    fixture.app.dispatch(retry).unwrap();
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation { id, result: Ok(_), .. } if original["id"] == *id)
+    );
+    fixture.app.handle(event).unwrap();
+    assert!(fixture.app.state.pending_records().is_empty());
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(native["effects"], 1);
 }
 
 #[test]
@@ -338,6 +759,127 @@ fn synthetic_attachment(app: &mut App) {
 }
 
 #[test]
+fn changed_or_cancelled_request_preserves_fresh_unsaved_answer_on_its_original_source() {
+    for cancelled in [false, true] {
+        let mut fixture = Fixture::new(0);
+        let log = fixture.directory.path().join("native-requests.jsonl");
+        let config_path = fixture.directory.path().join("host-0/host.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+        config["fixture"]["logFile"] = json!(log);
+        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        fixture.open_thread(0, "thread-question");
+
+        let active = fixture.app.active.as_ref().unwrap();
+        let generation = active.generation;
+        let mut page = active.projection.snapshot().unwrap().as_wire_value();
+        let revision = page["revision"].as_u64().unwrap();
+        let mut original = active.requests[0].clone();
+        original["revision"] = json!("a".repeat(64));
+        original["questions"][0]["allowCustomAnswer"] = json!(true);
+        page["revision"] = json!(revision + 1);
+        page["requests"] = json!([original.clone()]);
+        fixture
+            .app
+            .handle(Background::Packet {
+                generation,
+                packet: Packet::event("native-0", "view", page.clone()),
+            })
+            .unwrap();
+        fixture.app.review_request(original.clone()).unwrap();
+        fixture.app.question_option(json!("Continue")).unwrap();
+        let form =
+            crate::attention::Form::from_request("native-0", "thread-question", &original).unwrap();
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            "Continue"
+        );
+
+        fixture.app.edit_field(InputTarget::Question).unwrap();
+        fixture.app.modal_editor.select_all();
+        let freshest = "Fresh résumé 🙂\n日本語  \n  unfinished ";
+        fixture
+            .app
+            .input(crossterm::event::Event::Paste(freshest.into()))
+            .unwrap();
+        assert!(
+            fixture.app.form_save_at.is_some(),
+            "answer edit must still await its debounce"
+        );
+        assert_eq!(
+            fixture.app.request_edit.as_ref().unwrap().answers["choice"],
+            "Continue"
+        );
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            "Continue"
+        );
+
+        let mut replacement = original.clone();
+        replacement["revision"] = json!("b".repeat(64));
+        replacement["questions"][0]["question"] = json!("Changed native wording");
+        page["revision"] = json!(revision + 2);
+        page["requests"] = if cancelled {
+            json!([])
+        } else {
+            json!([replacement.clone()])
+        };
+        fixture
+            .app
+            .handle(Background::Packet {
+                generation,
+                packet: Packet::event("native-0", "view", page),
+            })
+            .unwrap();
+
+        assert!(fixture.app.request_edit.is_none() && fixture.app.dialog.is_none());
+        assert!(fixture.app.form_save_at.is_none());
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            freshest,
+            "packet invalidation must flush the freshest editor text, cancelled={cancelled}"
+        );
+        let saved = fixture.app.state.snapshot();
+        let drafts = saved["attentionDrafts"].as_object().unwrap();
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(
+            drafts[&form.source.key().unwrap()]["source"],
+            json!({
+                "environmentId":"native-0", "threadId":"thread-question", "requestId":original["id"], "revision":original["revision"]
+            })
+        );
+        assert!(
+            crate::attention::Form::from_request("native-0", "thread-question", &replacement)
+                .unwrap()
+                .load_draft(&fixture.app.state)
+                .unwrap()
+                .is_none()
+        );
+        assert!(fixture.app.state.pending_records().is_empty());
+        let native_effects = fs::read(&fixture.native_states[0])
+            .ok()
+            .map(|bytes| {
+                serde_json::from_slice::<Value>(&bytes).unwrap()["effects"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            native_effects, 0,
+            "source invalidation must never submit an answer"
+        );
+        let native_calls = fs::read_to_string(&log).unwrap();
+        assert!(
+            native_calls.lines().all(|line| {
+                let call: Value = serde_json::from_str(line).unwrap();
+                call["native"] != "orchestration.dispatchCommand"
+                    && call["native"] != "orchestration.launchThread"
+            }),
+            "no native mutation may be dispatched by source invalidation"
+        );
+    }
+}
+
+#[test]
 fn lifecycle_refresh_is_source_specific_and_ignores_text_chunks_and_search_pages() {
     let mut fixture = Fixture::new(0);
     synthetic_attachment(&mut fixture.app);
@@ -435,4 +977,112 @@ fn obsolete_navigation_ack_cannot_unlock_the_current_live_transition() {
         .unwrap();
     assert!(!fixture.app.active.as_ref().unwrap().navigating);
     assert!(fixture.app.active.as_ref().unwrap().navigation.is_none());
+}
+
+#[test]
+fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
+    use crate::context_store::{Query, Scope, Store};
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    fixture.app.command("context-save").unwrap();
+    let capture = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| choice.label == "Evidence")
+        .unwrap()
+        .intent
+        .clone();
+    fixture.open_thread(1, "thread-review");
+    fixture.app.dispatch(capture).unwrap();
+    let mut context_path = fixture.app.state.path().as_os_str().to_os_string();
+    context_path.push(".context");
+    let store = Store::open(Path::new(&context_path)).unwrap();
+    let query = Query::new(Scope {
+        environment_id: "native-0".into(),
+        project_id: Some("project-a".into()),
+        thread_id: Some("thread-review".into()),
+    });
+    let pack = store.recall(&query).unwrap();
+    assert_eq!(pack.eligible, 1);
+    assert_eq!(pack.rows[0].source.environment_id, "native-0");
+    assert_eq!(
+        pack.rows[0].source.item_id.as_deref(),
+        Some("thread-review-answer")
+    );
+    let captured: Value =
+        serde_json::from_slice(&store.source(&pack.rows[0].id).unwrap().bytes).unwrap();
+    assert!(string(&captured, "text").contains("日本語 café 🙂"));
+    assert_eq!(
+        store
+            .recall(&Query::new(Scope {
+                environment_id: "native-1".into(),
+                ..query.scope.clone()
+            }))
+            .unwrap()
+            .eligible,
+        0
+    );
+    drop(store);
+    fixture.open_thread(0, "thread-review");
+    fixture.app.replace_text("Unsent exact draft 日本語".into());
+    fixture.app.flush_draft().unwrap();
+    let pending = json!({"id":"original-context-operation","environmentId":"native-0","threadId":"thread-review","op":"send","message":"Original unsent operation"});
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    fixture.app.command("resume").unwrap();
+    let dialog = fixture.app.dialog.as_ref().unwrap();
+    assert!(dialog.detail.contains("original-context-operation"));
+    assert!(dialog.detail.contains("Unsent exact draft 日本語"));
+    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+    assert_eq!(fixture.app.text(), "Unsent exact draft 日本語");
+    for file in &fixture.native_states {
+        assert!(
+            !file.exists(),
+            "context capture/recall/resume must not dispatch native effects"
+        );
+    }
+}
+
+#[test]
+fn source_inventory_keeps_empty_projects_and_rejects_malformed_replacement_atomically() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.app.search_projects();
+    assert!(
+        fixture
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .choices
+            .iter()
+            .any(|choice| choice.label == "Empty project")
+    );
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert!(
+        surface
+            .projects
+            .iter()
+            .any(|source| source.environment == "native-0" && source.project_id == "project-empty")
+    );
+    let previous = fixture.app.hosts[0].projects.clone();
+    let generation = fixture.app.hosts[0].generation;
+    fixture.app.handle(Background::Page {profile:0,generation,append:false,result:Ok(json!({
+        "projects":[{"id":"project-a","title":"First"},{"id":"project-a","title":"Duplicate"}],"projectsMore":false,"threads":[],"more":false
+    }))}).unwrap();
+    assert_eq!(fixture.app.hosts[0].projects, previous);
+    assert!(
+        fixture.app.hosts[0]
+            .error
+            .contains("duplicate native project identity")
+    );
 }

@@ -4,7 +4,7 @@ The Rust terminal client connects to existing T3 Code environments through a sma
 
 ## Build the client
 
-Use a current stable Rust toolchain on Linux or macOS. `Cargo.toml` declares Rust 1.88; the exact toolchain used for validation is recorded in [verification](docs/rust-verification.md). There is no Go build or runtime requirement.
+Use a current stable Rust toolchain on Linux or macOS. `Cargo.toml` declares Rust 1.92; the exact toolchain used for validation is recorded in [verification](docs/rust-verification.md). There is no Go build or runtime requirement.
 
 ```sh
 cargo build --locked --release

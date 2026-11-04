@@ -70,7 +70,21 @@ page must never be described as exhaustive history.
   `fixture` settings provide `stateFile`, `logFile`, `dropAckOnce`, `ackDelayMs`,
   `disconnectAfterMs`, `unavailable` and `stream`. Logs contain synthetic fixture
   payloads only. `rust-fixture.test.mjs` verifies the fixture itself.
-- `tests/rust_terminal.py` drives the built application through a real PTY,
+- `tests/slt_terminal.py` drives the active SLT binary through a real PTY and
+  the actual adapter fixture. It checks wake-aware attachment/exit, exact
+  Unicode multiline drafts, tab autosave/restore, enhanced Ctrl+Enter
+  Press+Release with one native effect/no added newline, command Enter,
+  actual Mode B admission, empty-project inventory and explicit acknowledged
+  native answer submission. Run without global test-tool installation:
+
+  ```sh
+  cargo build --release --locked
+  uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide
+  ```
+
+- `tests/rust_terminal.py` retains the historical Ratatui acceptance/comparison
+  inputs and supplies shared PTY/fixture helpers to the active script. It drove
+  its identified historical binary through a real PTY,
   including conventional terminal control bytes, bracketed Unicode paste,
   mouse events and resize. Its scenarios use temporary profiles and state,
   actual companion admission/projection/journaling and synthetic native

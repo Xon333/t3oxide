@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -20,8 +20,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
-    Developer,
-    AgentBox,
+    Dev,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -52,6 +51,8 @@ pub struct View {
     pub lane: String,
     pub rows: Vec<ThreadView>,
     pub selected: usize,
+    pub completed_count: usize,
+    pub completed_collapsed: bool,
     pub messages: Vec<MessageView>,
     pub transcript_scroll: usize,
     pub follow: bool,
@@ -71,6 +72,7 @@ pub struct ThreadView {
     pub status: String,
     pub depth: usize,
     pub pinned: bool,
+    pub section: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,6 +122,7 @@ pub struct HitMap {
     pub mode_tabs: Vec<(Rect, Mode)>,
     pub layout_tabs: Vec<(Rect, LayoutMode)>,
     pub lane_tabs: Vec<(Rect, String)>,
+    pub completed: Rect,
     pub message_rows: Vec<(Rect, usize)>,
     pub message_keys: Vec<(Rect, String)>,
     pub modal_stamp: u64,
@@ -202,7 +205,7 @@ struct MessageKey {
 
 struct CachedText {
     key: MessageKey,
-    text: Rc<Text<'static>>,
+    text: Arc<Text<'static>>,
     bytes: usize,
 }
 
@@ -298,7 +301,7 @@ impl Renderer {
         } else if compact {
             self.draw_conversation(frame, body, view, composer, theme, &mut hits);
         } else {
-            let sidebar_width = if view.mode == Mode::AgentBox { 34 } else { 30 };
+            let sidebar_width = 34;
             let show_inspector = body.width >= 132
                 || (view.layout == LayoutMode::Wide && body.width >= 108)
                 || view.focus == Focus::Inspector;
@@ -335,11 +338,7 @@ impl Renderer {
         hits: &mut HitMap,
     ) {
         hits.navigator = area;
-        let title = if view.mode == Mode::AgentBox {
-            "Agents"
-        } else {
-            "Conversations"
-        };
+        let title = "Conversations";
         let block = panel(title, view.focus == Focus::Navigator, theme).title_bottom(Line::styled(
             format!(" {} shown ", view.rows.len()),
             theme.quiet(),
@@ -365,7 +364,7 @@ impl Renderer {
             Rect::new(inner.x, inner.y, inner.width, 1),
         );
 
-        let lane_height = if inner.width >= 42 { 1 } else { 2 };
+        let lane_height = if inner.width >= 26 { 1 } else { 2 };
         let lane_area = Rect::new(
             inner.x,
             inner.y.saturating_add(1),
@@ -378,7 +377,7 @@ impl Renderer {
             return;
         }
         let list = Rect::new(inner.x, inner.y + top, inner.width, inner.height - top);
-        if view.rows.is_empty() {
+        if view.rows.is_empty() && view.completed_count == 0 {
             let empty = if view.filter.is_empty() {
                 "Nothing here yet.\n\nOpen commands to connect an environment or create a conversation."
             } else {
@@ -393,27 +392,72 @@ impl Renderer {
             return;
         }
 
-        let row_height = if view.mode == Mode::AgentBox { 3 } else { 2 };
-        let capacity = (usize::from(list.height) / row_height).max(1);
-        let selected = view.selected.min(view.rows.len().saturating_sub(1));
+        let row_height = 2;
+        let mut entries = Vec::new();
+        let mut section = "";
+        for (index, row) in view.rows.iter().enumerate() {
+            if !row.section.is_empty() && section != row.section {
+                section = &row.section;
+                entries.push((None, section.to_owned()));
+            }
+            entries.push((Some(index), String::new()));
+        }
+        if view.completed_count > 0 && view.completed_collapsed {
+            entries.push((None, "Completed".into()));
+        }
+        let selected = entries
+            .iter()
+            .position(|(index, _)| *index == Some(view.selected))
+            .unwrap_or(0);
+        let capacity = usize::from(list.height).max(1);
         if selected < self.navigator_offset {
             self.navigator_offset = selected;
-        } else if selected >= self.navigator_offset.saturating_add(capacity) {
-            self.navigator_offset = selected + 1 - capacity;
         }
-        self.navigator_offset = self
-            .navigator_offset
-            .min(view.rows.len().saturating_sub(capacity));
-
-        for (slot, (index, row)) in view
-            .rows
-            .iter()
-            .enumerate()
-            .skip(self.navigator_offset)
-            .take(capacity)
-            .enumerate()
+        while self.navigator_offset < selected
+            && entries[self.navigator_offset..=selected]
+                .iter()
+                .map(|(index, _)| if index.is_some() { row_height } else { 1 })
+                .sum::<usize>()
+                > capacity
         {
-            let y = list.y + (slot * row_height) as u16;
+            self.navigator_offset += 1;
+        }
+        if self.navigator_offset > 0
+            && entries[self.navigator_offset - 1].0.is_none()
+            && entries[self.navigator_offset..=selected]
+                .iter()
+                .map(|(index, _)| if index.is_some() { row_height } else { 1 })
+                .sum::<usize>()
+                < capacity
+        {
+            self.navigator_offset -= 1;
+        }
+        let mut y = list.y;
+        for (index, label) in entries.iter().skip(self.navigator_offset) {
+            if y >= list.bottom() {
+                break;
+            }
+            let Some(index) = *index else {
+                let rect = Rect::new(list.x, y, list.width, 1);
+                let label = if label == "Completed" {
+                    hits.completed = rect;
+                    format!(
+                        "{} Completed ({}) · c",
+                        if view.completed_collapsed {
+                            "▸"
+                        } else {
+                            "▾"
+                        },
+                        view.completed_count
+                    )
+                } else {
+                    label.clone()
+                };
+                frame.render_widget(Paragraph::new(label).style(theme.strong()), rect);
+                y += 1;
+                continue;
+            };
+            let row = &view.rows[index];
             let height = (row_height as u16).min(list.bottom().saturating_sub(y));
             let rect = Rect::new(list.x, y, list.width, height);
             let selected = index == view.selected;
@@ -453,6 +497,7 @@ impl Renderer {
             }
             hits.rows.push((rect, index));
             hits.thread_keys.push((rect, row.key.clone()));
+            y += height;
         }
     }
 
@@ -662,11 +707,11 @@ impl Renderer {
         key: &MessageKey,
         message: &MessageView,
         theme: Theme,
-    ) -> Rc<Text<'static>> {
+    ) -> Arc<Text<'static>> {
         if let Some(index) = self.cache.iter().position(|entry| &entry.key == key)
             && let Some(entry) = self.cache.remove(index)
         {
-            let text = Rc::clone(&entry.text);
+            let text = Arc::clone(&entry.text);
             self.cache.push_back(entry);
             return text;
         }
@@ -687,7 +732,7 @@ impl Renderer {
                 .map(|line| line.spans.len() * std::mem::size_of::<Span<'static>>())
                 .sum::<usize>(),
         );
-        let text = Rc::new(text);
+        let text = Arc::new(text);
         if bytes <= MAX_CACHE_BYTES {
             while self.cache.len() >= MAX_CACHE_ITEMS
                 || self.cache_bytes.saturating_add(bytes) > MAX_CACHE_BYTES
@@ -701,7 +746,7 @@ impl Renderer {
             self.cache_bytes = self.cache_bytes.saturating_add(bytes);
             self.cache.push_back(CachedText {
                 key: key.clone(),
-                text: Rc::clone(&text),
+                text: Arc::clone(&text),
                 bytes,
             });
         }
@@ -769,10 +814,7 @@ fn draw_header(frame: &mut Frame, area: Rect, view: &View, theme: Theme, hits: &
         Rect::new(top.x, top.y, 10.min(top.width), 1),
     );
     let mut x = top.x.saturating_add(10);
-    for (label, mode) in [
-        (" Developer ", Mode::Developer),
-        (" AgentBox ", Mode::AgentBox),
-    ] {
+    for (label, mode) in [(" Dev ", Mode::Dev)] {
         let width = label.len() as u16;
         if x.saturating_add(width) > top.right() {
             break;
@@ -870,17 +912,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, view: &View, theme: Theme) {
 fn draw_lanes(frame: &mut Frame, area: Rect, view: &View, theme: Theme, hits: &mut HitMap) {
     let mut x = area.x;
     let mut y = area.y;
-    let first = if view.mode == Mode::AgentBox {
-        ("Inbox", "Inbox")
-    } else {
-        ("Active", "Unreviewed")
-    };
     for (label, value) in [
-        first,
-        ("Attention", "Attention"),
-        ("Working", "Working"),
-        ("Settled", "Reviewed"),
-        ("All", "All"),
+        ("Open", "Open"),
+        ("Running", "Running"),
+        ("Pins", "Pins"),
+        ("Settled", "Settled"),
     ] {
         let width = (label.len() as u16 + 1).min(area.width);
         if x + width > area.right() {
@@ -1319,10 +1355,10 @@ mod tests {
 
     fn fixture() -> View {
         View {
-            title: "Release review".into(), mode: Mode::Developer, focus: Focus::Composer,
+            title: "Release review".into(), mode: Mode::Dev, focus: Focus::Composer,
             status: "M4 connected · OMV reconnecting".into(), hint: "Tab focus · Ctrl+P commands".into(),
             lane: "attention".into(), follow: true, requests: 1, pending: 1,
-            rows: (0..18).map(|i| ThreadView { key: format!("m4:{i}"), title: format!("Conversation {i}"), subtitle: "M4 · t3oxide".into(), status: if i == 0 { "approval" } else { "working" }.into(), depth: usize::from(i == 2), pinned: i == 1 }).collect(),
+            rows: (0..18).map(|i| ThreadView { key: format!("m4:{i}"), title: format!("Conversation {i}"), subtitle: "M4 · t3oxide".into(), status: if i == 0 { "approval" } else { "working" }.into(), depth: usize::from(i == 2), pinned: i == 1, section: String::new() }).collect(),
             messages: vec![
                 MessageView { key: "u1".into(), role: "user".into(), text: "Review the implementation. 日本語 and 🦀 work too.".into(), ..Default::default() },
                 MessageView { key: "a1".into(), role: "assistant".into(), text: "## Ready for review\n\n- Exact operations retained\n- **Drafts** survive reconnects\n\n```rust\nlet ready = true;\n```\n\n| Host | State |\n| --- | --- |\n| M4 | Connected |".into(), streaming: true, ..Default::default() },
@@ -1343,7 +1379,7 @@ mod tests {
     }
 
     #[test]
-    fn layouts_and_hit_targets_survive_resize_and_both_modes() {
+    fn layouts_and_hit_targets_survive_resize_in_dev() {
         let composer = editor("A durable draft 日本語", "", "Message");
         let empty = editor("", "", "Search");
         for (width, height) in [
@@ -1352,10 +1388,13 @@ mod tests {
             (24, 8),
             (40, 12),
             (80, 24),
+            (120, 10),
+            (120, 11),
+            (120, 12),
             (120, 35),
             (180, 50),
         ] {
-            for mode in [Mode::Developer, Mode::AgentBox] {
+            for mode in [Mode::Dev] {
                 for focus in [
                     Focus::Navigator,
                     Focus::Transcript,
@@ -1386,6 +1425,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn open_sections_and_completed_hit_target_never_alias_thread_rows() {
+        let mut view = fixture();
+        view.lane = "Open".into();
+        view.rows.truncate(2);
+        view.rows[0].section = "Finished".into();
+        view.rows[1].section = "Attention".into();
+        view.completed_collapsed = true;
+        view.completed_count = 3;
+        let input = editor("draft", "", "Message");
+        for (width, height) in [(80, 24), (120, 35), (180, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut renderer = Renderer::default();
+            let mut hits = HitMap::default();
+            terminal
+                .draw(|frame| hits = renderer.draw(frame, &view, &input, None, &input))
+                .unwrap();
+            let text = buffer_text(&terminal);
+            assert!(text.contains("Finished"));
+            assert!(text.contains("Attention"));
+            assert!(text.contains("▸ Completed (3)"));
+            assert_eq!(
+                hits.lane_tabs
+                    .iter()
+                    .map(|(_, lane)| lane.as_str())
+                    .collect::<Vec<_>>(),
+                ["Open", "Running", "Pins", "Settled"]
+            );
+            assert!(hits.completed.height > 0);
+            for (rect, _) in &hits.rows {
+                assert!(rect.intersection(hits.completed).is_empty());
+            }
+            assert_eq!(
+                hits.rows
+                    .iter()
+                    .map(|(_, index)| *index)
+                    .collect::<Vec<_>>(),
+                [0, 1]
+            );
+        }
+        view.rows.clear();
+        let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        let mut renderer = Renderer::default();
+        terminal
+            .draw(|frame| {
+                renderer.draw(frame, &view, &input, None, &input);
+            })
+            .unwrap();
+        let text = buffer_text(&terminal);
+        assert!(!text.contains("Attention") && !text.contains("Finished"));
+        assert!(text.contains("▸ Completed (3)"));
     }
 
     #[test]

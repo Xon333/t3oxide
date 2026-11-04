@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {Fault,hash,LIMIT} from '../adapter/core.mjs';
 import {T3} from '../adapter/t3.mjs';
 import {Journal} from '../adapter/journal.mjs';
-import {projectPage,resolveDefaults,launchProjectCommand,nativeRevision,inboxMetadata,threadActionCommand,reviewResult,projectFileDefaults} from '../adapter/native.mjs';
+import {projectPage,resolveDefaults,launchProjectCommand,nativeRevision,inboxMetadata,threadActionCommand,reviewResult,projectFileDefaults,meaningfulActivity} from '../adapter/native.mjs';
 import {threadList} from '../adapter/navigation.mjs';
 
 const stamp='2026-10-29T10:00:00.000Z';
@@ -125,6 +125,35 @@ test('native metadata preserves exact thread/project/run and native pending requ
   const meta=inboxMetadata(t);assert.equal(meta.pendingRequestId,'request-a');assert.equal(meta.pendingRequestCount,1);assert.equal(meta.latestMessage.truncated,true);assert.equal(meta.queuedCount,-1);
   const list=threadList({projects:[project],threads:[t]},'',{lifecycle:'all'});assert.equal(list.threads[0].inbox.nativeRevision,meta.nativeRevision);assert.equal(list.threads[0].updatedAt,stamp);
   assert.notEqual(nativeRevision({...t,activeRunId:'new-native-run'}),nativeRevision(t));
+});
+
+test('inbox distinguishes an active native run and a completed proposed-plan review',()=>{
+  const base={...thread(),latestRunId:'finished-run',activeRunId:null,status:'completed',interactionMode:'plan',hasActionableProposedPlan:true};
+  assert.equal(inboxMetadata(base).pendingReview,true);
+  assert.equal(inboxMetadata(base).activeRunId,'');
+  const running={...base,status:'running',activeRunId:'active-run'};
+  assert.equal(inboxMetadata(running).pendingReview,false);
+  assert.equal(inboxMetadata(running).activeRunId,'active-run');
+  assert.equal(inboxMetadata({...base,interactionMode:'default'}).pendingReview,false);
+  assert.equal(inboxMetadata({...base,latestRunCompletedAt:stamp}).latestRunCompletedAt,stamp);
+});
+
+test('meaningful activity ignores shell token/tool/presentation churn and qualifies native attention events',()=>{
+  const base={...thread(),createdAt:'2026-10-28T10:00:00.000Z',latestRunRequestedAt:'2026-10-29T09:00:00.000Z',latestRunCompletedAt:stamp};
+  const completion=meaningfulActivity(base);
+  assert.equal(completion.at,stamp);assert.equal(completion.kind,'completion');assert.match(completion.generation,/^[a-f0-9]{64}$/u);
+  const churn={...base,updatedAt:'2026-10-29T14:00:00.000Z',title:'A manual name',pinnedAt:'2026-10-29T14:00:00.000Z',itemCount:120};
+  assert.deepEqual(meaningfulActivity(churn),completion);
+  const running={...churn,status:'running',activeRunId:'new-run',latestRunId:'new-run',latestRunCompletedAt:null,
+    latestRunRequestedAt:'2026-10-29T11:00:00.000Z',latestVisibleMessage:{id:'stream',role:'assistant',text:'token',updatedAt:'2026-10-29T14:00:00.000Z'}};
+  const before=meaningfulActivity(running);running.latestVisibleMessage.text+=' token';running.updatedAt='2026-10-29T15:00:00.000Z';
+  assert.deepEqual(meaningfulActivity(running),before);assert.equal(before.generation,null);assert.equal(before.at,running.latestRunRequestedAt);
+  running.pendingRuntimeRequest={id:'request-a',kind:'user_input',createdAt:'2026-10-29T12:00:00.000Z'};
+  const need=meaningfulActivity(running);assert.equal(need.kind,'request');assert.equal(need.at,running.pendingRuntimeRequest.createdAt);
+  assert.notEqual(meaningfulActivity({...running,pendingRuntimeRequest:{...running.pendingRuntimeRequest,id:'request-b'}}).generation,need.generation);
+  const failure=meaningfulActivity({...base,status:'failed',lastError:'provider failed'});
+  assert.equal(failure.kind,'failure');assert.notEqual(failure.generation,completion.generation);
+  assert.equal(meaningfulActivity({...base,latestRunSilent:true}).generation,null);
 });
 
 test('review bounds escaped diff and long file metadata in the actual encoded reply budget',()=>{

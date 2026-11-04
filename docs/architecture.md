@@ -15,7 +15,9 @@ The reference baseline is t3oxide `e73caacd673d1a9bbceea8a7ed240b2a068ba5a7`. Th
 | `src/domain.rs` | Source-qualified metadata tree, native attention/review projections and discoverable action catalog. |
 | `src/state.rs` | Locked, validated, atomic client state; migration, drafts, exact operation journals, prompt history and acknowledgements. |
 | `src/app.rs` | Event loop, asynchronous reads, connection generations, draft saves, navigation and mutation lifecycle. |
-| `src/app/input.rs` | Explicit key/mouse/paste semantics and save-before-leave behavior. |
+| `src/app/slt.rs`, `src/slt_ui.rs` | Active SLT runtime, terminal presentation, exclusive input routing and controller intents. |
+| `src/app/input.rs` | Retained legacy input regressions, compiled for tests only. |
+| `src/attention.rs` | Actual native question admission, stable controls, revision-bound drafts and receipt validation. |
 | `src/app/actions.rs`, `src/app/native.rs` | Action dispatch, model/request/launch forms, native capability checks and reviewed operations. |
 | `src/app/workspace.rs` | Local project/priority views, reading coordinates, loaded-content navigation and source copying. |
 | `src/ui.rs` | Pure presentation, responsive layouts, bounded Markdown reuse, editor styling and exact drawn hit targets. |
@@ -31,15 +33,29 @@ Ordinary threads and bounded Crossbeam channels are sufficient for this process/
 
 Cargo.lock pins the complete dependency graph. `docs/dependencies.json` records source archives/checksums and `LICENSES/rust-third-party.txt` retains license texts. The MPL-covered fuzzy matcher is an unmodified library with its corresponding source link supplied; no covered source file is copied into t3oxide's own modules.
 
-## Event-driven presentation
+## SLT surfaces and flow map
 
-Terminal input, host metadata, transcript events, read completions, acknowledgements and draft-save results flow to one application owner. Bursts are coalesced into redraws with a 16 ms lower bound between frames; an idle screen does not run a fixed-rate rendering loop. Rendering reads a view model and returns hit targets. It does not initiate network requests or write state.
+The active runtime is pinned `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`, v0.26.0 (MIT). `src/app/slt.rs` owns the SLT session handle and joins it to observe I/O/panic results. Its bridge forwards bounded worker messages through the wake-aware sender; it never reads terminal input. `idle_redraw(false)` uses async-message wakes and explicit draft deadlines. The retained Ratatui model/editor helpers and renderer tests are compatibility/recovery scaffolding; they do not run a second terminal loop.
 
-Markdown is cached by exact displayed message identity, source text/role/truncation, pane width and theme. The cache has both an entry limit and a byte limit. Wrapped measurements have a separate bounded cache. Only visible transcript rows are drawn, with accurate wrapped scroll offsets. A streaming revision invalidates the affected row's cached representation. Resize changes the width key and recomputes layout; it does not detach or rewrite a draft.
+| Surface / flow | State owner | Update / invalidation | Rendering and input |
+| --- | --- | --- | --- |
+| Navigator A1–A3, S1–S3 | Native shell + durable source/event read markers | Host generations; meaningful reply/request/failure/run activity | SLT list; unread first in A; stable keys; prior-frame reorder guard |
+| Conversation A4, S4 | Native source-qualified projection; one tab per conversation | Exact snapshot/delta revision; reconnect resets projection base | SLT Markdown/scroll region; bounded adapter excerpt; source IDs retained |
+| Prompt A4–A5 | Conversation draft + SLT TextareaState | Human edits, 200ms durable save, source switch/exit flush | SLT focus; public indexed key consumption before textarea for command/send; plain Enter newline |
+| Models A4 | Native catalog and exact thread/provider selection | Native catalog revision and acknowledgement | Existing native review controls; defaults require a separate explicit action |
+| Human queue B1–B3, S5–S6 | Actual native request summary, full offer and revision | Native pending-request changes; failure/prose alone never creates a question | Project-grouped SLT region; mouse/Tab; source opens in A |
+| Form B3 | Exact environment/thread/request/revision draft | Every field edit/choice; current-offer validation; explicit Submit | Stable field/choice values; local completion never delivery |
+| Supporting content B3 | Existing native source items | Source/content revision and excerpt flags, geometry and renderer process inputs | Separate SLT Markdown + TermiFlow flowcharts; unsupported/overflow preserves original source |
+| Project graph B1 | Native inventory, stable project/question identities | Inventory/revision/geometry, previous displayed hit owners | ascii-dag scene adapted to clipped SLT cells, Tab/arrows/Enter/mouse; zero-question projects retained |
+| Context B3 | Explicitly owned local fael store | Immutable source-qualified events and verified full-source blobs | Explicit capture/recall/history/revisit/supersession; local close has no native effect |
+| Dependency synthesis B3 | Explicit admitted native question revisions and edge reasons | Edge/coverage revisions; stable dependency ordering and visible cycles | petgraph; native offers currently expose no edge/coverage capability, so Unknown remains visible |
+| Recovery S6 | Client pending records + host durable receipt journal | Explicit original-ID reconciliation only | Matched acknowledgement; independent Stop; no automatic retries |
 
-Split gives the navigator, transcript and composer stable space. Wide adds the Details pane when there is room; Focus gives space to the current surface. Small terminals show the focused pane and retain the same focus cycle. Long original prompts and recovery records have an independent scroll area; reading them never changes the selected mutation choice. Source/control characters are sanitized for presentation while original draft, item and operation text remains intact.
+Read state, native run state and settlement are separate. Open verifies a live source before recording its event as read, and never settles it. Running includes running/needs-input/failed even after reading. Unread and Completed share view 1; Pins is independent and Settled is an on-demand explorer. Host pagination and local ordering use meaningful activity, excluding shell `updatedAt`/token/tool churn. The compact shell cannot expose unseen mid-run replies it omits; it cannot be treated as a full transcript. Actual subagent counts come from `knownChildCount`, never the loaded-page length. Project inventory is bounded to 200 entries / 48 KiB of record content, with explicit incompleteness; older helpers that omit inventory do not establish completeness.
 
-The same action catalog feeds the fuzzy palette and visible shortcut hints. Paste reaches an editor as literal content. It never enters command dispatch. Keyboard repeats are accepted for navigation/editing and rejected for repeated submit/Stop/quit actions. Legacy control-byte aliases and enhanced key identities share explicit submit behavior.
+The focused editor's command layer uses public SLT `key_presses_when` and `consume_event(index)` after its named focus registration and before textarea. Unlike shortcut queries, that indexed API can consume owned Enter exclusively. Tests settle focus before checking plain Enter, every accepted modified Enter, command completion and literal paste. Rex can intercept keys before SLT; native key delivery remains a separate acceptance boundary.
+
+Internal tabs retain exact conversation identity and independent autosaved drafts. Closing a tab never deletes draft or operation recovery. `sltUi` replaces old presentation defaults while preserving displaced values. Native pop-out is unimplemented until a draft-safe supported handoff is established; internal tabs remain the supported setting.
 
 ## Source identity and independent hosts
 
@@ -73,7 +89,7 @@ The retained companion handles native descriptor/authentication, WebSocket ticke
 | Latest companion page | 24 rows / 48 KiB; earlier pages use the larger history budget. |
 | Composer | 64 KiB / 9,999 lines. |
 | Client state | 2 MiB; bounded draft, operation, preset and history collections. |
-| Markdown cache | 128 entries / 4 MiB; wrapped measurements capped separately. |
+| Legacy renderer cache | Retained regression helper only; no active SLT performance claim. |
 
 The limits prevent a disconnected host, huge result or long transcript from turning into unbounded frontend work. Truncated item display is explicit. Exact inspection can read the supported native source within its own bounds; complete material remains in T3. Historical pages do not authorize ordinary writes until a verified latest-live view is re-established.
 
@@ -100,6 +116,24 @@ Composer autosaves are debounced and versioned. Launch-form autosaves are also d
 Unsent launch forms use `rustLaunchForms`, keyed by canonical `[profileId, environmentId, projectId]` identity, with a local revision and a 40-form bound. A pending launch carries the exact form key and digest; its acknowledgement retires only that unchanged form in the same atomic transaction. Supported imported launch forms remain reachable through Saved launch forms.
 
 Local project scope, priority, reading anchor and review coordinates describe presentation only. Transcript anchors restore a wrapped offset only when the same source row and content digest remain on the loaded page; diff anchors require the same complete native source hashes. Exact source and content digests prevent an old coordinate or click from becoming a different native action. They neither schedule native work nor replace its state.
+
+## Explicit local context
+
+`/context-save` captures a completed native source item only by explicit action.
+An excerpt cannot be silently promoted to complete source. The private store is
+an explicit state-sibling directory, not an auto-discovered repository journal.
+fael-core supplies actual row, open/history, supersession and ranked query
+semantics; no hooks, crew, daemon or new orchestration is enabled. Full captured
+payloads are content-addressed separately from fael's 10 KiB row limit.
+
+Each immutable event and source blob uses a private temporary file, file fsync,
+atomic no-clobber publication and directory fsync. Source blobs commit before
+referencing rows. Interrupted temporary/orphan inputs remain recoverable;
+traversal, parse and hash failures mark recall degraded. This is the tested
+filesystem syscall boundary, not a hardware power-loss guarantee. Bounded
+structured packs retain exact known totals, omissions, source/content revisions,
+observation metadata and pack identity. `/resume` adds actual protected drafts,
+original pending operations and native requests; nothing is executed or resolved.
 
 ## Verification boundaries
 

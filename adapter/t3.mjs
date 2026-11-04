@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFile, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { Journal, journalScope } from './journal.mjs';
-import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, restoreBoundedSnapshot, targetThread, text, trimView, validateDescriptor, view } from './core.mjs';
+import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, requests, restoreBoundedSnapshot, targetThread, text, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
 import { FEATURES, catalog, launchCommand, modelCommand, modelView, sameSelection } from './models.mjs';
 import { threadList } from './navigation.mjs';
@@ -14,6 +14,59 @@ import { projectPage, resolveDefaults, launchProjectCommand, launchWorkspaceMatc
 // Structural reads have a separate sustained-rate ceiling: a burst can reveal
 // new content promptly without turning a busy stream into snapshot polling.
 export const SCHEDULING = Object.freeze({ frameMs: 80, structureMs: 120, refreshIntervalMs: 400, probeReceiptMs: 5000 });
+
+// The journal fingerprint already binds these values to the original operation.
+// Qualify legacy durable receipts too; never derive an answer from newer controls.
+function acceptedResult(op, action, result) {
+  return op === 'answer' ? {...result, acknowledgement: {
+    environmentId:action.environmentId, threadId:action.threadId,
+    requestId:action.requestId, revision:action.revision, operationId:action.id
+  }} : result;
+}
+
+function validateQuestionAnswers(action, projection) {
+  const current = requests(projection).find(request => request.id === action.requestId);
+  requireThat(current?.supported && current.revision === action.revision,
+    'The request changed or is unsupported. Refresh and review it.', 'stale');
+  if (current.kind !== 'user_input_request') return;
+  const questions = current.questions, ids = new Set();
+  requireThat(Array.isArray(questions) && questions.length > 0 && questions.length <= 8,
+    'Review this native question form in full T3.', 'unsupported');
+  requireThat(action.answers && typeof action.answers === 'object' && !Array.isArray(action.answers), 'Missing answers.');
+  for (const question of questions) {
+    requireThat(question && typeof question === 'object' && typeof question.id === 'string' && question.id.length <= 128 && !ids.has(question.id), 'Invalid or duplicate native question ID.', 'unsupported');
+    identifier(question.id, 'question id'); ids.add(question.id);
+    for (const flag of ['required','multiSelect','allowCustomAnswer'])
+      requireThat(question[flag] === undefined || typeof question[flag] === 'boolean', 'Unsupported native question flag.', 'unsupported');
+    const options = question.options ?? [];
+    requireThat(Array.isArray(options) && options.length <= 24, 'Unsupported native question choices.', 'unsupported');
+    const offered = new Set(), choiceIds = new Set();
+    for (const option of options) {
+      requireThat(option && typeof option === 'object' && !Array.isArray(option), 'Unsupported native question choice.', 'unsupported');
+      requireThat(option.value === undefined || typeof option.value === 'string', 'Unsupported native question value type.', 'unsupported');
+      const value = option.value === undefined ? option.label : option.value;
+      requireThat(typeof option.label === 'string' && option.label.length > 0 && option.label.length <= 256 &&
+        typeof value === 'string' && value.trim().length > 0 && !offered.has(value), 'Invalid or duplicate native question choice.', 'unsupported');
+      if (option.id !== undefined) {
+        identifier(option.id, 'choice id');
+        requireThat(!choiceIds.has(option.id), 'Duplicate native choice ID.', 'unsupported');
+        choiceIds.add(option.id);
+      }
+      offered.add(value);
+    }
+    const answer = action.answers[question.id], required = question.required !== false;
+    if (answer === undefined) { requireThat(!required, `Answer required: ${question.header ?? question.id}`); continue; }
+    const custom = question.allowCustomAnswer === true || options.length === 0;
+    const allowed = value => typeof value === 'string' && Buffer.byteLength(value) <= LIMIT.prompt &&
+      (custom || offered.has(value));
+    if (question.multiSelect === true && options.length > 0) {
+      requireThat(Array.isArray(answer) && answer.length <= 32 && (!required || answer.length > 0) &&
+        answer.every(value => allowed(value) && value.trim().length > 0) && new Set(answer).size === answer.length,
+      `Invalid selections: ${question.header ?? question.id}`);
+    } else requireThat(allowed(answer) && (!required || answer.trim().length > 0), `Invalid answer: ${question.header ?? question.id}`);
+  }
+  requireThat(Object.keys(action.answers).every(id => ids.has(id)), 'Unknown question.');
+}
 
 export async function readConfig(path) {
   const stat = await lstat(path);
@@ -663,7 +716,7 @@ export class T3 {
           if (saved) {
             receipt.durable = saved;
             receipt.payload = saved.payload; receipt.tag = saved.tag;
-            if (saved.result) { receipt.result = saved.result; return saved.result; }
+            if (saved.result) { receipt.result = acceptedResult(op, a, saved.result); return receipt.result; }
             // A prepared record can have reached T3 before a previous helper
             // died. Never infer success from current control state.
             receipt.uncertain = true;
@@ -676,6 +729,7 @@ export class T3 {
             receipt.payload=launchProjectCommand(a,await this.launchDefaults(a));
           } else {
             const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
+            if (op === 'answer') validateQuestionAnswers(a, p);
             if (op === 'thread-action') {
               if (['pin','unpin'].includes(a.action)) requireThat(this.descriptor?.capabilities?.threadPinning === true,
                 'This server does not advertise native thread pinning. Use native T3 or update its verified adapter.', 'unsupported');
@@ -695,7 +749,7 @@ export class T3 {
           // winner's exact payload, even if their preflight snapshots differ.
           const saved = this.journal.access(a.id, fingerprint, receipt);
           receipt.durable = saved; receipt.payload = saved.payload; receipt.tag = saved.tag;
-          if (saved.result) { receipt.result = saved.result; return saved.result; }
+          if (saved.result) { receipt.result = acceptedResult(op, a, saved.result); return receipt.result; }
         }
         const isLaunch=['launch','launch-project'].includes(op);
         let result;
@@ -714,7 +768,7 @@ export class T3 {
           result={threadId:payload.threadId,reconciled:true};
         } else result = await this.rpc.call(receipt.tag, receipt.payload).promise;
         if (!(isLaunch ? typeof result?.threadId === 'string' && result.threadId===receipt.payload.threadId : Number.isSafeInteger(result?.sequence) && result.sequence >= 0)) throw new Fault('incompatible', 'T3 returned an unfamiliar acknowledgement; inspect the thread before another action.', true);
-        const accepted = isLaunch ? {threadId:result.threadId,...(result.reconciled?{reconciled:true}:{})} : {sequence:result.sequence};
+        const accepted = acceptedResult(op, a, isLaunch ? {threadId:result.threadId,...(result.reconciled?{reconciled:true}:{})} : {sequence:result.sequence});
         if (op==='thread-action') {
           accepted.threadId=a.threadId; accepted.action=a.action;
           // Action acceptance remains authentic even when the optional

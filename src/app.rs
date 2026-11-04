@@ -1,12 +1,15 @@
 //! One event-driven client workspace. Background reads never acquire mutation
 //! authority; every write is journaled before it reaches the adapter.
 mod actions;
+mod context;
+#[cfg(test)]
 mod input;
 #[cfg(test)]
 mod lifecycle_tests;
 mod native;
 #[cfg(test)]
 mod recovery_tests;
+mod slt;
 mod workspace;
 
 use crate::{
@@ -20,24 +23,14 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use crossbeam_channel::{Receiver, Sender, bounded};
-use crossterm::{
-    event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event,
-    },
-    execute,
-    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{Terminal, backend::CrosstermBackend};
+#[cfg(test)]
+use crossterm::event::Event;
 use ratatui_textarea::{CursorMove, TextArea};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io::{self, Write},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    io::Write,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -67,8 +60,6 @@ impl Pool {
 }
 
 pub(super) enum Background {
-    Input(Event),
-    InputError(String),
     Page {
         profile: usize,
         generation: u64,
@@ -140,6 +131,8 @@ pub(super) enum ModelScope {
 }
 #[derive(Clone, Debug)]
 pub(super) enum InputTarget {
+    ContextQuery(crate::context_store::Scope),
+    ContextRevisit(Box<crate::context_store::PackRow>),
     Search,
     LoadedSearch,
     LaunchTitle,
@@ -151,6 +144,7 @@ pub(super) enum InputTarget {
 }
 #[derive(Clone, Debug)]
 pub(super) enum Intent {
+    Context(context::Action),
     Workspace(workspace::WorkspaceAction),
     Command(String),
     Lane(String),
@@ -175,6 +169,7 @@ pub(super) enum Intent {
     ModelSave,
     ClearOverride,
     Request(Value),
+    SavedAnswer(Value),
     Approval(Value, String),
     QuestionOption(Value),
     QuestionNext,
@@ -281,6 +276,8 @@ pub(super) struct Host {
     queued: Option<(bool, bool, String, bool)>,
     windowed: bool,
     refresh_loaded: bool,
+    projects: Vec<Value>,
+    projects_more: bool,
 }
 pub(super) type DraftCache = Arc<Mutex<HashMap<String, (u64, String)>>>;
 
@@ -304,6 +301,9 @@ pub struct App {
     pub(super) filtering: bool,
     pub(super) server_search: bool,
     pub(super) lane: String,
+    pub(super) completed_collapsed: bool,
+    pub(super) completed_count: usize,
+    pub(super) opened_completion: Option<(usize, String, Option<String>)>,
     pub(super) kind: String,
     pub(super) scope: Option<usize>,
     pub(super) expanded: HashSet<String>,
@@ -335,10 +335,13 @@ pub struct App {
     pub(super) draft_error: String,
     pub(super) in_flight: Arc<Mutex<HashSet<(String, bool)>>>,
     pub(super) recents: VecDeque<(usize, String)>,
+    pub(super) tabs: Vec<(usize, String)>,
     pub(super) return_positions: HashMap<String, (usize, bool, TextArea<'static>)>,
     pub(super) read_connection: Option<Connection>,
     pub(super) read_cancel: Option<(Connection, String)>,
+    pub(super) clipboard_request: Option<String>,
     pub(super) pending_external_edit: bool,
+    pub(super) pending_attention: Option<(usize, String, String, String)>,
     pub(super) receipt: Option<Value>,
     pub(super) native_scope: String,
     pub(super) workspace: workspace::WorkspaceState,
@@ -348,14 +351,8 @@ impl App {
     pub fn new(args: Args, environments: Vec<Environment>, state: Arc<State>) -> Result<Self> {
         workspace::migrate_launch_forms(&state, &environments)?;
         let snapshot = state.snapshot();
-        let preferences = &snapshot["rustUi"];
-        let mode = if args.mode == "agentbox"
-            || args.mode.is_empty() && preferences["mode"] == "agentbox"
-        {
-            Mode::AgentBox
-        } else {
-            Mode::Developer
-        };
+        let preferences = &snapshot["sltUi"];
+        let mode = Mode::Dev;
         let theme = if args.theme.is_empty() {
             let t = string(preferences, "theme");
             if t.is_empty() { "violet".into() } else { t }
@@ -396,11 +393,10 @@ impl App {
             filter: String::new(),
             filtering: false,
             server_search: false,
-            lane: if mode == Mode::AgentBox {
-                "Inbox".into()
-            } else {
-                "Unreviewed".into()
-            },
+            lane: "Open".into(),
+            completed_collapsed: false,
+            completed_count: 0,
+            opened_completion: None,
             kind: "all".into(),
             scope: None,
             expanded: HashSet::new(),
@@ -412,8 +408,7 @@ impl App {
             request_edit: None,
             creation_profile,
             delivery: "auto".into(),
-            notice: "Choose a conversation or press n to create one. Ctrl+P opens every action."
-                .into(),
+            notice: String::new(),
             dirty: true,
             quit: false,
             transcript_scroll: 0,
@@ -432,160 +427,21 @@ impl App {
             draft_error: String::new(),
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             recents: VecDeque::new(),
+            tabs: Vec::new(),
             return_positions: HashMap::new(),
             read_connection: None,
             read_cancel: None,
+            clipboard_request: None,
             pending_external_edit: false,
+            pending_attention: None,
             receipt: None,
             native_scope: "project".into(),
             workspace,
         })
     }
 
-    pub fn run(mut self) -> Result<()> {
-        let mut guard = Some(TerminalGuard::enter(self.mouse)?);
-        let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-        let old_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            TerminalGuard::restore();
-            old_hook(info);
-        }));
-        self.refresh(false, false)?;
-        if !self.args.thread.is_empty() {
-            self.open(
-                self.creation_profile.context("--thread requires --env")?,
-                self.args.thread.clone(),
-            )?;
-        }
-        let outcome = loop {
-            let listening = Arc::new(AtomicBool::new(true));
-            let running = listening.clone();
-            let tx = self.tx.clone();
-            let input =
-                thread::spawn(move || {
-                    while running.load(Ordering::Relaxed) {
-                        match event::poll(Duration::from_millis(100)) {
-                            Ok(true) => match event::read() {
-                                Ok(e) => {
-                                    let mut event = Background::Input(e);
-                                    loop {
-                                        match tx.send_timeout(event, Duration::from_millis(100)) {
-                                            Ok(()) => break,
-                                            Err(crossbeam_channel::SendTimeoutError::Timeout(
-                                                e,
-                                            )) if running.load(Ordering::Relaxed) => event = e,
-                                            Err(_) => return,
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = tx.send_timeout(
-                                        Background::InputError(e.to_string()),
-                                        Duration::from_millis(100),
-                                    );
-                                    break;
-                                }
-                            },
-                            Ok(false) => {}
-                            Err(e) => {
-                                let _ = tx.send_timeout(
-                                    Background::InputError(e.to_string()),
-                                    Duration::from_millis(100),
-                                );
-                                break;
-                            }
-                        }
-                    }
-                });
-            let cycle = (|| -> Result<()> {
-                let mut drawn = Instant::now() - Duration::from_secs(1);
-                while !self.quit {
-                    if self.dirty && drawn.elapsed() >= Duration::from_millis(16) {
-                        let view = self.view();
-                        let modal = self.modal();
-                        terminal.draw(|frame| {
-                            self.hits = self.renderer.draw(
-                                frame,
-                                &view,
-                                &self.composer,
-                                modal.as_ref(),
-                                &self.modal_editor,
-                            );
-                        })?;
-                        self.dirty = self.restore_rendered_position();
-                        drawn = Instant::now();
-                    }
-                    if self.save_at.is_some_and(|t| Instant::now() >= t)
-                        && let Err(e) = self.schedule_save()
-                    {
-                        self.draft_error = e.to_string();
-                        self.save_at = Some(Instant::now() + Duration::from_millis(500));
-                        self.error(e);
-                    }
-                    if self.form_save_at.is_some_and(|t| Instant::now() >= t)
-                        && let Err(e) = self.flush_form()
-                    {
-                        self.error(e);
-                    }
-                    let next_save = self.save_at.into_iter().chain(self.form_save_at).min();
-                    let timeout = if self.dirty {
-                        Duration::from_millis(16).saturating_sub(drawn.elapsed())
-                    } else {
-                        next_save
-                            .map(|t| t.saturating_duration_since(Instant::now()))
-                            .unwrap_or(Duration::from_secs(1))
-                    };
-                    if let Ok(event) = self.rx.recv_timeout(timeout)
-                        && let Err(e) = self.handle(event)
-                    {
-                        self.error(e);
-                    }
-                    // Coalesce a bounded burst into one frame; never discard a delta.
-                    for _ in 0..64 {
-                        match self.rx.try_recv() {
-                            Ok(event) => {
-                                if let Err(e) = self.handle(event) {
-                                    self.error(e)
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    if self.pending_external_edit {
-                        break;
-                    }
-                }
-                Ok(())
-            })();
-            listening.store(false, Ordering::Relaxed);
-            let _ = input.join();
-            if cycle.is_err() || self.quit {
-                break cycle;
-            }
-            if self.pending_external_edit {
-                self.pending_external_edit = false;
-                drop(guard.take());
-                if let Err(e) = self.external_editor() {
-                    self.error(e);
-                }
-                guard = Some(TerminalGuard::enter(self.mouse)?);
-                terminal.clear()?;
-                self.dirty = true;
-            }
-        };
-        let saved = self.flush_draft();
-        if let Some(a) = &self.active
-            && let Some(c) = &a.connection
-        {
-            c.close();
-        }
-        if let Some(c) = &self.read_connection {
-            c.close();
-        }
-        self.save_ui()?;
-        terminal.show_cursor()?;
-        outcome?;
-        saved
+    pub fn run(self) -> Result<()> {
+        self.run_slt()
     }
 
     fn external_editor(&mut self) -> Result<()> {
@@ -621,7 +477,6 @@ impl App {
                 break status;
             }
             if let Ok(event) = self.rx.recv_timeout(Duration::from_millis(50))
-                && !matches!(event, Background::Input(_))
                 && let Err(e) = self.handle(event)
             {
                 self.error(e);
@@ -795,14 +650,17 @@ impl App {
     pub(super) fn save_ui(&self) -> Result<()> {
         self.save_reading_position()?;
         self.save_review_position()?;
-        let mode = if self.mode == Mode::Developer {
-            "developer"
-        } else {
-            "agentbox"
-        };
         let theme = self.theme.clone();
         self.state.update(|v| {
-            v["rustUi"] = json!({"mode":mode,"theme":theme});
+            if !v["sltUi"].is_object() {
+                v["sltUi"] = json!({});
+            }
+            v["sltUi"]["theme"] = json!(theme);
+            v["sltUi"]["tabPlacement"] = json!("internal");
+            v["sltUi"]["tabs"] = json!(self.tabs.iter().map(|(profile, thread)| {
+                let env = &self.environments[*profile];
+                json!({"profileId":env.id,"environmentId":env.environment_id,"threadId":thread})
+            }).collect::<Vec<_>>());
             Ok(())
         })
     }
@@ -903,13 +761,26 @@ impl App {
         // by applying the loaded-title filter a second time.
         let search = self.server_search;
         let expanded = self.workspace_expansion();
-        self.visible = domain::visible_threads(
+        let unread = self
+            .threads
+            .iter()
+            .filter(|thread| {
+                self.state.is_thread_unread(
+                    &self.environments[thread.profile].environment_id,
+                    &thread.id,
+                    thread.activity_generation().as_deref(),
+                )
+            })
+            .map(Thread::key)
+            .collect();
+        self.visible = domain::visible_threads_with_unread(
             &self.threads,
             if search { "" } else { &self.filter },
             &self.lane,
             &self.kind,
             self.scope,
             expanded.as_ref().unwrap_or(&self.expanded),
+            &unread,
         );
         self.workspace_order();
         self.selected = previous
@@ -928,7 +799,26 @@ impl App {
             profile < self.environments.len() && domain::valid_id(&thread),
             "Invalid conversation destination"
         );
+        self.preserve_open_form()?;
         self.flush_draft()?;
+        if !self
+            .tabs
+            .iter()
+            .any(|(p, id)| *p == profile && id == &thread)
+        {
+            self.tabs.push((profile, thread.clone()));
+        }
+        self.opened_completion = match self
+            .threads
+            .iter()
+            .find(|row| row.profile == profile && row.id == thread)
+        {
+            Some(row) => row
+                .activity_generation()
+                .map(|generation| (profile, thread.clone(), Some(generation)))
+                .or_else(|| Some((profile, thread.clone(), None))),
+            None => Some((profile, thread.clone(), None)),
+        };
         if let Some(old) = self.active.take() {
             let key = format!("{}\0{}", old.profile, old.thread);
             self.return_positions.insert(
@@ -1007,6 +897,7 @@ impl App {
         // its handshake even when another foreground read is still retiring.
         let connection = Connection::start(env)?;
         self.active.as_mut().unwrap().connection = Some(connection.clone());
+        self.save_ui()?;
         let tx = self.tx.clone();
         self.pool.submit(move || {
             let result = match connection.hello() {
@@ -1030,8 +921,6 @@ impl App {
 
     fn handle(&mut self, event: Background) -> Result<()> {
         match event {
-            Background::Input(e) => self.input(e)?,
-            Background::InputError(error) => bail!("Terminal input: {error}"),
             Background::Saved {
                 key,
                 version,
@@ -1058,9 +947,47 @@ impl App {
                     return Ok(());
                 }
                 host.loading = false;
-                match result.and_then(|v| ThreadPage::parse(profile, v).map_err(|e| e.to_string()))
-                {
-                    Ok(mut page) => {
+                match result.and_then(|v| {
+                    let inventory = (|| -> Result<_> {
+                        let Some(projects) = v.get("projects") else {
+                            return Ok((None, true));
+                        };
+                        let projects = projects
+                            .as_array()
+                            .context("Invalid native project inventory")?;
+                        ensure!(
+                            projects.len() <= 200
+                                && serde_json::to_vec(projects)?.len() <= 50 * 1024,
+                            "Native project inventory exceeds its bounds"
+                        );
+                        let more = v["projectsMore"]
+                            .as_bool()
+                            .context("Missing project inventory completeness")?;
+                        let mut ids = HashSet::new();
+                        for project in projects {
+                            let id = string(project, "id");
+                            ensure!(
+                                project.is_object()
+                                    && domain::valid_id(&id)
+                                    && ids.insert(id)
+                                    && project["title"]
+                                        .as_str()
+                                        .is_some_and(|title| title.len() <= 512),
+                                "Invalid or duplicate native project identity"
+                            );
+                        }
+                        Ok((Some(projects.clone()), more))
+                    })()
+                    .map_err(|error| error.to_string())?;
+                    ThreadPage::parse(profile, v)
+                        .map(|page| (page, inventory))
+                        .map_err(|e| e.to_string())
+                }) {
+                    Ok((mut page, (projects, projects_more))) => {
+                        if let Some(projects) = projects {
+                            host.projects = projects;
+                        }
+                        host.projects_more = projects_more;
                         host.error.clear();
                         if host.refresh_loaded && !host.page.threads.is_empty() {
                             for fresh in page.threads {
@@ -1101,6 +1028,7 @@ impl App {
                 }
                 let queued = host.queued.take();
                 self.rebuild();
+                self.observe_completion()?;
                 self.notice = self.host_status();
                 if let Some((append, search, query, refresh_loaded)) = queued {
                     self.refresh_profile(profile, append, search, query, refresh_loaded)?;
@@ -1145,6 +1073,15 @@ impl App {
                 )?;
             }
             Background::Packet { generation, packet } => {
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.generation == generation)
+                    && self.request_edit.is_some()
+                {
+                    self.flush_form()?;
+                    self.save_question_draft()?;
+                }
                 let Some(a) = self.active.as_mut().filter(|a| a.generation == generation) else {
                     return Ok(());
                 };
@@ -1207,6 +1144,7 @@ impl App {
                     self.refresh_profile(profile, false, false, String::new(), true)?;
                 }
                 self.observe_navigation();
+                self.observe_completion()?;
                 self.restore_reading_position_if_ready();
                 self.observe_receipt();
                 self.dirty = true;
@@ -1391,6 +1329,9 @@ impl App {
         };
         nav.acknowledged = true;
         self.observe_navigation();
+        if let Err(error) = self.observe_completion() {
+            self.error(error);
+        }
         self.restore_reading_position_if_ready();
         true
     }
@@ -1463,7 +1404,26 @@ impl App {
                 domain::valid_id(&string(&fields, "threadId")),
                 "Mutation needs an exact thread identity"
             );
-            if op != "launch-project" {
+            if op == "thread-action" {
+                let target = self
+                    .threads
+                    .iter()
+                    .find(|thread| {
+                        thread.profile == profile && thread.raw["id"] == fields["threadId"]
+                    })
+                    .context(
+                        "Refresh the displayed conversation before changing its disposition",
+                    )?;
+                ensure!(
+                    target.inbox()["nativeRevision"] == fields["expectedRevision"]
+                        && !string(target.inbox(), "nativeRevision").is_empty(),
+                    "Native disposition revision changed; refresh before trying again"
+                );
+                ensure!(
+                    self.hosts[profile].error.is_empty(),
+                    "Host metadata unavailable; refresh before changing disposition"
+                );
+            } else if op != "launch-project" {
                 let active = self
                     .active
                     .as_ref()
@@ -1662,6 +1622,14 @@ impl App {
                                 "This host does not advertise {capability}"
                             );
                         }
+                        if op == "thread-action"
+                            && matches!(fields["action"].as_str(), Some("pin" | "unpin"))
+                        {
+                            ensure!(
+                                flag(&hello["features"], "threadPinning"),
+                                "This native host does not advertise pinning"
+                            );
+                        }
                     }
                     attempted = true;
                     match connection.request(&op, fields.clone(), Some(&id)) {
@@ -1674,6 +1642,7 @@ impl App {
                         Ok(value) => {
                             let mut identity = fields.clone();
                             identity["id"] = json!(id);
+                            identity["environmentId"] = json!(env.environment_id);
                             validate_ack(&op, &identity, &value)?;
                             let thread = string(&fields, "threadId");
                             let message =
@@ -1880,7 +1849,7 @@ impl App {
                         format!("unavailable ({})", h.error)
                     } else {
                         format!(
-                            "{}{}{}{}",
+                            "{}{}{}{}{}",
                             h.page.threads.len(),
                             if h.page.more { "+" } else { "" },
                             if h.windowed {
@@ -1890,6 +1859,11 @@ impl App {
                             },
                             if !h.page.inclusive_children {
                                 " · older companion: use server search for children"
+                            } else {
+                                ""
+                            },
+                            if h.projects_more {
+                                " · project inventory incomplete"
                             } else {
                                 ""
                             }
@@ -1962,18 +1936,14 @@ impl App {
                         t.project,
                         if t.kind() == "fork" { " · fork" } else { "" }
                     ),
-                    status: if self.mode == Mode::AgentBox {
-                        format!(
-                            "{} · {} · {}",
-                            self.workspace_priority(t),
-                            t.lane(),
-                            t.status
-                        )
+                    status: if t.status != "failed" && t.attention() {
+                        "needs_input".into()
                     } else {
-                        format!("{} · {}", t.lane(), t.status)
+                        t.status.clone()
                     },
                     depth: *depth,
                     pinned: t.pinned(),
+                    section: self.open_section(t).into(),
                 }
             })
             .collect();
@@ -2014,16 +1984,11 @@ impl App {
         let pending = self.state.pending_records().len();
         let status = if let Some(a) = &self.active {
             format!(
-                "{} · {} · {} · {}{}",
+                "{} · {} · {} · {}",
                 a.status,
                 string(&metadata, "status"),
                 string(&metadata, "model"),
-                self.delivery,
-                if flag(&metadata, "limited") {
-                    " · bounded view"
-                } else {
-                    ""
-                }
+                self.delivery
             )
         } else {
             self.host_status()
@@ -2049,6 +2014,12 @@ impl App {
             ("Recovery".into(), pending.to_string()),
             ("Hosts".into(), self.host_status()),
         ];
+        if flag(&metadata, "limited") {
+            inspector.push((
+                "History".into(),
+                "Excerpt · Earlier and native source actions remain available".into(),
+            ));
+        }
         if let Some(selection) = metadata.get("modelSelection") {
             for o in array(selection, "options") {
                 inspector.push((
@@ -2059,6 +2030,18 @@ impl App {
                         .unwrap_or_else(|| o["value"].to_string()),
                 ));
             }
+        }
+        if let Some(row) = self.active.as_ref().and_then(|active| {
+            self.threads
+                .iter()
+                .find(|row| row.profile == active.profile && row.id == active.thread)
+        }) {
+            inspector.push((
+                "Subagents".into(),
+                row.child_count()
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "Unavailable".into()),
+            ));
         }
         inspector.push(("Browsing".into(), self.workspace_scope_label()));
         ui::View {
@@ -2071,6 +2054,8 @@ impl App {
             lane: self.lane.clone(),
             rows,
             selected: self.selected,
+            completed_count: self.completed_count,
+            completed_collapsed: self.completed_collapsed,
             messages,
             transcript_scroll: self.transcript_scroll,
             follow: self.follow,
@@ -2078,7 +2063,7 @@ impl App {
             hint: if self.filtering {
                 "Filter loaded titles · Enter done · Ctrl+F search server · Esc clear".into()
             } else {
-                match self.focus{Focus::Navigator=>"↑↓ select · Enter open · Space preview · / filter · n new · v views · Ctrl+P commands",Focus::Composer=>"Enter newline · Ctrl+] send · Ctrl+S stop · Ctrl+Y requests · Tab focus",Focus::Transcript=>"↑↓ scroll · Home/End · [ earlier · ] latest · Tab focus",Focus::Inspector=>"Ctrl+P commands · Tab focus"}.into()
+                match self.focus{Focus::Navigator=>"↑↓ select · Enter open · Ctrl+T settle / unsettle · c Completed · Alt+H help",Focus::Composer=>"Enter newline · Ctrl+] send · Ctrl+S stop · Ctrl+T settle · Alt+H help",Focus::Transcript=>"↑↓ scroll · [ earlier · ] latest · Ctrl+T settle · Alt+H help",Focus::Inspector=>"Ctrl+P commands · Ctrl+T settle · Alt+H help"}.into()
             },
             notice,
             inspector,
@@ -2127,6 +2112,18 @@ pub(super) fn validate_ack(op: &str, fields: &Value, value: &Value) -> Result<()
             "Unrecognized acknowledgement sequence; operation remains saved"
         );
     }
+    if op == "answer" {
+        let source = crate::attention::Source {
+            environment_id: string(fields, "environmentId"),
+            thread_id: string(fields, "threadId"),
+            request_id: string(fields, "requestId"),
+            revision: string(fields, "revision"),
+        };
+        ensure!(
+            crate::attention::acknowledged(&source, &string(fields, "id"), value),
+            "Answer acknowledgement changed source, revision or operation; original operation remains saved"
+        );
+    }
     if op == "thread-action" {
         ensure!(
             value["threadId"] == fields["threadId"] && value["action"] == fields["action"],
@@ -2134,37 +2131,6 @@ pub(super) fn validate_ack(op: &str, fields: &Value, value: &Value) -> Result<()
         );
     }
     Ok(())
-}
-
-struct TerminalGuard;
-impl TerminalGuard {
-    fn enter(mouse: bool) -> Result<Self> {
-        terminal::enable_raw_mode()?;
-        let mut out = io::stdout();
-        if let Err(e) = execute!(out, EnterAlternateScreen, EnableBracketedPaste) {
-            Self::restore();
-            return Err(e.into());
-        }
-        if mouse {
-            execute!(out, EnableMouseCapture)?;
-        }
-        Ok(Self)
-    }
-    fn restore() {
-        let _ = terminal::disable_raw_mode();
-        let _ = execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            DisableBracketedPaste,
-            LeaveAlternateScreen,
-            event::PopKeyboardEnhancementFlags
-        );
-    }
-}
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        Self::restore();
-    }
 }
 
 #[cfg(test)]

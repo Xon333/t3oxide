@@ -61,6 +61,7 @@ test('durable accepted answer survives restart without redispatch or new control
     revision: requests(s.projection)[0].revision, answers: { q: 'Original answer' } };
   let server = backend(path, s);
   const result = await server.act('answer', a);
+  assert.deepEqual(result.acknowledgement, {environmentId:'env-a',threadId:'thread-a',requestId:'request-a',revision:a.revision,operationId:'answer-a'});
   server.close(); s.projection.runtimeRequests[0].status = 'resolved';
   server = backend(path, s);
   assert.deepEqual(await server.act('answer', a), result);
@@ -74,7 +75,7 @@ test('durable accepted answer survives restart without redispatch or new control
 test('unacknowledged answer retry preserves exact answers and request after helper replacement', async t => {
   const path = await directory(t), s = state();
   s.projection.turnItems = [{ id: 'question', type: 'user_input_request', requestId: 'request-a',
-    questions: [{ id: 'q', header: 'Fixture' }] }];
+    questions: [{ id: 'q', header: 'Fixture', multiSelect:true, options:[{label:'Original'},{label:'answer'}] }] }];
   s.projection.runtimeRequests = [{ id: 'request-a', status: 'pending', responseCapability: { type: 'message' } }];
   const a = { id: 'answer-a', environmentId: 'env-a', threadId: 'thread-a', requestId: 'request-a',
     revision: requests(s.projection)[0].revision, answers: { q: ['Original', 'answer'] } };
@@ -82,7 +83,7 @@ test('unacknowledged answer retry preserves exact answers and request after help
   s.dispatch = async () => { s.projection.runtimeRequests[0].status = 'resolved'; throw new Fault('timeout', 'Lost ACK', true); };
   await assert.rejects(server.act('answer', a), { uncertain: true }); server.close();
   server = backend(path, s); s.dispatch = async () => ({ sequence: 12 });
-  assert.deepEqual(await server.act('answer', a), { sequence: 12 });
+  assert.deepEqual(await server.act('answer', a), { sequence: 12, acknowledgement:{environmentId:'env-a',threadId:'thread-a',requestId:'request-a',revision:a.revision,operationId:'answer-a'} });
   assert.deepEqual(s.calls[0], s.calls[1]); assert.equal(s.reads, 1); server.close();
 });
 

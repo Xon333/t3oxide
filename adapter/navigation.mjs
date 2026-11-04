@@ -1,7 +1,7 @@
 // Bounded thread navigation, derived only from T3's authoritative lineage.
 import { clip, identifier, LIMIT, requireThat } from './core.mjs';
 import { lineage, providerIdentity } from './models.mjs';
-import { inboxMetadata } from './native.mjs';
+import { inboxMetadata, meaningfulActivity } from './native.mjs';
 
 export function threadType(thread) {
   const l = lineage(thread.lineage);
@@ -80,7 +80,7 @@ export function threadList(shell, query = '', options = {}) {
   }
   const eligible = available.filter(t => !scoped || options.includeChildren === true || threadType(t) !== 'subagent' ||
     ((q || lifecycle !== 'active' || working(t)) && (q || filter === 'subagents' || open.has(lineage(t.lineage)?.parentThreadId))))
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
+    .sort((a, b) => meaningfulActivity(b).at.localeCompare(meaningfulActivity(a).at) || String(a.id).localeCompare(String(b.id)));
   const all = new Map(), children = new Map();
   const positions = new Map(eligible.map((t,i) => [t.id,i]));
   for (const t of eligible) {
@@ -171,7 +171,21 @@ export function threadList(shell, query = '', options = {}) {
     if (bytes+cost > 288*1024) { more = true; break; }
     rows.push(row); bytes += cost;
   }
+  // Project navigation includes empty projects without loading transcript bodies.
+  const inventory = []; let inventoryBytes = 0;
+  const activeProjects = shell.projects.filter(project => !project.deletedAt);
+  const projectIDs = new Set();
+  for (const project of activeProjects) {
+    identifier(project.id, 'project id');
+    requireThat(!projectIDs.has(project.id), 'Duplicate native project identity.', 'incompatible');
+    projectIDs.add(project.id);
+    const item = {id:project.id,title:clip(project.title,512).text};
+    const cost = Buffer.byteLength(JSON.stringify(item));
+    if (inventory.length >= 200 || inventoryBytes + cost > 48*1024) break;
+    inventory.push(item); inventoryBytes += cost;
+  }
   return { observedAt: new Date().toISOString(), more, threads: rows,
+    projects:inventory, projectsMore:inventory.length < activeProjects.length,
     ...(scoped ? {lifecycle, cursor, limit: requestedLimit, nextCursor: cursor + rows.length < nodes.length ? cursor + rows.length : null} : {}),
     typeFilter: filter, grouped, matched: matches.length };
 }

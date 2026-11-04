@@ -130,6 +130,7 @@ impl App {
         self.dialog = None;
         self.dirty = true;
         match intent {
+            Intent::Context(action) => self.context_action(action)?,
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
             Intent::Command(command) => self.command(&command)?,
             Intent::Lane(lane) => {
@@ -212,6 +213,10 @@ impl App {
                 self.notice = "One-message override cleared.".into();
             }
             Intent::Request(request) => self.review_request(request)?,
+            Intent::SavedAnswer(record) => self.detail(
+                "Saved answer · original source",
+                serde_json::to_string_pretty(&record)?,
+            ),
             Intent::Approval(request, decision) => {
                 self.ensure_request(&request)?;
                 let a = self.active.as_ref().unwrap();
@@ -303,6 +308,9 @@ impl App {
             .trim_start_matches('/')
             .split_once(' ')
             .unwrap_or((command.trim().trim_start_matches('/'), ""));
+        if self.context_command(name, args)? {
+            return Ok(());
+        }
         match name {
             "commands" => self.palette(),
             "command" => self.text_dialog(
@@ -316,33 +324,19 @@ impl App {
                 self.quit = true;
             },
             "mode" => {
-                self.mode = match args {
-                    "developer" => Mode::Developer,
-                    "agentbox" => Mode::AgentBox,
-                    "" => if self.mode == Mode::Developer {
-                        Mode::AgentBox
-                    } else {
-                        Mode::Developer
-                    },
-                    _ => bail!("Use /mode developer or /mode agentbox"),
-                };
-                self.lane = if self.mode == Mode::AgentBox {
-                    "Inbox".into()
-                } else {
-                    "Unreviewed".into()
-                };
+                ensure!(["", "dev", "developer", "agentbox"].contains(&args), "Workspace is Dev");
+                self.mode = Mode::Dev;
                 self.save_ui()?;
                 self.rebuild();
             },
             "views" => {
                 let choices = [
-                    "Inbox", "Attention", "Working", "Queued", "Later", "Reviewed", "Unreviewed",
-                    "All", "Unknown",
+                    "Open", "Running", "Pins", "Settled",
                 ]
                 .into_iter()
                 .map(|name| Choice::new(name, "Native conversation state", Intent::Lane(name.into())))
                 .collect();
-                self.menu("Views", "Both modes share the same conversations and draft.", choices);
+                self.menu("Views", "Dev conversations", choices);
             },
             "env" | "switch" | "threads" => {
                 let mut choices = vec![Choice::new(
@@ -371,12 +365,7 @@ impl App {
             "more" => self.refresh(true, false)?,
             "search" => {
                 if args.is_empty() {
-                    self.text_dialog(
-                        "Search native conversations",
-                        "Explicit recent-message search. Returned matches are bounded.",
-                        InputTarget::Search,
-                        self.filter.clone(),
-                    );
+                    self.search_projects();
                 } else {
                     self.filter = args.into();
                     self.refresh(false, true)?;
@@ -443,6 +432,15 @@ impl App {
             },
             "earlier" => self.navigate(true)?,
             "latest" => self.navigate(false)?,
+            "answer-drafts" => {
+                let saved = self.state.snapshot();
+                let choices = saved["attentionDrafts"].as_object().map(|drafts| drafts.values().map(|record| Choice::new(
+                    format!("{} · {}", string(&record["source"],"environmentId"), string(&record["source"],"threadId")),
+                    format!("{} · {}", string(&record["source"],"requestId"), string(&record["source"],"revision")),
+                    Intent::SavedAnswer(record.clone())
+                )).collect()).unwrap_or_default();
+                self.menu("Saved answers", "Original source revisions", choices);
+            }
             "requests" => {
                 let requests = self.active.as_ref().context("Open a conversation first")?.requests.clone();
                 ensure!(!requests.is_empty(), "No verified pending requests. Latest refreshes live offers.");
@@ -468,7 +466,7 @@ impl App {
                 self.read("thread-review", json!({"threadId": a.thread}), ReadKind::Review)?;
                 self.notice = "Reading native changes…".into();
             },
-            "reviewed" | "unreviewed" | "snooze" | "unsnooze" | "pin" => self.thread_action(name)?,
+            "reviewed" | "settle" | "unreviewed" | "unsettle" | "snooze" | "unsnooze" | "pin" => self.thread_action(name)?,
             "model" | "settings" | "effort" | "speed" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 self.model_edit = None;
@@ -527,15 +525,10 @@ impl App {
             ),
             "mouse" => {
                 self.mouse = !self.mouse;
-                if self.mouse {
-                    execute!(io::stdout(), EnableMouseCapture)?;
-                } else {
-                    execute!(io::stdout(), DisableMouseCapture)?;
-                }
                 self.notice = if self.mouse {
-                    "Mouse interaction enabled".into()
+                    "Mouse enabled for next launch".into()
                 } else {
-                    "Native terminal text selection enabled".into()
+                    "Mouse disabled for next launch".into()
                 };
             },
             "web" => {
@@ -543,7 +536,9 @@ impl App {
                 self.detail("Full T3", env.web_url.clone()
                     .unwrap_or_else(|| "No webURL configured for this environment".into()));
             },
-            "help" => self.detail("Keyboard and workflows", HELP_TEXT),
+            "help" | "shortcuts" => {
+                self.detail("Keyboard help", HELP_TEXT);
+            },
             "" => {},
             _ => ensure!(self.workspace_command(name, args)?, "Unknown action /{name}; Ctrl+P lists supported actions"),
         }
@@ -576,15 +571,16 @@ impl App {
         self.mutate(profile, "send", fields, None)
     }
     fn thread_action(&mut self, name: &str) -> Result<()> {
-        let a = self
-            .active
-            .as_ref()
-            .context("Open the conversation before changing its disposition")?;
-        let t = self
-            .threads
-            .iter()
-            .find(|t| t.profile == a.profile && t.id == a.thread)
-            .context("Refresh conversation metadata before this action")?;
+        let t = if self.focus == Focus::Navigator {
+            self.selected_thread()
+                .context("Select a visible conversation first")?
+        } else {
+            let active = self.active.as_ref().context("Open a conversation first")?;
+            self.threads
+                .iter()
+                .find(|thread| thread.profile == active.profile && thread.id == active.thread)
+                .context("Refresh conversation metadata before this action")?
+        };
         let revision = string(t.inbox(), "nativeRevision");
         ensure!(
             !revision.is_empty(),
@@ -597,23 +593,28 @@ impl App {
             "pin" => "pin",
             other => other,
         };
-        if matches!(action, "pin" | "unpin") {
-            ensure!(
-                flag(&a.hello["features"], "threadPinning"),
-                "This native host does not advertise pinning"
-            );
-        }
-        let mut fields = json!({"threadId":a.thread,"action":action,"expectedRevision":revision});
+        let mut fields = json!({"threadId":t.id,"action":action,"expectedRevision":revision});
         if action == "snooze" {
             fields["until"] =
                 json!((OffsetDateTime::now_utc() + time::Duration::hours(1)).format(&Rfc3339)?);
         }
-        let profile = a.profile;
+        let profile = t.profile;
         let title = t.title.clone();
+        if matches!(action, "settle" | "unsettle") {
+            self.flush_draft()?;
+            return self.mutate(profile, "thread-action", fields, None);
+        }
+        let disposition = match action {
+            "settle" => {
+                "Removes this conversation from Unreviewed and Inbox; keeps it in Settled and All. Active or queued work and pending requests must be resolved first. This is not archive or deletion."
+            }
+            "unsettle" => "Restores this conversation to the native inbox; does not start a run.",
+            _ => "Explicit native disposition.",
+        };
         self.menu(
             format!("{action} conversation"),
             format!(
-                "{} / {title} · T3 revalidates the displayed native revision.",
+                "{} / {title} · {disposition} T3 revalidates the displayed native revision.",
                 self.environments[profile].label
             ),
             vec![
@@ -748,4 +749,4 @@ impl App {
     }
 }
 
-const HELP_TEXT: &str = "WORKSPACE\nCtrl+P or Ctrl+Space opens the searchable command palette. F2 switches Developer / AgentBox without detaching. F3 cycles split, focus and wide layouts. Tab / Shift+Tab changes pane. Ctrl+O selects conversations; Ctrl+L selects Info.\n\nNAVIGATOR\nArrows or j/k select. Enter or click opens the exact conversation. / filters loaded titles; Ctrl+F explicitly searches native recent messages. Right expands native children; Left collapses. Space previews without switching your draft or Stop target. n creates, v chooses an inbox view, e scopes environments, r refreshes. Alt+Up opens the authoritative parent.\n\nCOMPOSER\nEnter inserts a newline. Ctrl+] sends. Ctrl+\\ sends literal text. Ctrl+S stops the reviewed active run with native queue hold, including while a dialog is open. Ctrl+Y reviews exact native requests. Ctrl+E opens VISUAL / EDITOR. Ctrl+C preserves the draft and moves focus. Undo, redo, word movement, selection and mouse editing use the upstream textarea component. Bracketed paste is always literal.\n\nREADING\nArrows, PageUp/PageDown, mouse wheel, Home and End scroll. End resumes following. [ requests an earlier native page; ] returns to latest live detail. Tool and diff inspection is read-only. Viewing never marks work reviewed.\n\nFORMS\nArrows choose; Enter selects; Esc dismisses. Multiline inputs use Enter for newline, Ctrl+] to save. Approvals show only native offered decisions. Question forms support options, multiple selections and custom text when offered.\n\nRECOVERY\nThe client saves exact operation identities before dispatch. Disconnects never replay mutations. Recover shows the original payload and offers explicit same-ID reconciliation. Pending Stop has its own lane. Native work continues after Ctrl+Q exits.\n\nBOUNDS\nMetadata pages and transcripts are bounded, with explicit More/Earlier actions. Full T3 retains attachments, embedded tools, complete history and any capability not advertised by the host.";
+const HELP_TEXT: &str = include_str!("../../docs/shortcuts.md");

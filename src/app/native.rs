@@ -148,7 +148,7 @@ impl App {
     }
     pub(super) fn load_defaults(&mut self) -> Result<()> {
         let l = self.launch.as_ref().context("Launch form is unavailable")?;
-        let mut fields = json!({"projectId":l.project["id"],"isolated":self.mode==Mode::AgentBox});
+        let mut fields = json!({"projectId":l.project["id"],"isolated":false});
         if let Some(mode) = &l.workspace {
             fields["workspaceMode"] = json!(mode);
         }
@@ -496,6 +496,11 @@ impl App {
             "Input exceeds the editor limit"
         );
         match target {
+            InputTarget::ContextRevisit(row) => self.state.set_draft(
+                &row.source.environment_id,
+                &format!("context-revisit-{}", row.id),
+                text,
+            )?,
             InputTarget::LaunchTitle => {
                 ensure!(text.len() <= 512, "Title exceeds 512 bytes");
                 self.launch.as_mut().context("Launch form expired")?.title = text.to_owned();
@@ -529,6 +534,7 @@ impl App {
             }
             _ => {}
         }
+        self.save_question_draft()?;
         Ok(())
     }
     pub(super) fn submit_text(&mut self, target: InputTarget) -> Result<()> {
@@ -536,6 +542,8 @@ impl App {
         self.preserve_form_edit(&target, &text)?;
         self.dialog = None;
         match target {
+            InputTarget::ContextRevisit(row) => self.context_revisit(&row, &text)?,
+            InputTarget::ContextQuery(scope) => self.context_recall(scope, &text, false, 0)?,
             InputTarget::Search => {
                 self.filter = text;
                 self.refresh(false, true)?;
@@ -619,7 +627,7 @@ impl App {
         }
         let thread = wire::new_id();
         let mut fields = json!({"threadId":thread,"newThreadId":thread,"projectId":l.project["id"],"title":l.title,"message":l.message,"modelSelection":l.selection,
-            "workspaceStrategy":l.defaults["workspaceStrategy"],"workspaceRoot":l.defaults["workspaceRoot"],"workspaceMode":l.workspace.clone().unwrap_or_default(),"isolated":self.mode==Mode::AgentBox,"defaultsRevision":l.defaults["revision"]});
+            "workspaceStrategy":l.defaults["workspaceStrategy"],"workspaceRoot":l.defaults["workspaceRoot"],"workspaceMode":l.workspace.clone().unwrap_or_default(),"isolated":false,"defaultsRevision":l.defaults["revision"]});
         if l.workspace.is_none() {
             fields.as_object_mut().unwrap().remove("workspaceMode");
         }
@@ -921,6 +929,13 @@ impl App {
             }
             "user_input_request" => {
                 validate_questions(&request)?;
+                let active = self.active.as_ref().context("Conversation closed")?;
+                let form = crate::attention::Form::from_request(
+                    &self.environments[active.profile].environment_id,
+                    &active.thread,
+                    &request,
+                )?;
+                let restored = form.load_draft(&self.state)?;
                 let mut answers = serde_json::Map::new();
                 for q in array(&request, "questions") {
                     if let Some(answer) = q.get("initialAnswer").filter(|answer| {
@@ -934,7 +949,7 @@ impl App {
                 self.request_edit = Some(RequestEdit {
                     request,
                     index: 0,
-                    answers,
+                    answers: restored.unwrap_or(answers),
                 });
                 self.question_menu()?;
             }
@@ -942,7 +957,20 @@ impl App {
         }
         Ok(())
     }
+    pub(super) fn save_question_draft(&self) -> Result<()> {
+        if let Some(edit) = &self.request_edit {
+            let active = self.active.as_ref().context("Question source closed")?;
+            crate::attention::Form::from_request(
+                &self.environments[active.profile].environment_id,
+                &active.thread,
+                &edit.request,
+            )?
+            .save_draft(&self.state, &edit.answers)?;
+        }
+        Ok(())
+    }
     pub(super) fn question_menu(&mut self) -> Result<()> {
+        self.save_question_draft()?;
         let edit = self
             .request_edit
             .as_ref()
@@ -1074,7 +1102,20 @@ impl App {
             .as_ref()
             .context("Question form expired")?
             .clone();
+        self.save_question_draft()?;
         self.ensure_request(&edit.request)?;
+        let active = self.active.as_ref().context("Question source closed")?;
+        let form = crate::attention::Form::from_request(
+            &self.environments[active.profile].environment_id,
+            &active.thread,
+            &edit.request,
+        )?;
+        form.ensure_current(
+            &self.environments[active.profile].environment_id,
+            &active.thread,
+            &active.requests,
+        )?;
+        form.validate_answers(&edit.answers)?;
         for q in array(&edit.request, "questions") {
             validate_answer(q, edit.answers.get(&string(q, "id")))?;
         }

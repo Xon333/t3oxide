@@ -1,6 +1,7 @@
 //! Local workspace tools. These store presentation and reading coordinates only;
 //! native T3 remains the owner of projects, conversations, requests and work.
 use super::*;
+#[cfg(test)]
 use base64::{Engine, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 
@@ -39,6 +40,8 @@ impl ViewSource {
 #[derive(Clone, Debug)]
 pub(crate) enum WorkspaceAction {
     Scope(Option<Value>),
+    SearchScope(Option<Value>),
+    SearchEnvironment(usize),
     MinimumPriority(u64),
     Rank {
         source: Value,
@@ -143,7 +146,7 @@ impl WorkspaceState {
     pub fn new(saved: &Value, _environments: &[Environment]) -> Self {
         Self {
             project_scope: saved
-                .get("rustBrowserScope")
+                .get("sltBrowserScope")
                 .filter(|v| v.is_object())
                 .cloned(),
             ranks: saved["inboxPreferences"].clone(),
@@ -207,6 +210,72 @@ fn source_matches(a: &Value, b: &Value) -> bool {
 }
 
 impl App {
+    pub(super) fn open_section(&self, thread: &Thread) -> &'static str {
+        if self.state.is_thread_unread(
+            &self.environments[thread.profile].environment_id,
+            &thread.id,
+            thread.activity_generation().as_deref(),
+        ) {
+            "Unread"
+        } else {
+            "Completed"
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn toggle_completed(&mut self) -> Result<()> {
+        self.completed_collapsed = !self.completed_collapsed;
+        if let Err(error) = self.save_ui() {
+            self.completed_collapsed = !self.completed_collapsed;
+            return Err(error);
+        }
+        self.rebuild();
+        Ok(())
+    }
+    pub(super) fn observe_completion(&mut self) -> Result<()> {
+        let Some((profile, thread, generation)) = self.opened_completion.as_ref() else {
+            return Ok(());
+        };
+        let Some(active) = self
+            .active
+            .as_ref()
+            .filter(|active| active.profile == *profile && active.thread == *thread)
+        else {
+            return Ok(());
+        };
+        let verified = !active.navigating
+            && !active.projection.needs_resnapshot
+            && active
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.is_verified() && !connection.is_closed())
+            && active
+                .projection
+                .snapshot()
+                .is_some_and(|snapshot| snapshot.is_live() && snapshot.thread_id() == thread);
+        if verified {
+            let Some(row) = self
+                .threads
+                .iter()
+                .find(|row| row.profile == *profile && row.id == *thread)
+            else {
+                return Ok(());
+            };
+            let current = row.activity_generation();
+            if generation
+                .as_ref()
+                .is_none_or(|expected| current.as_ref() == Some(expected))
+            {
+                self.state.mark_thread_read(
+                    &self.environments[*profile].environment_id,
+                    thread,
+                    current.as_deref(),
+                )?;
+            }
+            self.opened_completion = None;
+            self.rebuild();
+        }
+        Ok(())
+    }
     pub(super) fn workspace_command(&mut self, name: &str, args: &str) -> Result<bool> {
         match name {
             "find" | "loaded-search" => {
@@ -289,6 +358,27 @@ impl App {
     }
     pub(super) fn workspace_dispatch(&mut self, action: WorkspaceAction) -> Result<()> {
         match action {
+            WorkspaceAction::SearchEnvironment(profile) => {
+                ensure!(profile < self.environments.len(), "Environment changed");
+                self.workspace_dispatch(WorkspaceAction::Scope(None))?;
+                self.scope = Some(profile);
+                self.rebuild();
+                self.text_dialog(
+                    "Search conversations",
+                    "",
+                    InputTarget::Search,
+                    self.filter.clone(),
+                );
+            }
+            WorkspaceAction::SearchScope(scope) => {
+                self.workspace_dispatch(WorkspaceAction::Scope(scope))?;
+                self.text_dialog(
+                    "Search conversations",
+                    "",
+                    InputTarget::Search,
+                    self.filter.clone(),
+                );
+            }
             WorkspaceAction::Scope(scope) => {
                 if let Some(source) = &scope {
                     ensure!(
@@ -299,9 +389,9 @@ impl App {
                 }
                 self.state.update(|value| {
                     if let Some(scope) = &scope {
-                        value["rustBrowserScope"] = scope.clone();
+                        value["sltBrowserScope"] = scope.clone();
                     } else {
-                        value.as_object_mut().unwrap().remove("rustBrowserScope");
+                        value.as_object_mut().unwrap().remove("sltBrowserScope");
                     }
                     Ok(())
                 })?;
@@ -432,13 +522,12 @@ impl App {
                 self.dirty = true;
             }
             WorkspaceAction::Copy { label, text } => {
-                let sequence = clipboard_sequence(&text)?;
-                io::stdout().write_all(sequence.as_bytes())?;
-                io::stdout().flush()?;
-                self.notice = format!(
-                    "Copied {} bytes from {label} through terminal OSC52.",
-                    text.len()
+                ensure!(
+                    text.len() <= 74_994,
+                    "Clipboard content exceeds terminal limit"
                 );
+                self.clipboard_request = Some(text);
+                self.notice = format!("Copy {label} requested");
             }
             WorkspaceAction::Codes { source, text } => {
                 let blocks = fenced_blocks(&text);
@@ -913,7 +1002,7 @@ impl App {
                 "Task priority"
             },
             format!(
-                "{} / {} / {}. AgentBox sorts these local ranks; no work is scheduled.",
+                "{} / {} / {}. Dev sorts these local ranks; no work is scheduled.",
                 env.label, thread.project, thread.title
             ),
             choices,
@@ -1612,40 +1701,6 @@ impl App {
                 Some((source, row.key.clone(), digest(&row.text), offset));
         }
     }
-    pub(super) fn restore_rendered_position(&mut self) -> bool {
-        let Some((source, key, expected, inner)) = self.workspace.pending_jump.clone() else {
-            return false;
-        };
-        if source.check(self).is_err() {
-            self.workspace.pending_jump = None;
-            return false;
-        }
-        let valid = self
-            .active
-            .as_ref()
-            .and_then(|a| a.projection.snapshot())
-            .is_some_and(|s| {
-                s.items
-                    .iter()
-                    .any(|r| r.key == key && digest(&r.text) == expected)
-            });
-        if !valid {
-            self.workspace.pending_jump = None;
-            return false;
-        }
-        let Some(top) = self
-            .renderer
-            .transcript_item_offset(&source.display_key(&key))
-        else {
-            return false;
-        };
-        self.transcript_scroll = top
-            .saturating_add(inner)
-            .min(self.renderer.transcript_max_scroll());
-        self.follow = false;
-        self.workspace.pending_jump = None;
-        true
-    }
     pub(super) fn save_review_position(&self) -> Result<()> {
         let Some(context) = &self.workspace.review else {
             return Ok(());
@@ -1728,43 +1783,33 @@ impl App {
                 thread = next;
             }
         }
-        if self.mode == Mode::AgentBox {
-            self.visible = rank_tree(&self.visible, &|index| {
-                let thread = &self.threads[index];
-                let env = &self.environments[thread.profile];
-                (
-                    preferences["projectRanks"]
-                        [rank_key(&env.environment_id, &thread.project_id, "")]
-                    .as_u64()
-                    .unwrap_or(100),
-                    std::cmp::Reverse(
-                        preferences["taskPriorities"]
-                            [rank_key(&env.environment_id, &thread.project_id, &thread.id)]
-                        .as_u64()
-                        .unwrap_or(1),
-                    ),
-                )
+        self.completed_count = 0;
+        if self.lane == "Open" {
+            let mut sections = std::mem::take(&mut self.visible);
+            self.completed_count = sections
+                .iter()
+                .filter(|(index, _)| self.open_section(&self.threads[*index]) == "Completed")
+                .count();
+            sections.sort_by_key(
+                |(index, _)| match self.open_section(&self.threads[*index]) {
+                    "Unread" => 0,
+                    _ => 2,
+                },
+            );
+            sections.retain(|(index, _)| {
+                !self.completed_collapsed || self.open_section(&self.threads[*index]) != "Completed"
             });
+            for (_, depth) in &mut sections {
+                *depth = 0;
+            }
+            self.visible = sections;
         }
     }
     pub(super) fn workspace_expansion(&self) -> Option<HashSet<String>> {
-        (self.workspace.project_scope.is_some() || self.workspace.minimum_priority > 0)
+        (self.lane == "Open"
+            || self.workspace.project_scope.is_some()
+            || self.workspace.minimum_priority > 0)
             .then(|| self.threads.iter().map(Thread::key).collect())
-    }
-    pub(super) fn workspace_priority(&self, thread: &Thread) -> &'static str {
-        match self.workspace.ranks["taskPriorities"][rank_key(
-            &self.environments[thread.profile].environment_id,
-            &thread.project_id,
-            &thread.id,
-        )]
-        .as_u64()
-        .unwrap_or(1)
-        {
-            0 => "Low",
-            2 => "High",
-            3 => "Urgent",
-            _ => "Medium",
-        }
     }
     pub(super) fn workspace_scope_label(&self) -> String {
         let source = if let Some(scope) = &self.workspace.project_scope {
@@ -1790,6 +1835,7 @@ impl App {
     }
 }
 
+#[cfg(test)]
 fn rank_tree<T: Ord>(rows: &[(usize, usize)], rank: &impl Fn(usize) -> T) -> Vec<(usize, usize)> {
     if rows.is_empty() {
         return Vec::new();
@@ -1813,6 +1859,7 @@ fn rank_tree<T: Ord>(rows: &[(usize, usize)], rank: &impl Fn(usize) -> T) -> Vec
     result
 }
 
+#[cfg(test)]
 fn clipboard_sequence(text: &str) -> Result<String> {
     ensure!(
         !text.is_empty() && text.len() <= 192 * 1024,

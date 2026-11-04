@@ -107,15 +107,100 @@ impl Thread {
         !string(self.inbox(), "pinnedAt").is_empty()
     }
     pub fn working(&self) -> bool {
-        self.inbox()["working"].as_bool().unwrap_or(matches!(
-            self.status.as_str(),
-            "preparing" | "starting" | "running" | "waiting"
-        ))
+        !self.attention()
+            && (matches!(
+                self.status.as_str(),
+                "preparing" | "queued" | "starting" | "running"
+            ) || self.status == "waiting"
+                && self.inbox()["activeRunId"].as_str().is_some_and(valid_id))
     }
     pub fn attention(&self) -> bool {
         self.inbox()["pendingRequestCount"].as_u64().unwrap_or(0) > 0
             || flag(self.inbox(), "pendingChildRequest")
+            || flag(self.inbox(), "pendingReview")
             || self.status == "failed"
+    }
+    /// Running view membership is independent of read and settlement state.
+    pub fn running(&self) -> bool {
+        self.working() || self.attention()
+    }
+    /// Native meaningful-event time; adapter observations never promote a row.
+    pub fn activity_at(&self) -> &str {
+        if let Some(at) = self.inbox()["activityAt"].as_str() {
+            return at;
+        }
+        // Older adapters may expose fewer lifecycle timestamps. Missing native
+        // evidence stays unordered rather than promoting on observation churn.
+        [
+            "latestRunCompletedAt",
+            "latestUserMessageAt",
+            "pendingRequestCreatedAt",
+            "latestRunStartedAt",
+            "latestRunRequestedAt",
+        ]
+        .iter()
+        .filter_map(|field| self.inbox()[*field].as_str())
+        .chain(self.raw["createdAt"].as_str())
+        .max()
+        .unwrap_or("")
+    }
+    /// A source-qualified reply, request or failure marker, never token churn.
+    pub fn activity_generation(&self) -> Option<String> {
+        if let Some(generation) = self.inbox().get("activityGeneration") {
+            return generation
+                .as_str()
+                .filter(|generation| valid_generation(generation))
+                .map(str::to_owned);
+        }
+        use sha2::{Digest, Sha256};
+        let request = string(self.inbox(), "pendingRequestId");
+        if !request.is_empty() {
+            return Some(format!(
+                "{:x}",
+                Sha256::digest(format!("{}\0request\0{request}", self.id))
+            ));
+        }
+        if self.status == "failed" {
+            let run = string(self.inbox(), "runId");
+            if !run.is_empty() {
+                return Some(format!(
+                    "{:x}",
+                    Sha256::digest(format!("{}\0failure\0{run}", self.id))
+                ));
+            }
+        }
+        (!string(self.inbox(), "runId").is_empty()
+            || !string(self.inbox(), "latestRunCompletedAt").is_empty())
+        .then(|| self.completion_generation())
+        .flatten()
+    }
+    /// Full-shell direct subagent count; absence stays distinct from zero.
+    pub fn child_count(&self) -> Option<u64> {
+        self.raw["knownChildCount"].as_u64()
+    }
+    pub fn completion_generation(&self) -> Option<String> {
+        use sha2::{Digest, Sha256};
+        if self.status != "completed"
+            || self.attention()
+            || self.working()
+            || self.inbox()["queuedCount"].as_u64().unwrap_or(0) > 0
+        {
+            return None;
+        }
+        let run = string(self.inbox(), "runId");
+        let completed = string(self.inbox(), "latestRunCompletedAt");
+        let fallback = if run.is_empty() && completed.is_empty() {
+            self.updated_at.clone()
+        } else {
+            String::new()
+        };
+        if run.is_empty() && completed.is_empty() && fallback.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&[run, completed, fallback]).ok()?)
+        ))
     }
     pub fn later(&self) -> bool {
         OffsetDateTime::parse(&string(self.inbox(), "snoozedUntil"), &Rfc3339)
@@ -140,12 +225,23 @@ impl Thread {
     }
     pub fn matches_lane(&self, lane: &str) -> bool {
         match lane {
+            "Open" | "Unread / Completed" => !self.reviewed() && !self.running(),
+            "Running" => self.running(),
+            "Pins" => self.pinned(),
+            "Settled" => self.reviewed(),
             "All" => true,
             "Unreviewed" => !self.reviewed(),
             "Inbox" => matches!(self.lane(), "Inbox" | "Attention"),
             other => self.lane() == other,
         }
     }
+}
+
+fn valid_generation(generation: &str) -> bool {
+    generation.len() == 64
+        && generation
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -204,7 +300,32 @@ pub fn visible_threads(
     profile: Option<usize>,
     expanded: &HashSet<String>,
 ) -> Vec<(usize, usize)> {
+    visible_threads_with_unread(
+        threads,
+        query,
+        lane,
+        kind,
+        profile,
+        expanded,
+        &HashSet::new(),
+    )
+}
+
+/// View-one unread priority uses exact qualified keys and retains native lineage.
+pub fn visible_threads_with_unread(
+    threads: &[Thread],
+    query: &str,
+    lane: &str,
+    kind: &str,
+    profile: Option<usize>,
+    expanded: &HashSet<String>,
+    unread: &HashSet<String>,
+) -> Vec<(usize, usize)> {
     let q = query.trim().to_lowercase();
+    let priority = matches!(lane, "Open" | "Unread / Completed");
+    let same_read_group = |a: usize, b: usize| {
+        !priority || unread.contains(&threads[a].key()) == unread.contains(&threads[b].key())
+    };
     let by_id: HashMap<(usize, &str), usize> = threads
         .iter()
         .enumerate()
@@ -232,14 +353,13 @@ pub fn visible_threads(
             t.kind() != "subagent"
                 || t.parent()
                     .and_then(|id| by_id.get(&(t.profile, id)))
-                    .is_none_or(|p| !eligible.contains(p))
+                    .is_none_or(|p| !eligible.contains(p) || !same_read_group(*i, *p))
         })
         .collect();
     let sort = |a: &usize, b: &usize| {
-        threads[*b]
-            .pinned()
-            .cmp(&threads[*a].pinned())
-            .then_with(|| threads[*b].updated_at.cmp(&threads[*a].updated_at))
+        (priority && unread.contains(&threads[*b].key()))
+            .cmp(&(priority && unread.contains(&threads[*a].key())))
+            .then_with(|| threads[*b].activity_at().cmp(threads[*a].activity_at()))
             .then_with(|| threads[*a].key().cmp(&threads[*b].key()))
     };
     roots.sort_by(sort);
@@ -250,7 +370,7 @@ pub fn visible_threads(
             && let Some(p) = t
                 .parent()
                 .and_then(|id| by_id.get(&(t.profile, id)))
-                .filter(|p| eligible.contains(p))
+                .filter(|p| eligible.contains(p) && same_read_group(*i, **p))
         {
             children.entry(*p).or_default().push(*i);
         }
@@ -311,6 +431,30 @@ pub struct Action {
 }
 pub const ACTIONS: &[Action] = &[
     Action {
+        name: "context",
+        label: "Context records",
+        description: "Recall captured decisions, evidence, journals and local open loops",
+        key: "",
+    },
+    Action {
+        name: "context-save",
+        label: "Capture source",
+        description: "Explicitly retain the latest native agent message and its provenance",
+        key: "",
+    },
+    Action {
+        name: "resume",
+        label: "Resume context",
+        description: "Review local context with protected drafts, original operations and native questions",
+        key: "",
+    },
+    Action {
+        name: "answer-drafts",
+        label: "Saved answers",
+        description: "Review retained answers and original source revisions",
+        key: "",
+    },
+    Action {
         name: "new",
         label: "New conversation",
         description: "Choose native project and defaults; review before creating",
@@ -329,15 +473,9 @@ pub const ACTIONS: &[Action] = &[
         key: "",
     },
     Action {
-        name: "mode",
-        label: "Switch Developer / AgentBox",
-        description: "Keep the same conversation, draft and reading position",
-        key: "F2",
-    },
-    Action {
         name: "views",
-        label: "Inbox views",
-        description: "Attention, Working, Queued, Later, Reviewed and All",
+        label: "Conversation tabs",
+        description: "Unread and Completed, Running, Pins and Settled",
         key: "v",
     },
     Action {
@@ -438,15 +576,15 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         name: "reviewed",
-        label: "Mark reviewed",
-        description: "Explicit native disposition; opening alone never marks reviewed",
-        key: "x",
+        label: "Mark reviewed / Settle",
+        description: "Settle the selected or attached conversation; retained in Settled, not deleted",
+        key: "Ctrl+T",
     },
     Action {
         name: "unreviewed",
-        label: "Restore to inbox",
-        description: "Reopen native review disposition",
-        key: "",
+        label: "Restore to inbox / Unsettle",
+        description: "Unsettle the selected or attached conversation using its native revision",
+        key: "Ctrl+T in Settled",
     },
     Action {
         name: "snooze",
@@ -572,7 +710,7 @@ pub const ACTIONS: &[Action] = &[
         name: "help",
         label: "Keyboard help",
         description: "Context-aware shortcuts and workflow",
-        key: "?",
+        key: "Alt+H / F1 / ?",
     },
     Action {
         name: "quit",
@@ -619,7 +757,7 @@ pub const ACTIONS: &[Action] = &[
     Action {
         name: "priority",
         label: "Task priority",
-        description: "Local AgentBox presentation rank; no execution scheduling",
+        description: "Local presentation rank; no execution scheduling",
         key: "",
     },
     Action {
@@ -668,6 +806,37 @@ mod tests {
         Thread::parse(profile,json!({"id":id,"title":id,"lineage":{"parentThreadId":parent,"relationshipToParent":parent.map(|_|"subagent")},"inbox":{"settled":false}})).unwrap()
     }
     #[test]
+    fn running_requires_native_execution_not_stale_inbox_or_ambiguous_waiting() {
+        for status in [
+            "completed",
+            "stopped",
+            "interrupted",
+            "idle",
+            "failed",
+            "waiting",
+        ] {
+            let row = Thread::parse(
+                0,
+                json!({"id":"exact","status":status,"inbox":{"working":true,"runId":"old-run"}}),
+            )
+            .unwrap();
+            assert!(!row.working(), "{status}");
+        }
+        for status in ["preparing", "queued", "starting", "running", "waiting"] {
+            let mut row = Thread::parse(0, json!({"id":"exact","status":status,"inbox":{"working":false,"activeRunId":"active-run"}})).unwrap();
+            assert!(row.working(), "{status}");
+            row.raw["inbox"]["pendingRequestCount"] = json!(1);
+            assert!(!row.working() && row.attention());
+        }
+        let mut row = Thread::parse(0, json!({"id":"done","status":"completed","updatedAt":"2026-11-02T12:00:00Z","inbox":{"runId":"native-run","latestRunCompletedAt":"2026-11-02T11:59:00Z"}})).unwrap();
+        let original = row.completion_generation().unwrap();
+        row.updated_at = "2026-11-02T13:00:00Z".into();
+        assert_eq!(row.completion_generation().as_ref(), Some(&original));
+        row.raw["inbox"]["latestRunCompletedAt"] = json!("2026-11-02T12:01:00Z");
+        assert_ne!(row.completion_generation().as_ref(), Some(&original));
+    }
+
+    #[test]
     fn collapsed_children_remain_searchable_and_hosts_do_not_alias() {
         let rows = vec![
             thread(0, "root", None),
@@ -688,6 +857,92 @@ mod tests {
             3
         );
     }
+    #[test]
+    fn newest_order_uses_meaningful_activity_and_pins_have_a_separate_scope() {
+        let mut rows: Vec<_> = [
+            ("completed", "2026-11-02T10:00:00Z"),
+            ("running", "2026-11-02T09:00:00Z"),
+            ("completed", "2026-11-02T08:00:00Z"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (status, updated))| {
+            Thread::parse(
+                0,
+                json!({"id":format!("thread-{index}"),"status":status,"updatedAt":updated,
+                    "lineage":{"parentThreadId":null},"inbox":{"settled":false,"activityAt":updated}}),
+            )
+            .unwrap()
+        })
+        .collect();
+        let visible = |threads: &[Thread]| {
+            visible_threads(threads, "", "Unreviewed", "all", None, &HashSet::new())
+        };
+        assert_eq!(visible(&rows), vec![(0, 0), (1, 0), (2, 0)]);
+        rows[1].updated_at = "2026-11-02T11:00:00Z".into();
+        assert_eq!(visible(&rows), vec![(0, 0), (1, 0), (2, 0)]);
+        rows[1].raw["inbox"]["activityAt"] = json!("2026-11-02T11:00:00Z");
+        assert_eq!(visible(&rows), vec![(1, 0), (0, 0), (2, 0)]);
+        rows[2].raw["inbox"]["pinnedAt"] = json!("2026-11-02T08:00:00Z");
+        assert_eq!(visible(&rows), vec![(1, 0), (0, 0), (2, 0)]);
+        assert_eq!(
+            visible_threads(&rows, "", "Pins", "all", None, &HashSet::new()),
+            vec![(2, 0)]
+        );
+        rows[2].raw["inbox"]["settled"] = json!(true);
+        assert_eq!(visible(&rows), vec![(1, 0), (0, 0)]);
+    }
+
+    #[test]
+    fn read_priority_is_independent_of_running_and_settlement() {
+        let rows: Vec<_> = [
+            ("completed", false, 0, "2026-11-02T10:00:00Z"),
+            ("idle", false, 0, "2026-11-02T08:00:00Z"),
+            ("running", false, 0, "2026-11-02T11:00:00Z"),
+            ("waiting", false, 1, "2026-11-02T12:00:00Z"),
+            ("failed", true, 0, "2026-11-02T13:00:00Z"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (status, settled, requests, at))| {
+            Thread::parse(
+                0,
+                json!({"id":format!("thread-{index}"),"status":status,
+                "lineage":{"parentThreadId":null},"inbox":{"settled":settled,
+                "pendingRequestCount":requests,"activityAt":at}}),
+            )
+            .unwrap()
+        })
+        .collect();
+        let unread = HashSet::from([rows[1].key()]);
+        assert_eq!(
+            visible_threads_with_unread(&rows, "", "Open", "all", None, &HashSet::new(), &unread),
+            vec![(1, 0), (0, 0)]
+        );
+        assert_eq!(
+            visible_threads(&rows, "", "Running", "all", None, &HashSet::new()),
+            vec![(4, 0), (3, 0), (2, 0)]
+        );
+        assert_eq!(
+            visible_threads(&rows, "", "Settled", "all", None, &HashSet::new()),
+            vec![(4, 0)]
+        );
+        assert!(rows[4].reviewed() && rows[4].running());
+    }
+
+    #[test]
+    fn unread_child_stays_reachable_ahead_of_its_read_parent() {
+        let rows = vec![
+            thread(0, "parent", None),
+            thread(0, "child", Some("parent")),
+        ];
+        let unread = HashSet::from([rows[1].key()]);
+        assert_eq!(
+            visible_threads_with_unread(&rows, "", "Open", "all", None, &HashSet::new(), &unread),
+            vec![(1, 0), (0, 0)]
+        );
+    }
+
     #[test]
     fn viewing_does_not_settle_and_unknown_is_explicit() {
         let t = thread(0, "x", None);

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Real PTY acceptance and bounded resource comparison using synthetic T3 data.
+"""Historical Ratatui PTY acceptance plus shared synthetic adapter/PTY fixtures.
+
+The active SLT contract uses slt_terminal.py; historical labels and resource
+comparisons below are retained for their original inputs only.
 
 Requires Python 3, pyte (test tooling only), Node 22.4+, and built client binaries.
 No installed T3 server, user profile, credentials or state is accessed.
@@ -79,7 +82,7 @@ def fixture(directory, mixed=False, **options):
 
 
 class Terminal:
-    def __init__(self, binary, config, state, thread="thread-a", mode=None, columns=140, rows=38, environment=None):
+    def __init__(self, binary, config, state, thread="thread-a", mode=None, columns=140, rows=38, environment=None, profile="fixture"):
         import pty
         self.master, slave = pty.openpty()
         self.columns, self.rows = columns, rows
@@ -92,7 +95,7 @@ class Terminal:
         self.started = time.monotonic()
         self.first_output = None
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
-        arguments = [str(binary), "--config", str(config), "--state", str(state), "--env", "fixture"]
+        arguments = [str(binary), "--config", str(config), "--state", str(state), "--env", profile]
         if thread:
             arguments.extend(["--thread", thread])
         if mode:
@@ -450,13 +453,14 @@ def launch_check(binary, directory):
         terminal = Terminal(binary, f["config"], f["state"], thread="", mode=mode)
         title = f"First task in empty project ({mode})"
         try:
-            terminal.wait("Agents" if mode == "agentbox" else "Conversations")
+            terminal.wait("Conversations")
             terminal.send("n")
             terminal.choose("Empty project")
             terminal.choose("Title:")
             terminal.paste(title)
             terminal.send(ENTER)
             if message:
+                terminal.choose("Workspace:")
                 terminal.choose("Message:")
                 terminal.paste(message)
                 terminal.send(SEND)
@@ -478,9 +482,9 @@ def launch_check(binary, directory):
         finally:
             if terminal.process.poll() is None:
                 terminal.close()
-    return ["both modes create a first thread in an empty native project",
-            "AgentBox launch preserves exact title/message and native isolated-worktree strategy",
-            "Developer empty filing creates an idle native thread without inventing an initial run"]
+    return ["legacy mode values both open Dev and create a first thread in an empty native project",
+            "explicit workspace choice preserves exact title/message and native isolated-worktree strategy",
+            "empty filing creates an idle native thread without inventing an initial run"]
 
 
 def model_check(binary, directory):
@@ -517,6 +521,8 @@ def navigation_check(binary, directory):
         terminal.wait("Fixture host: 7")
         terminal.paste(draft)
         native_reads_settled(terminal, f)
+        terminal.command("Conversation tabs")
+        terminal.choose("Running")
         before_filter = f["log"].read_text()
         terminal.send(b"\x0f/")  # Ctrl+O selects navigator; / filters loaded titles.
         terminal.paste("needle")
@@ -668,7 +674,7 @@ def form_recovery_check(binary, directory):
     message = "Autosaved initial message.\nExact second line stays unsubmitted."
     terminal = Terminal(binary, f["config"], f["state"], thread="", mode="agentbox")
     try:
-        terminal.wait("Agents")
+        terminal.wait("Conversations")
         terminal.send("n")
         terminal.choose("Empty project")
         terminal.choose("Title:")
@@ -681,7 +687,7 @@ def form_recovery_check(binary, directory):
         terminal.close()
     resumed = Terminal(binary, f["config"], f["state"], thread="", mode="agentbox")
     try:
-        resumed.wait("Agents")
+        resumed.wait("Conversations")
         resumed.send("n")
         resumed.choose("Empty project")
         resumed.wait(title)
@@ -725,8 +731,8 @@ def workspace_check(binary, directory):
         saved = wait_file(terminal, f["state"], lambda v: bool(v.get("rustBrowserScope")))
         assert saved["rustBrowserScope"] == {"profileId": "fixture", "environmentId": "fixture-env", "projectId": "project-a"}
         assert not saved.get("creationDestination")
-        terminal.command("Inbox views")
-        terminal.choose("All")
+        terminal.command("Conversation tabs")
+        terminal.choose("Running")
         terminal.send(b"\x0f/")
         terminal.paste("Active implementation")
         terminal.send(ENTER)  # Rank the highlighted exact row, independent of attachment.
@@ -761,7 +767,7 @@ def batch_check(binary, directory):
     draft_key = "fixture-env/\0file-many/project-empty"
     terminal = Terminal(binary, f["config"], f["state"], thread="", mode="agentbox")
     try:
-        terminal.wait("Agents")
+        terminal.wait("Conversations")
         terminal.command("File multiple tasks")
         terminal.choose("Empty project")
         terminal.wait("File multiple tasks")
@@ -781,7 +787,7 @@ def batch_check(binary, directory):
         terminal.close()
     resumed = Terminal(binary, f["config"], f["state"], thread="", mode="agentbox")
     try:
-        resumed.wait("Agents")
+        resumed.wait("Conversations")
         resumed.command("Task filing receipts")
         resumed.choose("1/2 acknowledged")
         resumed.choose("Review next unfiled task")
@@ -822,8 +828,9 @@ def acceptance(binary, directory, output):
         terminal.wait("Second line remains unsent.")
         terminal.save_screen(output / "developer")
         terminal.send(F2)
-        terminal.wait("Agents")
-        terminal.save_screen(output / "agentbox")
+        terminal.wait(" Dev ")
+        assert "AgentBox" not in terminal.text and "Developer" not in terminal.text
+        terminal.save_screen(output / "dev")
         terminal.send(F3)
         terminal.resize(70, 22)
         terminal.wait("Second line remains unsent.")
@@ -844,7 +851,7 @@ def acceptance(binary, directory, output):
     saved = json.loads(f["state"].read_text())
     assert saved["drafts"]["fixture-env/thread-a"] == draft
     results.extend(["real PTY streaming view and isolated host failure", "bracketed Unicode multiline paste",
-                    "Developer/AgentBox keyboard and mouse switching", "layout cycling and large/small/minimum resize",
+                    "Dev workspace and legacy mode compatibility", "layout cycling and large/small/minimum resize",
                     "command palette opens and dismisses", "exact draft persisted on exit"])
     resumed = Terminal(binary, f["config"], f["state"], mode="developer")
     try:

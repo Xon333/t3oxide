@@ -1,3 +1,23 @@
+# Current SLT contract and reuse — 2026-11-04
+
+The revised owner contract supersedes the historical Ratatui direction below. Source integration reuses maintained Rust commit `58cb5f8b0dc4df27a2b414fa95903112a58783c8` and relevant later uncommitted UX behavior from the preserved recovery checkout. The bound dirty Go checkout and recovery source are not mutated.
+
+| Role | Pin / licence / API | Reuse and boundary |
+| --- | --- | --- |
+| Main terminal runtime, focus, output | `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`, v0.26.0, MIT; `src/runtime/async_run.rs`, `src/context/runtime.rs`, `src/context/widgets/text_input/textarea.rs` | Direct Git dependency at exact pin. One `run_async_with` handle, wake-aware sender, deadline wakes and join. Public indexed key consumption inside focused editor routes command/send before textarea; no fork or second stdin reader. |
+| Stable forms | SLT state plus `inferadb/teapot@a7c4601f5f31dccb0556839c4df4f85e2459e46f`, MIT OR Apache-2.0; `src/components/select.rs` and `multi_select.rs` | Reuse value/label separation as an interaction model, without copying source or importing its Rust 1.92 alpha runtime. Native request IDs/revisions and durable answer drafts own identity. |
+| Native data and recovery | Maintained T3oxide Rust transport, projection and Node adapter from `58cb5f8`; current T3 contract evidence in `rust-contracts.md` | Retained exact operation journal, no automatic retry, native request revision preflight, source/revision/operation-qualified acknowledgement. Native respond has no revision CAS; adapter preflight is not server-side atomic CAS. |
+| Markdown and flowcharts | SLT same MIT pin; `dnvt/termiflow@cdd62fe1717aad26fe53ca1b0ad07454aa4f0e76`, 0.2.9, MIT; public parse/measure/layout/render APIs | `reports.rs` uses explicit Config, complete label widths, geometry/source/content memoization and warnings. It avoids home config loading. Ambient behavior/debug overrides cause source fallback; terminal dimensions enter cache identity. Flowcharts only; unsupported Mermaid retains unchanged source. |
+| Durable context | `zecalis/fael@b00e312cc2c313e0595bb0a32214e914439105a8`, fael-core 0.0.1, MIT; Row/Log/find/page/render_page | `context_store.rs` reuses the actual journal/open-row/query engine. Owned immutable events and full source blobs use file fsync, atomic publication and directory fsync. Traversal/parse/hash failures and recovery inputs are explicit degradation. Packs expose exact known totals, omissions, source revisions and hashes. `/context-save` is explicit capture; there are no hooks or automatic transcript ingestion. |
+| Dependency synthesis | `petgraph/petgraph@162903562ce5b00cdba390a0d9c1bb80f1c75bf5`, 0.8.3, MIT OR Apache-2.0; StableDiGraph/toposort/kosaraju_scc | `attention_rank.rs` preserves explicit source-qualified dependency reasons and cycle groups. Only admitted native human questions can participate. Current native offers expose no dependency-edge/coverage capability, so active coverage is Unknown and admission order is retained. |
+| Persistent project graph | `AshutoshMahala/ascii-dag@3e0eb3eb36c3871a2b1259d8eac4fcfd4eef34eb`, 0.11.0, MIT OR Apache-2.0; Graph/ScenePlanner/TerminalRenderer/scene hit_test | `project_graph.rs` adapts actual layout/hit geometry to SLT cells, explicit viewport bounds and Unicode labels. Host owns same-region levels and source selection. This replaces the uncleared graf integration without copying GPL source or relicensing t3oxide. |
+
+Full-licence/history evaluation found no established compatible implementation revision for the selected FrankenTUI, Eidetic and beads sources. Their OpenAI/Anthropic rider is not plain MIT; running a CLI/subprocess does not avoid it. No restricted implementation is copied, linked, installed or executed. FrankenTUI's immediate pre-rider parent has no licence, Eidetic's MIT parent has planning documents only, and beads has the rider at its root. A3S's selected manifest/README say MIT but no licence file or additional grant was established, so no A3S source is copied. Owner decision 10a preserves all requested roles; it does not authorize silently dropping them or changing T3 authority.
+
+The lean reuse gate applies before filling a material uncovered implementation gap. Routine glue covered by inspected native/SLT APIs reuses that evidence. The selected equivalent graph/diagram libraries run inside SLT without a second terminal loop. Native Rex input and draft-safe pop-out need actual native integration checks. Historical measurements below apply only to their identified inputs.
+
+---
+
 # Rust source decisions
 
 Source review: 2026-11-02. This records inspected implementations and the decisions
