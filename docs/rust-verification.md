@@ -3,41 +3,65 @@
 Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`
 and relevant later preserved UX behavior into the isolated SLT client. The
 active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
-v0.26.0. No installed launcher or T3 service was changed by these checks.
+v0.26.0, with maintained vendored patch `ordered-activation-v1`. The checked
+implementation head is `529d9ec9bbfe892bca1408e3aa2aa4ebf096b7bc`, preserving
+`5941463` geometry/modal/provenance and `b58644d` search fixes. No installed
+launcher, GUI, configuration or T3 service was changed by these checks.
 
 | Check | Current result |
 | --- | --- |
-| Formatting and whitespace | `cargo fmt --all --check`, `git diff --check` passed |
-| Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` passed |
-| Rust tests | `cargo test --locked --all-targets`: **114 library + 4 forms + 3 protocol** passed |
-| Adapter/scripts | `scripts/check.sh`: **244 Node + 5 Python** passed, including syntax/compile checks |
+| Formatting and whitespace | `cargo fmt --all --check`, standalone vendor fmt, `git diff --check` passed |
+| Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo clippy --locked -p superlighttui --lib -- -D warnings` passed |
+| Rust tests | `cargo test --locked --all-targets`: **122 library + 4 forms + 3 protocol + 3 SLT activation** passed |
+| Adapter/scripts | `scripts/check.sh`: **245 Node + 5 Python** passed, including syntax/compile checks |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
-| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **7 outcomes** passed |
-| Locked attribution | 290 upstream packages inventoried, exact Git pins/full licence texts retained; registry archives have Cargo checksums |
+| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **13 outcomes** passed |
+| Locked attribution | 290 upstream packages inventoried, including the local SLT base/patch and modified-file hashes; both upstream MIT notices retained; registry archives have Cargo checksums |
 
 Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
 The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
-a claim that a 1.92 toolchain was tested. The release is **8,900,336 bytes**;
-SHA-256 `f4b048bf13c72da0fccc56d0d40de78b8ba53476019423f042f50d70cf177988`.
+a claim that a 1.92 toolchain was tested. The release is **8,900,304 bytes**;
+SHA-256 `347038c656170ac802a9c09018f08d50f847fb849bdf135d5bba05311ea34e09`.
 No current performance or resource-saving comparison is claimed.
 
-The PTY outcomes cover real adapter attachment/exit, exact multiline Unicode
-text with plain Enter, independent restored tab drafts, Ctrl+Enter
-Press+Release with exactly one native send/no extra newline, typed command
-Enter, actual human-question admission with zero-question project inventory,
-and one explicit acknowledged native answer from Mode B. Source tests settle
-editor focus before every accepted send chord and cover paste/command ownership,
-revision changes/cancellation with freshest unsaved answers, source-qualified
-acknowledgements, graph keyboard/mouse/Unicode/clipping, real TermiFlow drawing,
-context reopen/history/byte budgets/degradation/full-source hashes and retained
-publication recovery inputs. Context capture/resume controller fixtures prove
-no native dispatch and original source/operation retention.
+The release PTYs use the actual `run_async_with` entry point at the configured
+60 FPS cap and synthetic native endpoints through the real adapter/journal.
+One PTY write containing `first` + Ctrl+Enter Press/Release + `second` produces
+payload `first` and next draft `second` before the delayed result. Accepted,
+definitely rejected and lost-ACK cases retain the next draft across restart;
+uncertainty retains the exact original pending record. No restart retries it.
+Rejected attempted text remains source-qualified in Prompt recall, alongside
+the existing host journal; it is never restored over the next draft.
 
-Native Rex/M1pro/M4 finished-client key delivery, pane preservation, Mac editing,
-owner UI acceptance and installed M4 adoption belong to the root acceptance
-pass. The PTYs are synthetic endpoint evidence; they never use a provider or
-certify a native Rex chord. Internal tabs are supported. A supported draft-safe
+The same suite verifies batched `/help` + Enter without newline/send, pointer
+Send around edits, keyboard and pointer modal Continue around edits and queued
+tail, exact multiline Unicode paste/plain Enter, independent restored tab
+drafts, source-backed question inventory and one explicit acknowledged answer.
+Compact 86×31 controls/metadata remain visible and drafts survive 140×38 ↔ 86×31
+resize. These are terminal-cell measurements, not a pixel-window acceptance.
+TestBackend regressions verify compact/normal control hit targets, copy focus,
+modal focus, opt-in/default batching, multiline paste, key release, Tab/BackTab,
+click-on-release and bounded queue progress without fresh input.
+
+SLT's default reader-level Ctrl+C exit previously ran before widget input.
+The client now disables that default. A focused selected composer consumes
+Control/Super A/C; source tests distinguish unselected and unfocused input.
+Release PTY Control A/C Press/Release emits OSC52 with the exact selected draft
+and keeps the process alive. Unselected Ctrl+C also keeps it alive. This does
+not verify OS clipboard receipt, Rex key forwarding or native Cmd+A/C.
+
+Existing passing coverage retains source/revision-qualified acknowledgements,
+same-byte newer drafts, cancellation with fresh unsaved answers, graph
+keyboard/mouse/Unicode/clipping, TermiFlow drawing and context provenance,
+reopen/history/budgets/degradation/recovery inputs. No performance or latency
+budget is inferred from these regressions.
+
+Fresh independent consequential review and focused M1/M4 acceptance remain
+root gates. Native key delivery, pane preservation, Mac editing, owner UI
+acceptance and installed M4 adoption belong to that separate pass. The PTYs are
+synthetic endpoint evidence; they never use a provider or certify a native Rex
+chord. Internal tabs are supported. A supported draft-safe
 native pop-out has not been established; no bridge or global pane binding is
 introduced here.
 
