@@ -1,10 +1,11 @@
-# Revised Rust/SLT integration — 2026-11-04
+# Revised Rust/SLT integration — 2026-11-05
 
 Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`
 and relevant later preserved UX behavior into the isolated SLT client. The
 active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
 v0.26.0, with maintained vendored patch `ordered-activation-v2`. The checked
-implementation head is `39c09d0`, preserving
+implementation head is `f51b06a`, with persistent navigation Pins and exact
+post-action metadata, retaining the `c0cee63` shutdown-lock correction and
 `529d9ec` submission/compact controls, `5941463` geometry/modal/provenance and
 `b58644d` search fixes. No installed
 launcher, GUI, configuration or T3 service was changed by these checks.
@@ -13,8 +14,8 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 | --- | --- |
 | Formatting and whitespace | `cargo fmt --all --check`, standalone vendor fmt, `git diff --check` passed |
 | Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo clippy --locked -p superlighttui --lib -- -D warnings` passed |
-| Rust tests | `cargo test --locked --all-targets`: **130 library + 4 forms + 3 protocol + 4 SLT activation** passed after the lock-release correction below |
-| Adapter/scripts | `scripts/check.sh`: **245 Node + 5 Python** passed at `529d9ec`, including syntax/compile checks; adapter/scripts unchanged since |
+| Rust tests | `cargo test --locked --all-targets`: **145 tests** passed across the library, forms, protocol and SLT activation suites |
+| Adapter/scripts | `scripts/check.sh`: **253 Node + 5 Python** passed, including syntax/compile checks |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
 | Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **14 outcomes** passed |
@@ -22,8 +23,9 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 
 Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
 The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
-a claim that a 1.92 toolchain was tested. The release is **8,916,720 bytes**;
-SHA-256 `8ec12829528ffeab999523c13526edc0330047318eff2b76161d1d7d541f0739`.
+a claim that a 1.92 toolchain was tested. The release is **8,933,104 bytes**;
+SHA-256 `18fced83d190925d1a780eeb3549993e1a24d42f876a67437daecbbc0e385f4a`
+at `f51b06a`.
 No current performance or resource-saving comparison is claimed.
 
 The first hosted Ubuntu run failed two immediate state-reopen tests because a
@@ -33,8 +35,11 @@ closing the descriptor. A deterministic duplicate-descriptor regression failed
 before the fix and passes afterward: a live owner remains exclusive, owner exit
 allows reopening, and closing an old inherited descriptor cannot unlock the new
 owner. All 141 Rust tests, formatting and application Clippy passed locally after
-this correction. Hosted Linux confirmation is pending. The release hash above
-still identifies the frozen `39c09d0` native-acceptance artifact.
+this correction. All three hosted checks passed on `c0cee63`: Ubuntu Rust,
+macOS Rust, and the native adapter/scripts. The corrected local release also
+passed all 14 PTY outcomes. The native trial below used the separately frozen
+`39c09d0` artifact, SHA-256
+`8ec12829528ffeab999523c13526edc0330047318eff2b76161d1d7d541f0739`.
 
 The release PTYs use the actual `run_async_with` entry point at the configured
 60 FPS cap and synthetic native endpoints through the real adapter/journal.
@@ -92,15 +97,43 @@ covers both loaded-jump and Find/Go to: bottom → first source → immediate ta
 → return; it checks the exact saved row/digest/width/inner offset/follow state and
 in-memory return tuple. Resize retains pending navigation until geometry is valid;
 idle frames keep the anchor, content growth follows the tail, and manual wheel
-scrolling leaves it. These source regressions do not replace the two native retests.
+scrolling leaves it. The frozen `39c09d0` native retest subsequently passed both
+modal composition and immediate jump/tab/resize restoration.
 
 The earlier frozen `529d9ec` M1 trial independently passed physical multiline
 Unicode Mac selection/copy/paste in explicit Rex editing mode, exact title-result
 reopening with its draft, model Apply, compact 86×31 controls, ordinary terminal
 shortcuts after exiting the mode, and one exact physical Ctrl+Return dispatch.
-That mode is manual and client-wide. Its new Command Palette entry action still
-requires native verification; no automatic editor lifecycle is claimed. Those
-results qualify their frozen artifact, not installed M4 adoption.
+That mode is manual and client-wide. The later frozen `39c09d0` trial also passed
+physical Command Palette entry, focus return, visibly selected multiline Unicode
+copy/paste, Escape exit and ordinary terminal shortcuts. No automatic editor
+lifecycle is claimed. These results qualify their frozen artifacts, not
+installed M4 adoption.
+
+The `39c09d0` M1 trial additionally passed exact source/draft reopening after
+environment/project searches, displayed-source Ctrl+T targeting, plain Enter,
+slash completion, one physical Ctrl+Return without a pane, and a fresh native B
+answer acknowledged by its original source. It reproduced one unresolved
+acceptance finding twice: settling a pinned disposable conversation clears its
+native pin, restore leaves it unpinned, and the client still shows Pins membership.
+The correction below is source-checked; native confirmation and M4 activation
+remain pending. No task-owned Failed lifecycle or exhaustive native generation
+coverage was completed; source checks remain the evidence for those paths.
+
+Navigation Pins now use the T3-owned `t3oxide:navigation-pin` tag. One explicit
+tag command changes navigation intent without changing native shelf pins,
+settlement, snooze, read state or run state. Existing shelf pins are not migrated.
+Marker-only changes qualify the source revision even when `updatedAt` is stable.
+Pin discovery precedes pagination and includes settled sources and children.
+Writes are enabled only for the source-verified nightly `4179` tag contract;
+unknown releases retain reads. The source reuse record identifies that contract.
+
+Acknowledged actions return a complete, exact-source row from one authoritative
+snapshot. The client replaces retained metadata without resetting search, scope,
+drafts or reading positions. A failed post-read keeps the authentic acknowledgement
+and exposes stale metadata; it cannot retry the mutation. Focused Rust/Node
+regressions cover pin/read/run/settle/restore/unpin, marker-only changes, lost ACKs,
+post-read failure, unsupported releases, older pages and another environment.
 
 Existing passing coverage retains source/revision-qualified acknowledgements,
 same-byte newer drafts, cancellation with fresh unsaved answers, graph
@@ -108,9 +141,10 @@ keyboard/mouse/Unicode/clipping, TermiFlow drawing and context provenance,
 reopen/history/budgets/degradation/recovery inputs. No performance or latency
 budget is inferred from these regressions.
 
-Fresh independent consequential review and focused M1/M4 acceptance remain
-root gates. Native key delivery, pane preservation, Mac editing, owner UI
-acceptance and installed M4 adoption belong to that separate pass. The PTYs are
+Independent consequential Sol review cleared `741d4c2`; the narrow shutdown-lock
+fix has its deterministic regression and passing hosted checks. The navigation-pin
+correction needs its consequential review, current-head hosted checks and focused
+native confirmation; finished-client M4 adoption remains pending. The PTYs are
 synthetic endpoint evidence; they never use a provider or certify a native Rex
 chord. Internal tabs are supported. A supported draft-safe
 native pop-out has not been established; no bridge or global pane binding is

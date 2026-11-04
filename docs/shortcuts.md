@@ -10,8 +10,8 @@ SLT owns Tab/Shift+Tab focus, mouse hit tests, text selection and terminal input
 | Focus next / previous | Tab / Shift+Tab |
 | Open conversation | Navigator Enter or click; internal tab |
 | Prompt newline | Enter |
-| Preferred Send, if delivered | Cmd+Enter |
-| Accepted Send alternatives | Ctrl+Enter, Shift+Enter, Cmd+Shift+Enter |
+| Rex Send | Ctrl+Enter |
+| Other send events, when forwarded | Cmd+Enter, Shift+Enter, Cmd+Shift+Enter |
 | Portable Send | Ctrl+] or Ctrl+\; explicit Send button |
 | Native Stop and queue hold | Ctrl+S; Stop button |
 | Native requests | Ctrl+Y; Questions button |
@@ -25,7 +25,9 @@ SLT owns Tab/Shift+Tab focus, mouse hit tests, text selection and terminal input
 | Help | F1; ? button; /help |
 | Save and exit | Ctrl+Q; /quit |
 
-The application accepts richer send key events when the terminal forwards them. Source tests prove exclusive routing after settled editor focus; actual Rex/M1pro/M4 delivery and collision-free pane behavior require separate native checks. No global Rex pane binding is changed. Ctrl+I is Tab in legacy terminals; use Copy ID there.
+The application accepts richer send key events when the terminal forwards them. Physical Ctrl+Enter on M1 Rex dispatches once without creating a pane. Existing Rex Cmd+Enter creates a pane; its global binding is preserved. M4 finished-client verification remains a separate acceptance gate. Ctrl+I is Tab in legacy terminals; use Copy ID there.
+
+For Mac editor selection/copy on configured Rex clients, open View → Command Palette… (Cmd+Shift+P) and choose **Enter T3oxide Editing**. Cmd+A must visibly select the focused editor text before Cmd+C. Escape exits this manual, client-wide mode; exit before switching panes or leaving the editor. Ordinary terminal selection/copy and pane shortcuts resume outside the mode. Native M1 acceptance verified palette focus return and exact multiline Unicode clipboard bytes; no automatic editor-focus integration is claimed.
 
 Typing `/` at the start of a prompt opens completion. Up/Down selects; Enter consumes the command without adding a newline or sending. Commands needing arguments open their native review controls. Esc returns to unsent text; `//` permits literal slash text. Pasted slash commands and pasted newlines remain text. Copy, cut, paste, word movement and undo use SLT's editor support when the terminal forwards their key events.
 

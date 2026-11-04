@@ -98,15 +98,19 @@ Use `--read-only` in place of `--enable-writes` for read-only access. The instal
 
 This is a host-local installation step, not a prerequisite for compiling or exercising fixture tests. The installer does not install Node, start T3 or replace native services.
 
-## Appearance and interaction
+## Interaction
 
-Choose **Appearance** from the command palette, or launch with `--theme terminal|violet|cyan|lime`. Terminal uses your terminal palette; the other choices use fixed colors with consistent error, waiting and success roles. UI choices are saved in the Rust state file.
+Use the A/B buttons or F2 to switch between conversations and actual human questions. Both modes retain the same source identities and drafts. Internal tabs keep conversations available; the Context button opens supporting information. The layout adapts to terminal size. Tab and Shift+Tab move focus, and mouse capture supports navigation, scrolling and Unicode-aware editor selection. Use `--no-mouse` or **Toggle mouse** for native terminal text selection.
 
-F2 changes Developer/AgentBox without changing the active source. F3 cycles Split, Focus and Wide. Compact terminals show the focused pane; Tab still moves among navigator, transcript, composer and Details. Use `--no-mouse` or **Toggle mouse** for native terminal text selection. Mouse capture otherwise enables conversation selection, pane focus, transcript scroll and Unicode-aware composer selection.
+**Pin conversation** keeps a source in Pins across reading, runs and settlement. Navigation pins use the native `t3oxide:navigation-pin` tag. Existing native T3 shelf pins retain their separate behavior and are not imported into navigation Pins. Navigation Pin writes require the verified nightly `4179` contract; other server releases remain readable.
 
-The composer uses Enter for newlines and Ctrl+] for send. `VISUAL` or `EDITOR` supplies an external editor through Ctrl+E; the edited text returns to the original conversation and remains a draft. An editor failure preserves the original draft and reports the retained temporary file when needed.
+Enter inserts a newline. Use Ctrl+Enter, Ctrl+] or the Send button to send explicitly. Ctrl+Enter is the physically verified Rex alternative; the existing Rex Cmd+Enter pane shortcut stays available. Typed slash-command completion consumes Enter when choosing a command. Pasted commands and newlines remain draft text.
 
-See [shortcuts](docs/shortcuts.md) for all contexts. No shortcut configuration file is needed for the default workspace.
+On Rex clients configured with **Enter T3oxide Editing**, open View → Command Palette… (Cmd+Shift+P), select that action, then use Cmd+A/C/V in the focused editor. Check that text is visibly selected before copying. This mode applies to the whole Rex client: press Escape to leave it before switching panes or leaving the editor. Ordinary terminal shortcuts resume after exit.
+
+Choose **Edit draft externally** from Commands to use `VISUAL` or `EDITOR`. Edited text returns to the original conversation as a draft. An editor failure preserves the original draft and reports any retained temporary file.
+
+See [shortcuts](docs/shortcuts.md) for the supported input contexts.
 
 ## State and migration
 
