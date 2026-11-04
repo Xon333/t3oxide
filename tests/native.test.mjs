@@ -343,3 +343,39 @@ test('older client Pin actions retain native shelf semantics alongside additive 
     assert.equal(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').length,2);
   }finally{server.close()}
 });
+
+test('concurrent helpers persist the same stable action ACK before decorating independent metadata',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3oxide-action-ack-'));
+  const path=join(root,'operations'),scope=hash('same-synthetic-principal');
+  const journal=new Journal(path,scope);
+  const action={id:'shared-settle',environmentId:'env-a',threadId:'thread-a',action:'settle',expectedRevision:nativeRevision(thread())};
+  const fingerprint=hash({op:'thread-action',...action});
+  journal.access(action.id,fingerprint,{tag:'orchestration.dispatchCommand',payload:{type:'thread.settle',commandId:action.id,threadId:action.threadId}});
+  const helpers=[backend({journal}),backend({journal:new Journal(path,scope)})];
+  let arrived=0,release;
+  const bothDispatched=new Promise(resolve=>{release=resolve});
+  for(const [index,{server,state}] of helpers.entries()){
+    state.shell.threads[0].title='Authoritative snapshot '+index;
+    const rpc=server.rpc.call;
+    server.rpc.call=(...args)=>{
+      const pending=rpc(...args);
+      if(++arrived===2)release();
+      return {promise:bothDispatched.then(()=>pending.promise)};
+    };
+  }
+  try{
+    const results=await Promise.all(helpers.map(({server})=>server.act('thread-action',action)));
+    for(const [index,result] of results.entries()){
+      assert.equal(result.sequence,42);
+      assert.equal(result.metadata.status,'fresh');
+      assert.equal(result.metadata.row.title,'Authoritative snapshot '+index);
+      assert.equal(result.threadId,action.threadId);
+    }
+    assert.deepEqual(journal.access(action.id,fingerprint).result,{sequence:42});
+    for(const {server,state} of helpers){
+      const before=state.calls.length;
+      assert.equal((await server.act('thread-action',action)).sequence,42);
+      assert.equal(state.calls.length,before,'a saved ACK never dispatches again');
+    }
+  }finally{for(const {server} of helpers)server.close();await rm(root,{recursive:true,force:true})}
+});

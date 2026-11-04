@@ -682,13 +682,24 @@ impl App {
         let pins = self.lane == "Pins";
         for profile in 0..self.environments.len() {
             if self.scope.is_none_or(|scope| scope == profile)
-                && (self.hosts[profile].page.navigation_pins_only != pins || pins)
+                && (self.hosts[profile].page.navigation_pins_only != pins
+                    || pins
+                    || self.hosts[profile].loading)
             {
-                let page = &self.hosts[profile].page;
-                self.refresh_profile(profile, false, page.search, page.query.clone(), false)?;
+                let (search, query) = self.metadata_query(profile);
+                self.refresh_profile(profile, false, search, query, false)?;
             }
         }
         Ok(())
+    }
+
+    fn metadata_query(&self, profile: usize) -> (bool, String) {
+        let host = &self.hosts[profile];
+        host.queued
+            .as_ref()
+            .or(host.request.as_ref())
+            .map(|(_, search, query, _)| (*search, query.clone()))
+            .unwrap_or_else(|| (host.page.search, host.page.query.clone()))
     }
 
     pub(super) fn refresh(&mut self, append: bool, search: bool) -> Result<()> {
@@ -1087,7 +1098,10 @@ impl App {
                         }
                         host.projects_more = projects_more;
                         host.error.clear();
-                        if host.refresh_loaded && !host.page.threads.is_empty() {
+                        let same_scope = host.page.search == page.search
+                            && host.page.query == page.query
+                            && host.page.navigation_pins_only == page.navigation_pins_only;
+                        if host.refresh_loaded && same_scope && !host.page.threads.is_empty() {
                             for fresh in page.threads {
                                 if let Some(current) =
                                     host.page.threads.iter_mut().find(|row| row.id == fresh.id)
@@ -1243,8 +1257,8 @@ impl App {
                     .zip(after.as_ref())
                     .is_some_and(|(before, after)| before[3] != after[3]);
                 if pin_changed {
-                    let page = &self.hosts[profile].page;
-                    self.refresh_profile(profile, false, page.search, page.query.clone(), true)?;
+                    let (search, query) = self.metadata_query(profile);
+                    self.refresh_profile(profile, false, search, query, true)?;
                 } else if after.is_some()
                     && after != before
                     && !self.server_search

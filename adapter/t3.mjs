@@ -799,7 +799,8 @@ export class T3 {
         } else result = await this.rpc.call(receipt.tag, receipt.payload).promise;
         if (!(isLaunch ? typeof result?.threadId === 'string' && result.threadId===receipt.payload.threadId : Number.isSafeInteger(result?.sequence) && result.sequence >= 0)) throw new Fault('incompatible', 'T3 returned an unfamiliar acknowledgement; inspect the thread before another action.', true);
         const accepted = acceptedResult(op, a, isLaunch ? {threadId:result.threadId,...(result.reconciled?{reconciled:true}:{})} : {sequence:result.sequence});
-        if (op==='thread-action') Object.assign(accepted,await this.threadActionResult(a,accepted));
+        // Only stable acknowledgement fields belong in the shared journal;
+        // helpers may observe different source metadata after the same ACK.
         // No success reaches the client until its receipt is durable too.
         // A storage failure after upstream acceptance remains retryable with
         // the original persisted payload, never with freshly derived controls.
@@ -811,7 +812,7 @@ export class T3 {
         receipt.uncertain = false;
         delete receipt.payload;
         if (!this.closed && this.following && this.watchId === a.threadId) this.scheduleRefresh();
-        return receipt.result;
+        return op==='thread-action' ? this.threadActionResult(a,receipt.result) : receipt.result;
       } catch (e) {
         // A fresh helper can fail authentication/connection before opening its
         // journal. Check only for prior local evidence here; never expose a

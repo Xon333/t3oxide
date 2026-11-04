@@ -1719,3 +1719,98 @@ fn external_marker_stream_change_refreshes_original_search_without_changing_scop
     assert_eq!(fixture.app.scope, Some(1));
     assert!(fixture.app.server_search);
 }
+
+#[test]
+fn leaving_pins_during_loading_queues_the_ordinary_page() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.app.scope = Some(0);
+    fixture.app.set_lane("Pins".into()).unwrap();
+    assert!(fixture.app.hosts[0].loading);
+    fixture.app.set_lane("Open".into()).unwrap();
+    assert!(fixture.app.hosts[0].queued.is_some());
+    fixture.drain_pages();
+    assert_eq!(fixture.app.lane, "Open");
+    assert!(!fixture.app.hosts[0].page.navigation_pins_only);
+    assert!(
+        fixture.app.hosts[0]
+            .page
+            .threads
+            .iter()
+            .any(|row| !row.pinned())
+    );
+}
+
+#[test]
+fn marker_invalidation_uses_the_latest_search_request_and_never_merges_other_queries() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    fixture.app.server_search = true;
+    fixture.app.scope = Some(0);
+    fixture.app.hosts[0].page.search = true;
+    fixture.app.hosts[0].page.query = "old query".into();
+    fixture.app.hosts[0].request = Some((false, true, "in-flight query".into(), false));
+    let mut snapshot = live_snapshot(2);
+    snapshot["navigationPinned"] = json!(true);
+    fixture
+        .app
+        .handle(Background::Packet {
+            generation: 7,
+            packet: Packet::event("native-0", "view", snapshot.clone()),
+        })
+        .unwrap();
+    assert_eq!(
+        fixture.app.hosts[0].queued,
+        Some((false, true, "in-flight query".into(), true))
+    );
+    fixture
+        .app
+        .refresh_profile(0, false, true, "latest query".into(), false)
+        .unwrap();
+    snapshot["revision"] = json!(3);
+    snapshot["navigationPinned"] = json!(false);
+    fixture
+        .app
+        .handle(Background::Packet {
+            generation: 7,
+            packet: Packet::event("native-0", "view", snapshot),
+        })
+        .unwrap();
+    assert_eq!(
+        fixture.app.hosts[0].queued,
+        Some((false, true, "latest query".into(), false))
+    );
+    // Exercise the response merge independently of input timing. Query/search/
+    // Pins identity must all match before retaining rows from another page.
+    for mismatch in ["query", "search", "pins"] {
+        let host = &mut fixture.app.hosts[0];
+        host.queued = None;
+        host.refresh_loaded = true;
+        host.page.search = true;
+        host.page.query = "old query".into();
+        host.page.navigation_pins_only = false;
+        host.page.threads = vec![Thread::parse(0, json!({"id":"old-result"})).unwrap()];
+        let generation = host.generation;
+        let response = json!({"threads":[{"id":"new-result"}],"more":false,
+            "serverSearch":mismatch != "search", "_clientQuery":if mismatch == "query" {"new query"} else {"old query"},
+            "navigationPinsOnly":mismatch == "pins"});
+        fixture
+            .app
+            .handle(Background::Page {
+                profile: 0,
+                generation,
+                append: false,
+                result: Ok(response),
+            })
+            .unwrap();
+        assert_eq!(
+            fixture.app.hosts[0].page.threads.len(),
+            1,
+            "scope mismatch {mismatch}"
+        );
+        assert_eq!(
+            fixture.app.hosts[0].page.threads[0].id, "new-result",
+            "scope mismatch {mismatch}"
+        );
+    }
+}
