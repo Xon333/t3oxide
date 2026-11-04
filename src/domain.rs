@@ -104,7 +104,7 @@ impl Thread {
         flag(self.inbox(), "settled")
     }
     pub fn pinned(&self) -> bool {
-        !string(self.inbox(), "pinnedAt").is_empty()
+        flag(self.inbox(), "navigationPinned")
     }
     pub fn working(&self) -> bool {
         !self.attention()
@@ -255,6 +255,7 @@ pub struct ThreadPage {
     pub search: bool,
     pub inclusive_children: bool,
     pub query: String,
+    pub navigation_pins_only: bool,
 }
 impl ThreadPage {
     pub fn parse(profile: usize, value: Value) -> Result<Self> {
@@ -288,6 +289,7 @@ impl ThreadPage {
             search: flag(&value, "serverSearch"),
             inclusive_children: value["_clientInclusiveChildren"].as_bool().unwrap_or(true),
             query: string(&value, "_clientQuery"),
+            navigation_pins_only: flag(&value, "navigationPinsOnly"),
         })
     }
 }
@@ -901,7 +903,7 @@ mod tests {
         assert_eq!(visible(&rows), vec![(0, 0), (1, 0), (2, 0)]);
         rows[1].raw["inbox"]["activityAt"] = json!("2026-11-02T11:00:00Z");
         assert_eq!(visible(&rows), vec![(1, 0), (0, 0), (2, 0)]);
-        rows[2].raw["inbox"]["pinnedAt"] = json!("2026-11-02T08:00:00Z");
+        rows[2].raw["inbox"]["navigationPinned"] = json!(true);
         assert_eq!(visible(&rows), vec![(1, 0), (0, 0), (2, 0)]);
         assert_eq!(
             visible_threads(&rows, "", "Pins", "all", None, &HashSet::new()),

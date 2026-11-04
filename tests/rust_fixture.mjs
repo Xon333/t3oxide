@@ -100,6 +100,7 @@ export function createFixture(config, emit) {
     writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
     renameSync(temporary, options.stateFile);
   };
+  if (options.persistInitialState && options.stateFile && !existsSync(options.stateFile)) persist();
   const later = (fn, delay) => { const timer = setTimeout(() => { timers.delete(timer); fn(); }, delay); timers.add(timer); return timer; };
   const snapshot = id => {
     const projection = state.projections[id];
@@ -184,17 +185,26 @@ export function createFixture(config, emit) {
         p.thread.pendingRuntimeRequest = null;
         broadcast(p.thread.id, 'runtime-request.updated', request);
       } else if (payload.type === 'thread.model-selection.set') p.thread.modelSelection = payload.modelSelection;
-      else if (payload.type === 'thread.settle') p.thread.settledOverride = 'settled';
+      else if (payload.type === 'thread.settle') {
+        p.thread.settledOverride = 'settled'; p.thread.pinnedAt = null; p.thread.pinOrderKey = null;
+      }
       else if (payload.type === 'thread.unsettle') p.thread.settledOverride = 'active';
       else if (payload.type === 'thread.snooze') p.thread.snoozedUntil = payload.snoozedUntil;
       else if (payload.type === 'thread.unsnooze') p.thread.snoozedUntil = null;
-      else if (payload.type === 'thread.pin') p.thread.pinnedAt = new Date(initialTime).toISOString();
+      else if (payload.type === 'thread.tag.set') {
+        const tags = new Set(p.thread.tags ?? []);
+        if (payload.tagged) tags.add(payload.tag); else tags.delete(payload.tag);
+        p.thread.tags = [...tags];
+      }
+      else if (payload.type === 'thread.pin') {
+        p.thread.pinnedAt = new Date(initialTime).toISOString(); p.thread.settledOverride = 'active';
+      }
       else if (payload.type === 'thread.unpin') p.thread.pinnedAt = null;
       else throw new Fault('unsupported', `Unknown fixture mutation: ${payload.type}`);
     }
     state.effects++;
     state.sequence++;
-    p.thread.updatedAt = new Date(initialTime + state.sequence * 1000).toISOString();
+    if (payload.type !== 'thread.tag.set') p.thread.updatedAt = new Date(initialTime + state.sequence * 1000).toISOString();
     const result = tag === 'orchestration.launchThread' ? { threadId: payload.threadId } : { sequence: state.sequence };
     state.receipts[payload.commandId] = { fingerprint, result };
     persist();
@@ -211,7 +221,7 @@ export function createFixture(config, emit) {
       const path = new URL(url).pathname;
       log({ http: init?.method ?? 'GET', path });
       let value;
-      if (path === '/.well-known/t3/environment') value = { environmentId: config.environmentId, serverVersion: '0.0.0-fixture',
+      if (path === '/.well-known/t3/environment') value = { environmentId: config.environmentId, serverVersion: options.serverVersion ?? '0.1.8-nightly.20261104.4179',
         orchestrationProtocolVersion: 2, platform: { machine: 'server' }, capabilities: { serverResolvedCommandContext: true, threadPinning: true } };
       else if (path === '/api/auth/websocket-ticket') value = { ticket: 'fixture-ticket' };
       else if (path === '/api/orchestration/shell') value = { snapshotSequence: state.sequence, projects: state.projects, threads: Object.values(state.projections).map(p => p.thread) };

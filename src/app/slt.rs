@@ -628,8 +628,7 @@ impl App {
                 self.save_ui()?;
             }
             Action::Lane(lane) => {
-                self.lane = lane;
-                self.rebuild();
+                self.set_lane(lane)?;
             }
             Action::Command(command) if command == "palette" => self.palette(),
             Action::Command(command) if command == "internal-tabs" => {

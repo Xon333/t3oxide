@@ -266,6 +266,7 @@ pub(super) struct Active {
     projection: Projection,
     requests: Vec<Value>,
     status: String,
+    summary: Option<Thread>,
 }
 #[derive(Default)]
 pub(super) struct Host {
@@ -274,6 +275,7 @@ pub(super) struct Host {
     error: String,
     loading: bool,
     queued: Option<(bool, bool, String, bool)>,
+    request: Option<(bool, bool, String, bool)>,
     windowed: bool,
     refresh_loaded: bool,
     projects: Vec<Value>,
@@ -665,6 +667,30 @@ impl App {
         })
     }
 
+    pub(super) fn active_summary(&self) -> Option<&Thread> {
+        let active = self.active.as_ref()?;
+        active.summary.as_ref().or_else(|| {
+            self.threads
+                .iter()
+                .find(|row| row.profile == active.profile && row.id == active.thread)
+        })
+    }
+
+    pub(super) fn set_lane(&mut self, lane: String) -> Result<()> {
+        self.lane = lane;
+        self.rebuild();
+        let pins = self.lane == "Pins";
+        for profile in 0..self.environments.len() {
+            if self.scope.is_none_or(|scope| scope == profile)
+                && (self.hosts[profile].page.navigation_pins_only != pins || pins)
+            {
+                let page = &self.hosts[profile].page;
+                self.refresh_profile(profile, false, page.search, page.query.clone(), false)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn refresh(&mut self, append: bool, search: bool) -> Result<()> {
         if search {
             ensure!(
@@ -707,6 +733,12 @@ impl App {
         query: String,
         refresh_loaded: bool,
     ) -> Result<()> {
+        let refresh_loaded = refresh_loaded && self.lane != "Pins";
+        let include_thread = self
+            .active
+            .as_ref()
+            .filter(|active| active.profile == profile)
+            .map(|active| active.thread.clone());
         let host = &mut self.hosts[profile];
         if host.loading {
             if !refresh_loaded || host.queued.is_none() {
@@ -734,10 +766,12 @@ impl App {
         host.refresh_loaded = refresh_loaded;
         let env = self.environments[profile].clone();
         let tx = self.tx.clone();
+        host.request = Some((append, search, query.clone(), refresh_loaded));
+        let navigation_pins_only = self.lane == "Pins";
         let task=self.metadata_pool.submit(move||{
             let result=(||->Result<Value>{let c=Connection::start(env)?;let result=(||{
                 let hello=c.hello()?;
-                let mut value=c.request("list",json!({"query":if search{query.clone()}else{String::new()},"serverSearch":search,"limit":200,"cursor":cursor,"lifecycle":"all","grouped":false,"includeChildren":true}),None)?;
+                let mut value=c.request("list",json!({"query":if search{query.clone()}else{String::new()},"serverSearch":search,"limit":200,"cursor":cursor,"lifecycle":"all","grouped":false,"includeChildren":true,"navigationPinsOnly":navigation_pins_only,"includeThreadId":include_thread}),None)?;
                 value["_clientInclusiveChildren"]=json!(flag(&hello["features"],"inclusiveThreadList"));value["_clientQuery"]=json!(if search{query}else{String::new()});Ok(value)
             })();c.close();result})();
             let _=tx.send(Background::Page{profile,generation,append,result:result.map_err(|e|e.to_string())});
@@ -874,7 +908,13 @@ impl App {
             }
         }
         self.draft_version = version;
+        let summary = self
+            .threads
+            .iter()
+            .find(|row| row.profile == profile && row.id == thread)
+            .cloned();
         self.active = Some(Active {
+            summary,
             profile,
             thread: thread.clone(),
             generation,
@@ -954,6 +994,7 @@ impl App {
                     return Ok(());
                 }
                 host.loading = false;
+                host.request = None;
                 match result.and_then(|v| {
                     let inventory = (|| -> Result<_> {
                         let Some(projects) = v.get("projects") else {
@@ -986,11 +1027,49 @@ impl App {
                         Ok((Some(projects.clone()), more))
                     })()
                     .map_err(|error| error.to_string())?;
+                    let source_id = string(&v, "sourceThreadId");
+                    let source = v
+                        .get("sourceThread")
+                        .filter(|value| !value.is_null())
+                        .map(|row| Thread::parse(profile, row.clone()))
+                        .transpose()
+                        .map_err(|error| error.to_string())?;
+                    if source.as_ref().is_some_and(|source| source.id != source_id) {
+                        return Err("Attached metadata changed its source".to_owned());
+                    }
                     ThreadPage::parse(profile, v)
-                        .map(|page| (page, inventory))
+                        .map(|page| (page, inventory, source_id, source))
                         .map_err(|e| e.to_string())
                 }) {
-                    Ok((mut page, (projects, projects_more))) => {
+                    Ok((mut page, (projects, projects_more), source_id, source)) => {
+                        if let Some(active) = self
+                            .active
+                            .as_mut()
+                            .filter(|active| active.profile == profile)
+                            && let Some(row) = source
+                                .as_ref()
+                                .filter(|row| row.id == active.thread)
+                                .or_else(|| page.threads.iter().find(|row| row.id == active.thread))
+                        {
+                            active.summary = Some(row.clone());
+                        }
+                        if source.is_none()
+                            && let Some(active) = self.active.as_mut().filter(|active| {
+                                active.profile == profile && active.thread == source_id
+                            })
+                            && let Some(row) = &mut active.summary
+                        {
+                            row.raw["_metadataStale"] = json!(true);
+                        }
+                        for row in &mut host.page.threads {
+                            if let Some(source) =
+                                source.as_ref().filter(|source| source.id == row.id)
+                            {
+                                *row = source.clone();
+                            } else if source.is_none() && row.id == source_id {
+                                row.raw["_metadataStale"] = json!(true);
+                            }
+                        }
                         let events: Vec<_> = page
                             .threads
                             .iter()
@@ -1025,11 +1104,15 @@ impl App {
                                 host.windowed = true;
                             }
                         } else if append {
-                            let ids: HashSet<String> =
-                                host.page.threads.iter().map(|t| t.id.clone()).collect();
-                            host.page
-                                .threads
-                                .extend(page.threads.drain(..).filter(|t| !ids.contains(&t.id)));
+                            for fresh in page.threads.drain(..) {
+                                if let Some(current) =
+                                    host.page.threads.iter_mut().find(|row| row.id == fresh.id)
+                                {
+                                    *current = fresh;
+                                } else {
+                                    host.page.threads.push(fresh);
+                                }
+                            }
                             host.page.more = page.more;
                             host.page.next_cursor = page.next_cursor;
                             host.page.observed_at = page.observed_at;
@@ -1155,7 +1238,14 @@ impl App {
                     }
                 }
                 let after = lifecycle_key(&a.projection);
-                if after.is_some()
+                let pin_changed = before
+                    .as_ref()
+                    .zip(after.as_ref())
+                    .is_some_and(|(before, after)| before[3] != after[3]);
+                if pin_changed {
+                    let page = &self.hosts[profile].page;
+                    self.refresh_profile(profile, false, page.search, page.query.clone(), true)?;
+                } else if after.is_some()
                     && after != before
                     && !self.server_search
                     && !self.hosts[profile].page.search
@@ -1425,16 +1515,21 @@ impl App {
             );
             if op == "thread-action" {
                 let target = self
-                    .threads
-                    .iter()
-                    .find(|thread| {
+                    .active_summary()
+                    .filter(|thread| {
                         thread.profile == profile && thread.raw["id"] == fields["threadId"]
+                    })
+                    .or_else(|| {
+                        self.threads.iter().find(|thread| {
+                            thread.profile == profile && thread.raw["id"] == fields["threadId"]
+                        })
                     })
                     .context(
                         "Refresh the displayed conversation before changing its disposition",
                     )?;
                 ensure!(
-                    target.inbox()["nativeRevision"] == fields["expectedRevision"]
+                    !flag(&target.raw, "_metadataStale")
+                        && target.inbox()["nativeRevision"] == fields["expectedRevision"]
                         && !string(target.inbox(), "nativeRevision").is_empty(),
                     "Native disposition revision changed; refresh before trying again"
                 );
@@ -1656,8 +1751,8 @@ impl App {
                             && matches!(fields["action"].as_str(), Some("pin" | "unpin"))
                         {
                             ensure!(
-                                flag(&hello["features"], "threadPinning"),
-                                "This native host does not advertise pinning"
+                                flag(&hello["features"], "navigationPins"),
+                                "Navigation Pin is unavailable: this host has no verified thread.tag.set contract"
                             );
                         }
                     }
@@ -1815,7 +1910,9 @@ impl App {
                 );
             }
         }
-        if matches!(op, "launch" | "launch-project" | "thread-action") {
+        if op == "thread-action" {
+            self.apply_action_metadata(profile, fields, &value);
+        } else if matches!(op, "launch" | "launch-project") {
             self.refresh(false, false)?;
         }
         if op == "select-model"
@@ -1830,6 +1927,65 @@ impl App {
         self.dirty = true;
         Ok(())
     }
+    fn apply_action_metadata(&mut self, profile: usize, fields: &Value, value: &Value) {
+        let metadata = &value["metadata"];
+        let thread = string(fields, "threadId");
+        let fresh = (|| -> Result<Thread> {
+            ensure!(
+                metadata["status"] == "fresh"
+                    && metadata["environmentId"] == self.environments[profile].environment_id
+                    && metadata["threadId"] == thread,
+                "Affected metadata is stale or belongs to another source"
+            );
+            let row = Thread::parse(profile, metadata["row"].clone())?;
+            ensure!(
+                row.id == thread && !string(row.inbox(), "nativeRevision").is_empty(),
+                "Affected metadata has no exact native revision"
+            );
+            Ok(row)
+        })()
+        .ok();
+        let host = &mut self.hosts[profile];
+        // A page begun before this snapshot cannot put old disposition back.
+        // Preserve a user's pending query and rerun that read only.
+        let pending = if host.loading {
+            host.generation += 1;
+            host.loading = false;
+            host.queued.take().or_else(|| host.request.take())
+        } else {
+            None
+        };
+        for row in &mut host.page.threads {
+            if row.id == thread {
+                if let Some(fresh) = &fresh {
+                    *row = fresh.clone();
+                } else {
+                    row.raw["_metadataStale"] = json!(true);
+                }
+            }
+        }
+        if let Some(active) = self
+            .active
+            .as_mut()
+            .filter(|active| active.profile == profile && active.thread == thread)
+        {
+            if let Some(fresh) = &fresh {
+                active.summary = Some(fresh.clone());
+            } else if let Some(row) = &mut active.summary {
+                row.raw["_metadataStale"] = json!(true);
+            }
+        }
+        if fresh.is_none() {
+            self.notice = "Action accepted by T3 · source metadata stale; Refresh before another disposition action".into();
+        }
+        self.rebuild();
+        if let Some((append, search, query, refresh_loaded)) = pending
+            && let Err(error) = self.refresh_profile(profile, append, search, query, refresh_loaded)
+        {
+            self.hosts[profile].error = error.to_string();
+        }
+    }
+
     fn observe_receipt(&mut self) {
         let Some(receipt) = &mut self.receipt else {
             return;
@@ -2061,11 +2217,19 @@ impl App {
                 ));
             }
         }
-        if let Some(row) = self.active.as_ref().and_then(|active| {
-            self.threads
-                .iter()
-                .find(|row| row.profile == active.profile && row.id == active.thread)
-        }) {
+        if let Some(row) = self.active_summary() {
+            inspector.push((
+                "Navigation pin".into(),
+                if row.pinned() { "Pinned" } else { "Unpinned" }.into(),
+            ));
+            inspector.push(("Native shelf pin".into(), string(row.inbox(), "pinnedAt")));
+            inspector.push((
+                "Native shelf order".into(),
+                string(row.inbox(), "pinOrderKey"),
+            ));
+            if flag(&row.raw, "_metadataStale") {
+                inspector.push(("Source metadata".into(), "Stale · Refresh".into()));
+            }
             inspector.push((
                 "Subagents".into(),
                 row.child_count()
@@ -2111,7 +2275,8 @@ fn lifecycle_key(projection: &Projection) -> Option<Value> {
         array(&s.metadata, "requests")
             .iter()
             .map(|r| json!([r["id"], r["revision"]]))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        s.metadata["navigationPinned"]
     ]))
 }
 

@@ -1,6 +1,10 @@
 // Narrow T3 control/view adaptation. Upstream provenance and MIT notice: ../NOTICE.
 import { createHash } from 'node:crypto';
 
+// T3-owned navigation intent is independent of native shelf disposition.
+export const NAVIGATION_PIN_TAG = 't3oxide:navigation-pin';
+export const navigationPinned = t => Array.isArray(t.tags) && t.tags.includes(NAVIGATION_PIN_TAG);
+
 export const SOURCE = '0e7346ccd9427c06161e222319e718e6bd70887f';
 export const LIMIT = Object.freeze({ frame: 384 * 1024, input: 96 * 1024,
   upstream: 16 * 1024 * 1024, text: 24 * 1024, view: 144 * 1024,

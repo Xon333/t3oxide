@@ -6,9 +6,9 @@ import { Journal, journalScope } from './journal.mjs';
 import { Fault, HISTORY_BUDGET, LIMIT, SOURCE, pageRows, clip, command, hash, historyAnchor, identifier, requireThat, requests, restoreBoundedSnapshot, targetThread, text, trimView, validateDescriptor, view } from './core.mjs';
 import { connectSocket } from './wire.mjs';
 import { FEATURES, catalog, launchCommand, modelCommand, modelView, sameSelection } from './models.mjs';
-import { threadList } from './navigation.mjs';
+import { threadList, threadSummary } from './navigation.mjs';
 import { ACTIVITY_KINDS, ACTIVITY_LIMIT, activityDetail, activityItem, activityPage, trimActivity } from './activity.mjs';
-import { projectPage, resolveDefaults, launchProjectCommand, launchWorkspaceMatches, threadActionCommand, nativeRevision, reviewResult, effectiveProjectSetting, projectFileDefaults, nativeDefaultsReport } from './native.mjs';
+import { projectPage, resolveDefaults, launchProjectCommand, launchWorkspaceMatches, threadActionCommand, navigationPinSupported, nativeRevision, reviewResult, effectiveProjectSetting, projectFileDefaults, nativeDefaultsReport } from './native.mjs';
 
 // Coalesce useful frames without delaying every edit by a third of a second.
 // Structural reads have a separate sustained-rate ceiling: a burst can reveal
@@ -191,7 +191,7 @@ export class T3 {
         nativeWorkflows: d.capabilities?.serverResolvedCommandContext === true,
         nativeDefaults: d.capabilities?.serverResolvedCommandContext === true,
         readCancellation:true, inclusiveThreadList:true, nativeDefaultsWrite: false, threadPreview:true, serverSearch:true,
-        threadPinning:d.capabilities?.threadPinning === true,
+        threadPinning:d.capabilities?.threadPinning === true, navigationPins:navigationPinSupported(d),
         launchModelSelection: d.capabilities?.serverResolvedCommandContext === true,
         messageModelOverride: d.capabilities?.serverResolvedCommandContext === true },
       writesEnabled: this.config.allowWrites === true && d.capabilities?.serverResolvedCommandContext === true };
@@ -272,6 +272,12 @@ export class T3 {
     // Ordinary metadata browsing needs no WebSocket or transcript subscription.
     if (!this.descriptor) await this.probe();
     const shell = await this.http('/api/orchestration/shell');
+    const sourceThreadId = options.includeThreadId ? identifier(options.includeThreadId) : undefined;
+    let sourceThread;
+    if (sourceThreadId) {
+      try { sourceThread=threadSummary(shell,sourceThreadId,this.providerIdentities).row; }
+      catch (error) { if (error.code!=='unavailable') throw error; sourceThread=null; }
+    }
     if (options.serverSearch === true) {
       const q = text(query,800).trim();
       requireThat(q.length >= 2 && q.length <= 200, 'Server search needs 2–200 characters.');
@@ -294,10 +300,10 @@ export class T3 {
         {...options,providerIdentities:this.providerIdentities,activeOnly:true,lifecycle:'all',includeChildren:true});
       // This native API returns a capped matches array and no exhaustive/next
       // marker. Never relabel a zero or full page as a complete global search.
-      return {...projected,machineKind:this.machineKind(),query:q,serverSearch:true,
+      return {...projected,sourceThreadId,sourceThread,machineKind:this.machineKind(),query:q,serverSearch:true,
         searchScope:'shell names and native recent message search',searchIncomplete:true};
     }
-    return {...threadList(shell, query, { ...options, providerIdentities:this.providerIdentities, activeOnly: true }),machineKind:this.machineKind()};
+    return {...threadList(shell, query, { ...options, providerIdentities:this.providerIdentities, activeOnly: true }),sourceThreadId,sourceThread,machineKind:this.machineKind()};
   }
   cancelPreview() { ++this.previewGeneration; this.previewController?.abort(); this.previewController=null; }
   async previewThread(a) {
@@ -697,6 +703,22 @@ export class T3 {
       throw error;
     }
   }
+  async threadActionResult(a, acknowledgement) {
+    const accepted={...acknowledgement,threadId:a.threadId,action:a.action};
+    delete accepted.nativeRevision;
+    accepted.metadata={environmentId:a.environmentId,threadId:a.threadId,status:'stale'};
+    // A failed read cannot revoke an authentic ACK or trigger a resend. This
+    // also refreshes metadata for an explicitly reconciled durable receipt.
+    try {
+      const shell=await this.http('/api/orchestration/shell');
+      requireThat(!Number.isSafeInteger(shell.snapshotSequence) || shell.snapshotSequence>=accepted.sequence,
+        'Shell has not reached the acknowledged action.', 'stale');
+      const fresh=threadSummary(shell,a.threadId,this.providerIdentities);
+      accepted.metadata={environmentId:a.environmentId,threadId:a.threadId,status:'fresh',...fresh};
+      accepted.nativeRevision=fresh.row.inbox.nativeRevision;
+    } catch { /* acceptance remains authentic; metadata remains visibly stale */ }
+    return accepted;
+  }
   async act(op, a) {
     requireThat(this.config.allowWrites === true, 'Writes are disabled in this host configuration.', 'read_only');
     requireThat(a.environmentId === this.config.environmentId, 'Environment identity mismatch.', 'identity_mismatch');
@@ -704,7 +726,7 @@ export class T3 {
     const fingerprint = hash({op,...a});
     const old = this.receipts.get(a.id);
     requireThat(!old || old.fingerprint === fingerprint, 'An operation id cannot be reused with different content.', 'invalid_request');
-    if (old?.result) return old.result;
+    if (old?.result) return op==='thread-action' ? this.threadActionResult(a,old.result) : old.result;
     if (old?.promise) return old.promise;
     if (!old && this.receipts.size >= 128) {
       // Never evict a pending or uncertain operation's original payload.
@@ -722,7 +744,7 @@ export class T3 {
           if (saved) {
             receipt.durable = saved;
             receipt.payload = saved.payload; receipt.tag = saved.tag;
-            if (saved.result) { receipt.result = acceptedResult(op, a, saved.result); return receipt.result; }
+            if (saved.result) { receipt.result = acceptedResult(op, a, saved.result); return op==='thread-action' ? this.threadActionResult(a,receipt.result) : receipt.result; }
             // A prepared record can have reached T3 before a previous helper
             // died. Never infer success from current control state.
             receipt.uncertain = true;
@@ -734,11 +756,11 @@ export class T3 {
           if (op === 'launch-project') {
             receipt.payload=launchProjectCommand(a,await this.launchDefaults(a));
           } else {
+            if (op==='thread-action' && ['pin','unpin'].includes(a.action)) requireThat(navigationPinSupported(this.descriptor),
+              'Navigation Pin requires a verified thread.tag.set server contract; this release is unsupported. Reads and native shelf pins remain available in T3.', 'unsupported');
             const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
             if (op === 'answer') validateQuestionAnswers(a, p);
             if (op === 'thread-action') {
-              if (['pin','unpin'].includes(a.action)) requireThat(this.descriptor?.capabilities?.threadPinning === true,
-                'This server does not advertise native thread pinning. Use native T3 or update its verified adapter.', 'unsupported');
               const shell=await this.http('/api/orchestration/shell');
               receipt.payload=threadActionCommand(a,p,shell.threads?.find(t=>t.id===a.threadId));
             } else {
@@ -755,7 +777,7 @@ export class T3 {
           // winner's exact payload, even if their preflight snapshots differ.
           const saved = this.journal.access(a.id, fingerprint, receipt);
           receipt.durable = saved; receipt.payload = saved.payload; receipt.tag = saved.tag;
-          if (saved.result) { receipt.result = acceptedResult(op, a, saved.result); return receipt.result; }
+          if (saved.result) { receipt.result = acceptedResult(op, a, saved.result); return op==='thread-action' ? this.threadActionResult(a,receipt.result) : receipt.result; }
         }
         const isLaunch=['launch','launch-project'].includes(op);
         let result;
@@ -775,16 +797,7 @@ export class T3 {
         } else result = await this.rpc.call(receipt.tag, receipt.payload).promise;
         if (!(isLaunch ? typeof result?.threadId === 'string' && result.threadId===receipt.payload.threadId : Number.isSafeInteger(result?.sequence) && result.sequence >= 0)) throw new Fault('incompatible', 'T3 returned an unfamiliar acknowledgement; inspect the thread before another action.', true);
         const accepted = acceptedResult(op, a, isLaunch ? {threadId:result.threadId,...(result.reconciled?{reconciled:true}:{})} : {sequence:result.sequence});
-        if (op==='thread-action') {
-          accepted.threadId=a.threadId; accepted.action=a.action;
-          // Action acceptance remains authentic even when the optional
-          // post-read fails. In that case no undo revision is offered.
-          try {
-            const shell=await this.http('/api/orchestration/shell');
-            const current=shell.threads?.find(t=>t.id===a.threadId);
-            if (current) accepted.nativeRevision=nativeRevision(current);
-          } catch { /* do not turn an acknowledged action into a retry */ }
-        }
+        if (op==='thread-action') Object.assign(accepted,await this.threadActionResult(a,accepted));
         // No success reaches the client until its receipt is durable too.
         // A storage failure after upstream acceptance remains retryable with
         // the original persisted payload, never with freshly derived controls.

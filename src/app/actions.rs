@@ -134,13 +134,12 @@ impl App {
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
             Intent::Command(command) => self.command(&command)?,
             Intent::Lane(lane) => {
-                self.lane = lane;
-                self.rebuild();
+                self.set_lane(lane)?;
             }
             Intent::Environment(profile) => {
                 self.workspace_dispatch(workspace::WorkspaceAction::Scope(None))?;
                 self.scope = profile;
-                self.rebuild();
+                self.set_lane(self.lane.clone())?;
             }
             Intent::Type(kind) => {
                 self.kind = kind;
@@ -575,16 +574,13 @@ impl App {
             self.selected_thread()
                 .context("Select a visible conversation first")?
         } else {
-            let active = self.active.as_ref().context("Open a conversation first")?;
-            self.threads
-                .iter()
-                .find(|thread| thread.profile == active.profile && thread.id == active.thread)
+            self.active_summary()
                 .context("Refresh conversation metadata before this action")?
         };
         let revision = string(t.inbox(), "nativeRevision");
         ensure!(
-            !revision.is_empty(),
-            "Native revision unavailable; refresh metadata"
+            !revision.is_empty() && !flag(&t.raw, "_metadataStale"),
+            "Native metadata is stale or unavailable; refresh before this action"
         );
         let action = match name {
             "reviewed" => "settle",
@@ -609,6 +605,7 @@ impl App {
                 "Removes this conversation from Unreviewed and Inbox; keeps it in Settled and All. Active or queued work and pending requests must be resolved first. This is not archive or deletion."
             }
             "unsettle" => "Restores this conversation to the native inbox; does not start a run.",
+            "pin" | "unpin" => "Persistent navigation pin.",
             _ => "Explicit native disposition.",
         };
         self.menu(

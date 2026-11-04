@@ -1,6 +1,6 @@
 // Independently authored bounded client projection over verified T3 protocol-2
 // handlers. Native T3 owns projects, worktrees, runs, queues and visibility.
-import { LIMIT, clip, hash, identifier, requireThat, text } from './core.mjs';
+import { LIMIT, NAVIGATION_PIN_TAG, navigationPinned, clip, hash, identifier, requireThat, text } from './core.mjs';
 import { catalog, selection, sameSelection, validateChoice, providerIdentity } from './models.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
@@ -52,6 +52,15 @@ export function projectFileDefaults(contents) {
   return data.defaultThreadEnvMode===undefined?{}:{defaultThreadEnvMode:data.defaultThreadEnvMode};
 }
 
+export { NAVIGATION_PIN_TAG, navigationPinned };
+
+// This release's public MIT protocol-2 contract includes thread.tag.set but
+// its descriptor has no tag capability bit. Unknown releases stay readable.
+export function navigationPinSupported(descriptor) {
+  return descriptor?.orchestrationProtocolVersion === 2 &&
+    descriptor.serverVersion === '0.1.8-nightly.20261104.4179';
+}
+
 export function nativeRevision(t) {
   requireThat(typeof t.updatedAt === 'string' && Number.isFinite(Date.parse(t.updatedAt)),
     'Native thread revision is unavailable.', 'unsupported');
@@ -59,6 +68,7 @@ export function nativeRevision(t) {
     worktreePath:t.worktreePath ?? null, branch:t.branch ?? null,
     settledOverride:t.settledOverride ?? null, snoozedUntil:t.snoozedUntil ?? null,
     pinnedAt:t.pinnedAt ?? null, pinOrderKey:t.pinOrderKey ?? null,
+    navigationPinned:navigationPinned(t),
     activeRunId:t.activeRunId ?? null, latestRunId:t.latestRunId ?? null,
     status:t.status ?? null, activityRunStatus:t.activityRunStatus ?? null,
     pendingRuntimeRequest:t.pendingRuntimeRequest ?? null, queuedRunCount:t.queuedRunCount ?? null});
@@ -120,6 +130,7 @@ export function inboxMetadata(t, extra = {}) {
     activityAt:activity.at, activityGeneration:activity.generation, activityKind:activity.kind,
     settled:t.settledOverride === 'settled', snoozedUntil:clip(t.snoozedUntil,64).text,
     pinnedAt:clip(t.pinnedAt,64).text, pinOrderKey:clip(t.pinOrderKey,256).text,
+    navigationPinned:navigationPinned(t),
     latestUserMessageAt:clip(t.latestUserAuthoredMessageAt ?? t.latestUserMessageAt,64).text,
     latestRunCompletedAt:clip(t.latestRunCompletedAt,64).text,
     latestRunRequestedAt:clip(t.latestRunRequestedAt,64).text,
@@ -291,6 +302,8 @@ export function threadActionCommand(a, p, shellThread) {
     requireThat(!p.runtimeRequests.some(r=>r.status==='pending'), 'Answer the formal T3 request before hiding this thread.', 'blocked');
     requireThat(!p.runs.some(r=>ACTIVE.has(r.status) || r.status==='queued'), 'Active or queued work cannot be marked reviewed or snoozed here.', 'blocked');
   }
+  if (['pin','unpin'].includes(a.action)) return {type:'thread.tag.set',
+    commandId:identifier(a.id),threadId:identifier(a.threadId),tag:NAVIGATION_PIN_TAG,tagged:a.action==='pin'};
   const payload = {type:'thread.'+a.action,commandId:identifier(a.id),threadId:identifier(a.threadId)};
   if (['unsettle','unsnooze'].includes(a.action)) payload.reason='user';
   if (a.action === 'snooze') {

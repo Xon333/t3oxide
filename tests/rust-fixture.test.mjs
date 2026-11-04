@@ -69,3 +69,22 @@ test('Rust fixture performs a first-thread launch from native project defaults',
   assert.deepEqual(await backend.act('launch-project', action), { threadId: 'new-thread' });
   assert.equal((await backend.bounded('new-thread')).projection.thread.projectId, 'project-empty');
 });
+
+test('lost navigation pin ACK preserves exact tag command and journal; reads/restart never resend',async t=>{
+  const {backend,config}=await fixture(t,{dropAckOnce:true,stream:false});
+  const row=(await backend.list('',{lifecycle:'all',includeChildren:true})).threads.find(row=>row.id==='thread-review');
+  const action={id:'uncertain-pin',environmentId:'fixture-env',threadId:row.id,action:'pin',expectedRevision:row.inbox.nativeRevision};
+  await assert.rejects(backend.act('thread-action',action),{uncertain:true});
+  assert.equal(JSON.parse(await readFile(config.fixture.stateFile,'utf8')).effects,1);
+  backend.close();
+  const resumed=createFixture(config,()=>{});
+  try{
+    const list=await resumed.list('',{lifecycle:'all',includeChildren:true});
+    assert.equal(list.threads.find(t=>t.id===row.id).inbox.navigationPinned,true);
+    const before=JSON.parse(await readFile(config.fixture.stateFile,'utf8'));assert.equal(before.effects,1);
+    const ack=await resumed.act('thread-action',action);
+    assert.equal(ack.metadata.status,'fresh');assert.equal(ack.metadata.row.inbox.navigationPinned,true);
+    const after=JSON.parse(await readFile(config.fixture.stateFile,'utf8'));assert.equal(after.effects,1);
+    assert.deepEqual(after.receipts[action.id],before.receipts[action.id]);
+  }finally{resumed.close()}
+});

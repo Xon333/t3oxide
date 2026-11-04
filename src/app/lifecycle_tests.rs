@@ -293,7 +293,7 @@ fn unread_and_completed_use_durable_source_generations_and_independent_running_s
     fixture.app.hosts[0].page.threads = rows.into_iter().map(|(id, status, working, request, pinned)| {
         Thread::parse(0, json!({"id":id,"title":id,"status":status,"updatedAt":"2026-11-02T12:00:00Z",
             "lineage":{"parentThreadId":null},"inbox":{"settled":false,"working":working,"pendingReview":id=="review",
-            "pendingRequestCount":u64::from(request),"queuedCount":0,"runId":format!("run-{id}"),"pinnedAt":if pinned {"native-pin"} else {""}}})).unwrap()
+            "pendingRequestCount":u64::from(request),"queuedCount":0,"runId":format!("run-{id}"),"navigationPinned":pinned}})).unwrap()
     }).collect();
     let seen = fixture.app.hosts[0]
         .page
@@ -796,6 +796,7 @@ fn synthetic_attachment(app: &mut App) {
         connection: None,
         hello: Value::Null,
         projection,
+        summary: None,
         requests: Vec::new(),
         status: "Live".into(),
     });
@@ -1434,4 +1435,287 @@ fn loaded_navigation_and_restore_read_active_slt_layout() {
         });
         assert!(!fixture.app.follow, "manual scrolling leaves the tail");
     }
+}
+
+#[test]
+fn navigation_pin_replaces_older_paged_source_without_resetting_search_scope_or_draft() {
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["persistInitialState"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.load_pages();
+    let mut native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    let original = native["projections"]["thread-review"].clone();
+    native["projections"]["thread-review"]["thread"]["pinnedAt"] = json!("native-shelf-pin");
+    native["projections"]["thread-review"]["thread"]["pinOrderKey"] = json!("native-shelf-order");
+    for index in 0..240 {
+        let id = format!("recent-{index:03}");
+        let mut recent = original.clone();
+        recent["thread"]["id"] = json!(id);
+        recent["thread"]["createdAt"] = json!("2026-11-04T12:00:00Z");
+        native["projections"][&id] = recent;
+    }
+    fs::write(&fixture.native_states[0], native.to_string()).unwrap();
+    fixture.load_pages();
+    assert!(
+        !fixture.app.hosts[0]
+            .page
+            .threads
+            .iter()
+            .any(|row| row.id == "thread-review")
+    );
+    fixture.open_thread(0, "thread-review");
+    fixture.app.refresh(true, false).unwrap();
+    fixture.drain_pages();
+    assert!(
+        fixture.app.hosts[0]
+            .page
+            .threads
+            .iter()
+            .any(|row| row.id == "thread-review")
+    );
+    fixture
+        .app
+        .replace_text("Preserve the exact unsent draft\n🦀".into());
+    fixture.app.flush_draft().unwrap();
+    fixture.app.transcript_scroll = 3;
+    fixture.app.follow = false;
+    fixture.app.focus = Focus::Composer;
+    fixture
+        .app
+        .workspace_dispatch(workspace::WorkspaceAction::Scope(Some(json!({
+            "profileId":"profile-0","environmentId":"native-0","projectId":"project-a"
+        }))))
+        .unwrap();
+    let project_scope = fixture.app.workspace_scope_label();
+    let other = fixture.app.hosts[1]
+        .page
+        .threads
+        .iter()
+        .find(|row| row.id == "thread-review")
+        .unwrap()
+        .raw
+        .clone();
+    for (index, command) in ["pin", "settle", "unsettle", "pin"].into_iter().enumerate() {
+        fixture.app.command(command).unwrap();
+        if command == "pin" {
+            let intent = fixture.app.dialog.as_ref().unwrap().choices[0]
+                .intent
+                .clone();
+            fixture.app.dispatch(intent).unwrap();
+        }
+        let event = fixture.next_mutation();
+        assert!(
+            matches!(&event, Background::Mutation {context, result:Ok(value), ..}
+            if context.profile == 0 && value["metadata"]["status"] == "fresh")
+        );
+        // Acknowledgement arrives while the human is browsing another host's
+        // server search. The active source, scope and independent draft stay put.
+        fixture.app.scope = Some(1);
+        fixture.app.filter = "server-only-marker".into();
+        fixture.app.server_search = true;
+        fixture.app.hosts[1].page.search = true;
+        fixture.app.hosts[1].page.query = "server-only-marker".into();
+        fixture.app.handle(event).unwrap();
+        let target = fixture.app.active_summary().unwrap();
+        assert_eq!(target.profile, 0);
+        assert_eq!(target.id, "thread-review");
+        assert_eq!(target.pinned(), index != 3);
+        assert_eq!(target.reviewed(), index == 1);
+        if index > 0 {
+            assert!(string(target.inbox(), "pinnedAt").is_empty());
+        } else {
+            assert_eq!(string(target.inbox(), "pinnedAt"), "native-shelf-pin");
+        }
+        assert_eq!(fixture.app.scope, Some(1));
+        assert!(fixture.app.server_search);
+        assert_eq!(fixture.app.filter, "server-only-marker");
+        assert_eq!(fixture.app.hosts[1].page.query, "server-only-marker");
+        assert_eq!(fixture.app.workspace_scope_label(), project_scope);
+        assert_eq!(fixture.app.text(), "Preserve the exact unsent draft\n🦀");
+        assert_eq!(
+            fixture.app.state.draft("native-0", "thread-review"),
+            fixture.app.text()
+        );
+        assert_eq!(
+            (fixture.app.transcript_scroll, fixture.app.follow),
+            (3, false)
+        );
+        assert_eq!(
+            fixture.app.hosts[1]
+                .page
+                .threads
+                .iter()
+                .find(|row| row.id == "thread-review")
+                .unwrap()
+                .raw,
+            other
+        );
+        assert!(fixture.app.state.pending_records().is_empty());
+        if index == 0 {
+            let retained = fixture.app.hosts[0]
+                .page
+                .threads
+                .iter()
+                .find(|row| row.id == "thread-review")
+                .unwrap();
+            assert_eq!(retained.raw, target.raw);
+            // A search can omit the attached old source; later actions still
+            // use its complete summary without inserting it into search results.
+            fixture.app.hosts[0]
+                .page
+                .threads
+                .retain(|row| row.id != "thread-review");
+            fixture.app.rebuild();
+        }
+    }
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(native["effects"], 4);
+    assert_eq!(
+        native["projections"]["thread-review"]["thread"]["tags"],
+        json!([])
+    );
+    assert!(native["projections"]["thread-review"]["thread"]["pinnedAt"].is_null());
+    let mut external = native;
+    let thread = &mut external["projections"]["thread-review"]["thread"];
+    thread["tags"] = json!(["t3oxide:navigation-pin"]);
+    thread["settledOverride"] = json!("settled");
+    thread["lineage"] = json!({"parentThreadId":"recent-000","rootThreadId":"recent-000","relationshipToParent":"subagent"});
+    fs::write(&fixture.native_states[0], external.to_string()).unwrap();
+    fixture.app.scope = Some(0);
+    fixture.app.server_search = false;
+    fixture.app.filter.clear();
+    fixture.app.set_lane("Pins".into()).unwrap();
+    fixture.drain_pages();
+    assert_eq!(fixture.app.hosts[0].page.threads.len(), 1);
+    let row = &fixture.app.hosts[0].page.threads[0];
+    assert_eq!(row.id, "thread-review");
+    assert!(row.pinned() && row.reviewed());
+    assert_eq!(row.kind(), "subagent");
+    let stamp = external["projections"]["thread-review"]["thread"]["updatedAt"].clone();
+    external["projections"]["thread-review"]["thread"]["tags"] = json!([]);
+    fs::write(&fixture.native_states[0], external.to_string()).unwrap();
+    fixture.app.set_lane("Pins".into()).unwrap();
+    fixture.drain_pages();
+    assert!(fixture.app.hosts[0].page.threads.is_empty());
+    assert!(!fixture.app.active_summary().unwrap().pinned());
+    assert_eq!(
+        fixture.app.active_summary().unwrap().raw["updatedAt"],
+        stamp
+    );
+}
+
+#[test]
+fn stale_action_metadata_preserves_ack_and_disables_only_its_exact_source() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let before = fixture.app.active_summary().unwrap().raw.clone();
+    let other = fixture.app.hosts[1]
+        .page
+        .threads
+        .iter()
+        .find(|row| row.id == "thread-review")
+        .unwrap()
+        .raw
+        .clone();
+    for metadata in [
+        json!({"status":"stale","environmentId":"native-0","threadId":"thread-review"}),
+        json!({"status":"fresh","environmentId":"native-1","threadId":"thread-review","row":before}),
+    ] {
+        fixture.app.mutation_done(MutationContext{profile:0,generation:fixture.app.generation,draft_version:None},
+            "authentic-ack","thread-action",&json!({"threadId":"thread-review","action":"pin"}),
+            json!({"sequence":42,"threadId":"thread-review","action":"pin","metadata":metadata})).unwrap();
+        assert!(fixture.app.notice.contains("accepted by T3"));
+        assert!(fixture.app.notice.contains("stale"));
+        assert!(flag(
+            &fixture.app.active_summary().unwrap().raw,
+            "_metadataStale"
+        ));
+        assert_eq!(
+            fixture.app.active_summary().unwrap().inbox(),
+            &before["inbox"]
+        );
+        assert_eq!(
+            fixture.app.hosts[1]
+                .page
+                .threads
+                .iter()
+                .find(|row| row.id == "thread-review")
+                .unwrap()
+                .raw,
+            other
+        );
+        fixture.app.focus = Focus::Composer;
+        assert!(fixture.app.command("pin").is_err());
+        assert!(fixture.app.state.pending_records().is_empty());
+    }
+    fixture.load_pages();
+    assert!(!flag(
+        &fixture.app.active_summary().unwrap().raw,
+        "_metadataStale"
+    ));
+}
+
+#[test]
+fn duplicate_paged_summary_replaces_complete_marker_metadata_without_updated_at_change() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let mut fresh = fixture.app.active_summary().unwrap().raw.clone();
+    fresh["inbox"]["navigationPinned"] = json!(true);
+    fresh["inbox"]["nativeRevision"] = json!("marker-only-revision");
+    fresh["inbox"].as_object_mut().unwrap().remove("pinnedAt");
+    let stamp = fresh["updatedAt"].clone();
+    let generation = fixture.app.hosts[0].generation;
+    fixture
+        .app
+        .handle(Background::Page {
+            profile: 0,
+            generation,
+            append: true,
+            result: Ok(json!({"threads":[fresh],"more":false})),
+        })
+        .unwrap();
+    let active = fixture.app.active_summary().unwrap();
+    assert!(active.pinned());
+    assert_eq!(active.raw["updatedAt"], stamp);
+    assert!(active.inbox().get("pinnedAt").is_none());
+    let rows: Vec<_> = fixture.app.hosts[0]
+        .page
+        .threads
+        .iter()
+        .filter(|row| row.id == "thread-review")
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].raw, active.raw);
+}
+
+#[test]
+fn external_marker_stream_change_refreshes_original_search_without_changing_scope() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    fixture.app.server_search = true;
+    fixture.app.scope = Some(1);
+    fixture.app.hosts[0].page.search = true;
+    fixture.app.hosts[0].page.query = "original native search".into();
+    let mut snapshot = live_snapshot(2);
+    snapshot["navigationPinned"] = json!(true);
+    fixture
+        .app
+        .handle(Background::Packet {
+            generation: 7,
+            packet: Packet::event("native-0", "view", snapshot),
+        })
+        .unwrap();
+    assert_eq!(
+        fixture.app.hosts[0].queued,
+        Some((false, true, "original native search".into(), true))
+    );
+    assert!(fixture.app.hosts[1].queued.is_none());
+    assert_eq!(fixture.app.scope, Some(1));
+    assert!(fixture.app.server_search);
 }

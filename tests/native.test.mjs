@@ -9,6 +9,7 @@ import {Journal} from '../adapter/journal.mjs';
 import {projectPage,resolveDefaults,launchProjectCommand,nativeRevision,inboxMetadata,threadActionCommand,reviewResult,projectFileDefaults,meaningfulActivity} from '../adapter/native.mjs';
 import {threadList} from '../adapter/navigation.mjs';
 
+const NAVIGATION_PIN_TAG='t3oxide:navigation-pin';
 const stamp='2026-10-29T10:00:00.000Z';
 const project={id:'project-a',title:'Example',workspaceRoot:'/fixture/project',defaultModelSelection:null,defaultThreadEnvMode:null};
 const selected={instanceId:'native-account',model:'native-model',options:[{id:'reasoningEffort',value:'medium'}]};
@@ -16,7 +17,7 @@ function configuration(){return {settings:{defaultModelSelection:selected,defaul
 function shell(){return {projects:[structuredClone(project)],threads:[]};}
 function thread(){return {id:'thread-a',projectId:'project-a',title:'Task',updatedAt:stamp,status:'completed',activeRunId:null,latestRunId:'run-a',worktreePath:'/fixture/tree',branch:'task-a',settledOverride:null,pendingRuntimeRequest:null,modelSelection:selected,runtimeMode:'approval-required',interactionMode:'default'};}
 function projection(t=thread()){return {projection:{thread:t,visibleTurnItems:[],runtimeRequests:[],runs:[{id:'run-a',status:'completed'}]}};}
-const descriptor={environmentId:'env-a',serverVersion:'0.1.3-fixture',orchestrationProtocolVersion:2,capabilities:{serverResolvedCommandContext:true}};
+const descriptor={environmentId:'env-a',serverVersion:'0.1.8-nightly.20261104.4179',orchestrationProtocolVersion:2,capabilities:{serverResolvedCommandContext:true}};
 function backend({journal,existing=thread()}={}){
   const state={shell:shell(),config:configuration(),calls:[],projects:0,launches:0,projection:projection(existing)};
   if(existing)state.shell.threads.push(existing);
@@ -41,10 +42,14 @@ function backend({journal,existing=thread()}={}){
     }
     if(tag==='orchestration.dispatchCommand'){
       const t=state.shell.threads.find(t=>t.id===payload.threadId);
-      if(payload.type==='thread.settle')t.settledOverride='settled';
+      if(payload.type==='thread.settle'){t.settledOverride='settled';t.pinnedAt=null;t.pinOrderKey=null;}
       if(payload.type==='thread.unsettle')t.settledOverride='active';
       if(payload.type==='thread.snooze')t.snoozedUntil=payload.snoozedUntil;
-      t.updatedAt='2026-10-29T10:01:00.000Z';return {sequence:42};
+      if(payload.type==='thread.tag.set'){
+        const tags=new Set(t.tags??[]);if(payload.tagged)tags.add(payload.tag);else tags.delete(payload.tag);t.tags=[...tags];
+      }else t.updatedAt='2026-10-29T10:01:00.000Z';
+      if(state.loseAction)throw new Fault('timeout','lost action response',true);
+      return {sequence:42};
     }
     throw new Fault('unsupported','No native fixture handler for '+tag);
   })()}}};
@@ -209,5 +214,110 @@ test('actual adapter action journal uses native dispatch and returns post-action
     await assert.rejects(server.act('thread-action',{id:'stale-undo',environmentId:'env-a',threadId:'thread-a',action:'unsettle',expectedRevision:revision}),{code:'stale'});
     assert.equal(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').length,1);
     const limited=reviewResult(thread(),project,{cwd:'/fixture/tree',sources:[{kind:'working-tree',title:'Changes',diff:'a'.repeat(200000),diffHash:'x',truncated:false}]});assert.equal(limited.diffTruncated,true);assert.ok(Buffer.byteLength(limited.diff)<=128*1024);
+  }finally{server.close()}
+});
+
+
+test('navigation marker changes qualify revision without updatedAt or shelf disposition changes',()=>{
+  const t={...thread(),pinnedAt:stamp};
+  const tagged={...t,tags:[NAVIGATION_PIN_TAG]};
+  assert.notEqual(nativeRevision(t),nativeRevision(tagged));
+  assert.equal(inboxMetadata(t).navigationPinned,false);
+  assert.equal(inboxMetadata(tagged).navigationPinned,true);
+  assert.equal(inboxMetadata(tagged).pinnedAt,stamp);
+  const action={id:'original-pin-operation',threadId:t.id,action:'pin',expectedRevision:nativeRevision(t)};
+  assert.deepEqual(threadActionCommand(action,projection(t).projection,t),
+    {type:'thread.tag.set',commandId:action.id,threadId:t.id,tag:NAVIGATION_PIN_TAG,tagged:true});
+  assert.throws(()=>threadActionCommand(action,projection(tagged).projection,tagged),{code:'stale'});
+});
+
+test('navigation pin survives reads, run transitions, settle and restore; unpin never changes shelf state',async()=>{
+  const {server,state}=backend({existing:{...thread(),pinnedAt:stamp,pinOrderKey:'native-order'}});
+  const act=async(action,id)=>server.act('thread-action',{id,environmentId:'env-a',threadId:'thread-a',action,
+    expectedRevision:nativeRevision(state.shell.threads[0])});
+  try{
+    const pinned=await act('pin','pin-intent');
+    assert.equal(pinned.metadata.environmentId,'env-a');assert.equal(pinned.metadata.row.inbox.navigationPinned,true);
+    assert.equal(pinned.metadata.row.inbox.pinnedAt,stamp);
+    await server.bounded('thread-a');
+    const t=state.shell.threads[0];t.status='running';t.activeRunId='new-run';
+    assert.equal((await server.list('',{lifecycle:'all',includeChildren:true})).threads[0].inbox.navigationPinned,true);
+    t.status='completed';t.activeRunId=null;
+    const settled=await act('settle','settle-once');
+    assert.equal(settled.metadata.row.inbox.settled,true);assert.equal(settled.metadata.row.inbox.pinnedAt,'');
+    assert.equal(settled.metadata.row.inbox.navigationPinned,true);
+    const restored=await act('unsettle','restore-once');
+    assert.equal(restored.metadata.row.inbox.navigationPinned,true);assert.equal(restored.metadata.row.inbox.settled,false);
+    t.pinnedAt=stamp;t.pinOrderKey='preserve-shelf';t.settledOverride='settled';
+    const unpinned=await act('unpin','remove-intent');
+    assert.equal(unpinned.metadata.row.inbox.navigationPinned,false);assert.equal(t.pinnedAt,stamp);
+    assert.equal(t.pinOrderKey,'preserve-shelf');assert.equal(t.settledOverride,'settled');
+    assert.deepEqual(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').map(c=>c.payload.type),
+      ['thread.tag.set','thread.settle','thread.unsettle','thread.tag.set']);
+  }finally{server.close()}
+});
+
+test('marker-only external change rejects stale pin preflight, with no inferred tag migration',async()=>{
+  const {server,state}=backend({existing:{...thread(),pinnedAt:stamp}});
+  try{
+    const expectedRevision=nativeRevision(state.shell.threads[0]);
+    state.shell.threads[0].tags=[NAVIGATION_PIN_TAG];
+    await assert.rejects(server.act('thread-action',{id:'stale-marker',environmentId:'env-a',threadId:'thread-a',action:'pin',expectedRevision}),{code:'stale'});
+    assert.equal(state.calls.length,0);
+    const list=await server.list('',{lifecycle:'all',includeChildren:true});
+    assert.equal(list.threads[0].inbox.navigationPinned,true);
+    assert.equal(state.shell.threads[0].updatedAt,stamp);
+  }finally{server.close()}
+});
+
+test('acknowledged action with failed post-read stays accepted and stale; same-ID lookup reads without redispatch',async()=>{
+  const {server,state}=backend();
+  const action={id:'post-read-fails',environmentId:'env-a',threadId:'thread-a',action:'pin',expectedRevision:nativeRevision(state.shell.threads[0])};
+  const http=server.http;
+  server.http=async path=>{if(state.calls.some(c=>c.tag==='orchestration.dispatchCommand'))throw new Fault('transport','post-read failed');return http(path)};
+  try{
+    for(let attempt=0;attempt<2;attempt++){
+      const ack=await server.act('thread-action',action);
+      assert.equal(ack.sequence,42);assert.equal(ack.threadId,action.threadId);assert.equal(ack.action,'pin');
+      assert.deepEqual(ack.metadata,{environmentId:'env-a',threadId:'thread-a',status:'stale'});
+      assert.equal(ack.nativeRevision,undefined);
+    }
+    assert.equal(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').length,1);
+    server.http=http;
+    const fresh=await server.act('thread-action',action);assert.equal(fresh.metadata.status,'fresh');
+    state.shell.threads[0].tags=[];
+    assert.equal((await server.act('thread-action',action)).metadata.row.inbox.navigationPinned,false);
+    assert.equal(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').length,1);
+  }finally{server.close()}
+});
+
+test('verified tag support uses release contract, never optional tag presence or shelf pin capability',async()=>{
+  for(const version of ['0.1.3','0.1.8-nightly.20261104.4178','unknown','0.1.8-nightly.20261104.4179']){
+    const {server,state}=backend();
+    server.descriptor={...descriptor,serverVersion:version,capabilities:{serverResolvedCommandContext:true,threadPinning:true}};
+    const supported=version==='0.1.8-nightly.20261104.4179';
+    try{
+      assert.equal((await server.list('',{lifecycle:'all'})).threads[0].inbox.navigationPinned,false);
+      const http=server.http;
+      server.http=async path=>path==='/.well-known/t3/environment'?server.descriptor:http(path);
+      assert.equal((await server.probe()).features.navigationPins,supported);
+      const action={id:'explicit-pin',environmentId:'env-a',threadId:'thread-a',action:'pin',expectedRevision:nativeRevision(state.shell.threads[0])};
+      if(supported)assert.equal((await server.act('thread-action',action)).metadata.row.inbox.navigationPinned,true);
+      else {server.bounded=async()=>{throw new Error('Unsupported Pin must fail before another native read')};await assert.rejects(server.act('thread-action',action),{code:'unsupported'});assert.equal(state.calls.length,0);}
+    }finally{server.close()}
+  }
+});
+
+test('post-action and attached metadata find exact old target beyond pagination and preserve whole source context',async()=>{
+  const {server,state}=backend();
+  state.shell.threads.unshift(...Array.from({length:250},(_,i)=>({...thread(),id:'recent-'+i,createdAt:'2026-11-04T12:00:00Z'})));
+  const t=state.shell.threads.at(-1);t.title='Old target';t.lineage={parentThreadId:'recent-0',rootThreadId:'recent-0',relationshipToParent:'subagent'};
+  try{
+    const page=await server.list('',{lifecycle:'all',includeChildren:true,limit:200,includeThreadId:t.id});
+    assert.equal(page.threads.some(row=>row.id===t.id),false);assert.equal(page.sourceThread.id,t.id);
+    const result=await server.act('thread-action',{id:'old-pin',environmentId:'env-a',threadId:t.id,action:'pin',expectedRevision:nativeRevision(t)});
+    const fresh=result.metadata.row;
+    assert.equal(fresh.id,t.id);assert.equal(fresh.title,'Old target');assert.equal(fresh.projectId,project.id);
+    assert.equal(fresh.lineage.parentThreadId,'recent-0');assert.equal(fresh.inbox.navigationPinned,true);
   }finally{server.close()}
 });

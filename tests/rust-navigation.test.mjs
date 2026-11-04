@@ -57,3 +57,14 @@ test('inclusive list negotiates capability and reads shell only, without a trans
     assert.equal(backend.watchId, null);
   } finally { backend.close(); }
 });
+
+test('Pins membership is filtered in the untrimmed shell before pagination, including settled children',()=>{
+  const data={projects:shell.projects,threads:Array.from({length:250},(_,i)=>thread(`recent-${i}`,'Recent'))};
+  data.threads.push({...thread('old-pin','Old settled child','subagent'),settledOverride:'settled',tags:['t3oxide:navigation-pin']});
+  data.threads.push({...thread('shelf-only','Native shelf'),pinnedAt:stamp});
+  const pins=threadList(data,'',{activeOnly:true,navigationPinsOnly:true,limit:1});
+  assert.deepEqual(pins.threads.map(t=>t.id),['old-pin']);assert.equal(pins.more,false);
+  assert.equal(pins.threads[0].inbox.settled,true);assert.equal(pins.threads[0].threadType,'subagent');
+  data.threads.at(-2).tags=[];
+  assert.equal(threadList(data,'',{navigationPinsOnly:true,lifecycle:'all'}).threads.length,0);
+});
