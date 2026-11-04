@@ -642,14 +642,7 @@ impl App {
                     let settled = if self.focus == Focus::Navigator {
                         self.selected_thread().is_some_and(Thread::reviewed)
                     } else {
-                        self.active
-                            .as_ref()
-                            .and_then(|active| {
-                                self.threads.iter().find(|row| {
-                                    row.profile == active.profile && row.id == active.thread
-                                })
-                            })
-                            .is_some_and(Thread::reviewed)
+                        self.active_summary().is_some_and(Thread::reviewed)
                     };
                     self.command(if settled { "unsettle" } else { "settle" })?;
                 } else {

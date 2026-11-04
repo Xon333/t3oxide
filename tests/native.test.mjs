@@ -379,3 +379,28 @@ test('concurrent helpers persist the same stable action ACK before decorating in
     }
   }finally{for(const {server} of helpers)server.close();await rm(root,{recursive:true,force:true})}
 });
+
+test('current helper accepts a legacy decorated ACK without replacing its bound receipt',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'t3oxide-legacy-action-ack-'));
+  const path=join(root,'operations'),scope=hash('mixed-synthetic-principal');
+  const legacy=new Journal(path,scope),journal=new Journal(path,scope);
+  const action={id:'mixed-settle',environmentId:'env-a',threadId:'thread-a',action:'settle',expectedRevision:nativeRevision(thread())};
+  const fingerprint=hash({op:'thread-action',...action});
+  const record=legacy.access(action.id,fingerprint,{tag:'orchestration.dispatchCommand',payload:{type:'thread.settle',commandId:action.id,threadId:action.threadId}});
+  const oldResult={sequence:42,threadId:action.threadId,action:'settle',nativeRevision:'old-view',metadata:{observedAt:'earlier observation',status:'fresh'}};
+  const {server,state}=backend({journal});
+  const call=server.rpc.call;
+  server.rpc.call=(...args)=>{
+    const pending=call(...args);
+    legacy.acknowledge(record,oldResult);
+    return pending;
+  };
+  try{
+    const accepted=await server.act('thread-action',action);
+    assert.equal(accepted.sequence,42);assert.equal(accepted.metadata.status,'fresh');
+    assert.deepEqual(legacy.access(action.id,fingerprint).result,oldResult,'existing legacy evidence is preserved');
+    assert.equal(state.calls.length,1);
+    assert.equal((await server.act('thread-action',action)).sequence,42);
+    assert.equal(state.calls.length,1,'saved acceptance is not redispatched');
+  }finally{server.close();await rm(root,{recursive:true,force:true})}
+});

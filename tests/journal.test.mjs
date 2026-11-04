@@ -4,6 +4,7 @@ import { mkdtemp, rm, chmod, readdir, writeFile, symlink, stat } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { closeSync } from 'node:fs';
 import { Journal, journalScope } from '../adapter/journal.mjs';
 import { T3 } from '../adapter/t3.mjs';
 import { Fault, hash, requests } from '../adapter/core.mjs';
@@ -181,4 +182,18 @@ test('fresh-helper authentication failure preserves prior uncertainty without re
   server.connect = async () => { throw new Fault('authorization', 'Renew this host credential.'); };
   await assert.rejects(server.act('stop', action), { code: 'authorization', uncertain: true });
   assert.equal(s.calls.length, 1); server.close();
+});
+
+test('legacy thread ACK decoration cannot hide a conflicting sequence, source or action', async t => {
+  const path=await directory(t),journal=new Journal(path,scope);
+  for(const [index,result] of [{sequence:99},{sequence:12,threadId:'other'},{sequence:12,action:'unsettle'}].entries()){
+    const id='conflicting-legacy-'+index;
+    const record=journal.access(id,hash(id),{tag:'orchestration.dispatchCommand',payload:{type:'thread.settle',commandId:id,threadId:'thread-a'}});
+    // Publish the old bytes directly so this checks compatibility validation,
+    // rather than requiring the current writer to create invalid metadata.
+    const fd=journal.directoryFd();
+    try {journal.publish(record.path+'.ack',{v:1,key:record.key,scope,fingerprint:record.fingerprint,payloadHash:record.payloadHash,result},fd)}
+    finally {closeSync(fd)}
+    assert.throws(()=>journal.acknowledge(record,{sequence:12}),{code:'journal',uncertain:true});
+  }
 });

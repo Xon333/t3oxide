@@ -1814,3 +1814,39 @@ fn marker_invalidation_uses_the_latest_search_request_and_never_merges_other_que
         );
     }
 }
+
+#[test]
+fn restore_shortcut_uses_retained_settled_summary_after_unpin_removes_the_row() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let active = fixture.app.active.as_mut().unwrap();
+    let row = active.summary.as_mut().unwrap();
+    row.raw["inbox"]["settled"] = json!(true);
+    row.raw["inbox"]["navigationPinned"] = json!(false);
+    fixture.app.hosts[0]
+        .page
+        .threads
+        .retain(|row| row.id != "thread-review");
+    fixture.app.rebuild();
+    assert!(
+        fixture
+            .app
+            .threads
+            .iter()
+            .all(|row| row.id != "thread-review" || row.profile != 0)
+    );
+    let mut surface = crate::slt_ui::SurfaceState::default();
+    surface.focus = Some(Focus::Composer);
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("reviewed".into()),
+            &mut surface,
+        )
+        .unwrap();
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event,Background::Mutation{context,fields,..} if context.profile==0 && fields["threadId"]=="thread-review" && fields["action"]=="unsettle")
+    );
+}
