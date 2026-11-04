@@ -4,7 +4,7 @@ Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a5878
 and relevant later preserved UX behavior into the isolated SLT client. The
 active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
 v0.26.0, with maintained vendored patch `ordered-activation-v2`. The checked
-implementation head is `f51b06a`, with persistent navigation Pins and exact
+implementation head is `ee6098e`, with persistent navigation Pins and exact
 post-action metadata, retaining the `c0cee63` shutdown-lock correction and
 `529d9ec` submission/compact controls, `5941463` geometry/modal/provenance and
 `b58644d` search fixes. No installed
@@ -15,7 +15,7 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 | Formatting and whitespace | `cargo fmt --all --check`, standalone vendor fmt, `git diff --check` passed |
 | Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo clippy --locked -p superlighttui --lib -- -D warnings` passed |
 | Rust tests | `cargo test --locked --all-targets`: **145 tests** passed across the library, forms, protocol and SLT activation suites |
-| Adapter/scripts | `scripts/check.sh`: **253 Node + 5 Python** passed, including syntax/compile checks |
+| Adapter/scripts | `scripts/check.sh`: **254 Node + 5 Python** passed, including syntax/compile checks |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
 | Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **14 outcomes** passed |
@@ -24,8 +24,8 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
 The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
 a claim that a 1.92 toolchain was tested. The release is **8,933,104 bytes**;
-SHA-256 `18fced83d190925d1a780eeb3549993e1a24d42f876a67437daecbbc0e385f4a`
-at `f51b06a`.
+SHA-256 `a32ddd91df0ece7d7b68613f28fbbd040225d27ede1bb711d385a603c107412e`
+at `ee6098e`.
 No current performance or resource-saving comparison is claimed.
 
 The first hosted Ubuntu run failed two immediate state-reopen tests because a
@@ -127,6 +127,9 @@ Marker-only changes qualify the source revision even when `updatedAt` is stable.
 Pin discovery precedes pagination and includes settled sources and children.
 Writes are enabled only for the source-verified nightly `4179` tag contract;
 unknown releases retain reads. The source reuse record identifies that contract.
+The new client sends additive `navigation-pin` / `navigation-unpin` actions;
+older `pin` / `unpin` requests retain native shelf behavior. A shared-adapter
+regression verifies older clients cannot accidentally change the navigation tag.
 
 Acknowledged actions return a complete, exact-source row from one authoritative
 snapshot. The client replaces retained metadata without resetting search, scope,
