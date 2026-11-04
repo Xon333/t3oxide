@@ -515,9 +515,12 @@ impl App {
             self.renderer.update_transcript_layout(layout);
             self.hits.transcript.width = layout.width;
             self.transcript_scroll = layout.top;
-            self.follow = layout.top == layout.max;
-            if surface.transcript_jump.is_none() {
+            self.follow = layout.follow;
+            if surface.transcript_jump.is_none() && self.workspace.pending_jump.is_some() {
                 self.workspace.pending_jump = None;
+                if let Err(error) = self.save_reading_position() {
+                    self.error(error);
+                }
             }
         }
     }

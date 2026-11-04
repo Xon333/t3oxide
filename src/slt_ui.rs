@@ -510,7 +510,6 @@ fn draw_transcript(
         } else {
             view.transcript_scroll
         };
-        state.controller_scroll = Some((view.transcript_scroll, view.follow));
     }
     let group = format!("t3oxide.transcript:{}", state.active_key);
     let measured = ctx.measured_layout_rect(&group);
@@ -527,59 +526,84 @@ fn draw_transcript(
             })
             .collect()
     });
-    if let Some((key, revision, inner)) = &state.transcript_jump {
-        if let Some(message) = view.messages.iter().find(|message| {
-            &message.key == key && &reports::content_revision(&message.text) == revision
-        }) && let Some((_, offset, height)) = items
-            .as_ref()
-            .and_then(|items| items.iter().find(|(id, _, _)| id == &message.key))
-        {
-            state.transcript.offset = offset.saturating_add((*inner).min(height.saturating_sub(1)));
-            state.transcript_jump = None;
-            ctx.request_frame();
-        } else {
-            ctx.request_frame();
-        }
-    }
+    let jump = state
+        .transcript_jump
+        .as_ref()
+        .and_then(|(key, revision, inner)| {
+            let message = view.messages.iter().find(|message| {
+                &message.key == key && &reports::content_revision(&message.text) == revision
+            })?;
+            let (_, offset, height) = items
+                .as_ref()?
+                .iter()
+                .find(|(id, _, _)| id == &message.key)?;
+            Some(offset.saturating_add((*inner).min(height.saturating_sub(1))))
+        });
+    let mut jumped = false;
+    let before_binding = state.transcript.offset;
+    state.transcript.follow_focus = false;
+    state.transcript.stick_to_bottom = view.follow && state.transcript_jump.is_none();
     ctx.group(&group).grow(1).col(|ctx| {
-        ctx.scrollable(&mut state.transcript)
-            .grow(1)
-            .border(Border::Rounded)
-            .p(1)
-            .col(|ctx| {
-                for message in &view.messages {
-                    ctx.group(&transcript_message_group(message)).col(|ctx| {
-                        ctx.text(&message.role).bold().fg(if message.role == "You" {
-                            tailwind::CYAN.c300
-                        } else {
-                            tailwind::VIOLET.c300
-                        });
-                        state.reports.draw(
-                            ctx,
-                            &message.key,
-                            &reports::content_revision(&message.text),
-                            &message.text,
-                            geometry,
-                        );
-                        if message.truncated {
-                            ctx.text("Excerpt").dim();
-                        }
-                        if message.streaming {
-                            ctx.spinner(&state.spinner);
-                        }
+        let mut viewport = ctx.scrollable(&mut state.transcript);
+        // Bind first so SLT can accept deferred adjustments and fresh bounds.
+        // Then the explicit, source-qualified jump overrides that accepted offset.
+        if let Some(target) = jump
+            && state.transcript.viewport_height() > 0
+        {
+            state.transcript.offset = target.min(state.transcript.max_offset());
+            viewport = viewport.scroll_offset(state.transcript.offset as u32);
+            jumped = true;
+        }
+        viewport.grow(1).border(Border::Rounded).p(1).col(|ctx| {
+            for message in &view.messages {
+                ctx.group(&transcript_message_group(message)).col(|ctx| {
+                    ctx.text(&message.role).bold().fg(if message.role == "You" {
+                        tailwind::CYAN.c300
+                    } else {
+                        tailwind::VIOLET.c300
                     });
-                }
-            });
+                    state.reports.draw(
+                        ctx,
+                        &message.key,
+                        &reports::content_revision(&message.text),
+                        &message.text,
+                        geometry,
+                    );
+                    if message.truncated {
+                        ctx.text("Excerpt").dim();
+                    }
+                    if message.streaming {
+                        ctx.spinner(&state.spinner);
+                    }
+                });
+            }
+        });
     });
-    if let (Some(items), Some(rect)) = (items, measured) {
+    if let (Some(items), Some(rect)) = (items, measured)
+        && state.transcript.viewport_height() > 0
+    {
+        let top = state.transcript.offset;
+        let max = state.transcript.max_offset();
+        let follow = !jumped
+            && state.transcript_jump.is_none()
+            && top == max
+            && (view.follow || top > before_binding);
+        // Feedback describes accepted state, so the next controller frame does
+        // not rewrite SLT's pending adjustment with its previous input tuple.
+        state.controller_scroll = Some((top, follow));
         state.transcript_layout = Some(ui::TranscriptLayout {
             items,
-            top: state.transcript.offset,
+            top,
+            follow,
             content: state.transcript.content_height() as usize,
             visible: state.transcript.viewport_height() as usize,
-            max: state.transcript.max_offset(),
+            max,
             width: u16::try_from(rect.width.saturating_sub(4)).unwrap_or(u16::MAX),
         });
+        if jumped {
+            state.transcript_jump = None;
+            ctx.request_frame();
+        }
     } else {
         ctx.request_frame();
     }

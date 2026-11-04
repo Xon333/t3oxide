@@ -172,7 +172,6 @@ impl Cache {
                     } else {
                         self.expanded.remove(&identity);
                     }
-                    let mut draw_failed = false;
                     match rendered {
                         Ok(diagram) => {
                             let scroll = self.scroll.entry(identity.clone()).or_default();
@@ -181,28 +180,17 @@ impl Cache {
                                 .min(geometry.height.saturating_sub(2).clamp(3, 18));
                             let style = Style::new().fg(ctx.theme().text);
                             ctx.scrollable(scroll).h(visible_rows).col(|ctx| {
-                                let result = ctx
-                                    .container()
+                                // Normal text participates in SLT overlay order. Deferred
+                                // buffer copies run after modals and would overwrite them.
+                                ctx.container()
                                     .w(diagram.width)
                                     .h(diagram.height)
-                                    .draw_precomputed(
-                                        diagram.width,
-                                        diagram.height,
-                                        |buffer, rect| {
-                                            for (row, line) in diagram.lines.iter().enumerate() {
-                                                buffer.set_string(
-                                                    rect.x,
-                                                    rect.y + row as u32,
-                                                    line,
-                                                    style,
-                                                );
-                                            }
-                                        },
-                                    );
-                                if let Err(error) = result {
-                                    draw_failed = true;
-                                    ctx.text(format!("Flowchart unavailable: {error}")).wrap();
-                                }
+                                    .gap(0)
+                                    .col(|ctx| {
+                                        for line in &diagram.lines {
+                                            ctx.styled(line, style).w(diagram.width).h(1);
+                                        }
+                                    });
                             });
                         }
                         Err(reason) => {
@@ -211,7 +199,7 @@ impl Cache {
                                 .wrap();
                         }
                     }
-                    if expanded || rendered.is_err() || draw_failed {
+                    if expanded || rendered.is_err() {
                         ctx.text(format!("{source} @ {revision} · fence {offset}"))
                             .dim()
                             .wrap();
@@ -547,6 +535,39 @@ mod tests {
         });
         backend.assert_contains("env/thread/item @ native-revision");
         backend.assert_contains("flowchart TD");
+    }
+
+    #[test]
+    fn flowchart_respects_opaque_modal_painting_and_dismissal() {
+        let mut cache = Cache::default();
+        let mut backend = TestBackend::new(100, 45);
+        for modal in [false, true, false] {
+            for _ in 0..2 {
+                backend.render(|ctx| {
+                    cache.draw(ctx, "source", "revision", FLOWCHART, GEOMETRY);
+                    if modal {
+                        ctx.modal(|ctx| {
+                            ctx.container()
+                                .w(100)
+                                .h(45)
+                                .bg(slt::Color::Blue)
+                                .col(|ctx| {
+                                    ctx.text("Opaque modal");
+                                });
+                        });
+                    }
+                });
+            }
+            if modal {
+                backend.assert_contains("Opaque modal");
+                backend.assert_not_contains("Complete source revision label");
+                backend.assert_not_contains("日本語 🦀 ready");
+                backend.assert_style_at(20, 10, Style::new().bg(slt::Color::Blue));
+            } else {
+                backend.assert_contains("Complete source revision label");
+                backend.assert_contains("日本語 🦀 ready");
+            }
+        }
     }
 
     #[test]

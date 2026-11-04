@@ -162,7 +162,22 @@ impl State {
                 );
             }
             if observed.len() > MAX_THREAD_READS {
-                observed.drain(..observed.len() - MAX_THREAD_READS);
+                let expired: Vec<_> = observed
+                    .drain(..observed.len() - MAX_THREAD_READS)
+                    .collect();
+                // Losing a newer observation must not revive an older read marker.
+                // Expire both compatibility marker sets in this same transaction.
+                for field in ["threadReads", "completionReads"] {
+                    saved[field]
+                        .as_array_mut()
+                        .context("invalid thread read markers")?
+                        .retain(|read| {
+                            !expired.iter().any(|event| {
+                                read["environmentId"] == event["environmentId"]
+                                    && read["threadId"] == event["threadId"]
+                            })
+                        });
+                }
             }
             Ok(())
         })
@@ -1530,6 +1545,40 @@ mod tests {
         assert_eq!(state.snapshot()["threadReads"][1]["generation"], next);
         assert!(state.pending_records().is_empty());
     }
+    #[test]
+    fn activity_eviction_expires_stale_read_markers_atomically_across_restart() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("state.json");
+        let state = State::open(&path).unwrap();
+        let first = "a".repeat(64);
+        let next = "b".repeat(64);
+        state
+            .mark_thread_read("env", "thread", Some(&first))
+            .unwrap();
+        state.save_completion_read("env", "thread", &first).unwrap();
+        state
+            .mark_thread_read("other-env", "thread", Some(&first))
+            .unwrap();
+        state
+            .observe_thread_activity("env", &[("thread".into(), next)])
+            .unwrap();
+        for start in (0..MAX_THREAD_READS).step_by(200) {
+            let page: Vec<_> = (start..(start + 200).min(MAX_THREAD_READS))
+                .map(|index| (format!("thread-{index}"), first.clone()))
+                .collect();
+            state.observe_thread_activity("env", &page).unwrap();
+        }
+        assert!(state.is_thread_unread("env", "thread", None));
+        assert!(!state.completion_read("env", "thread", &first));
+        assert!(!state.is_thread_unread("other-env", "thread", None));
+        drop(state);
+        let state = State::open(&path).unwrap();
+        assert!(state.is_thread_unread("env", "thread", None));
+        assert!(!state.is_thread_unread("other-env", "thread", None));
+        state.mark_thread_read("env", "thread", None).unwrap();
+        assert!(!state.is_thread_unread("env", "thread", None));
+    }
+
     #[test]
     fn ack_atomically_preserves_newer_same_byte_draft_and_newer_override() {
         let directory = temp();

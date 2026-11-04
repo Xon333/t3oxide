@@ -282,54 +282,73 @@ impl ProjectGraph {
         let pointer = ctx.mouse_down();
         let selection = self.selected.as_ref();
         let muted = ctx.theme().text_dim;
-        let mut draw_result = Ok(());
-        let response = ctx.container().w(width).h(height).col(|ctx| {
-            draw_result =
-                ctx.container()
-                    .w(width)
-                    .h(height)
-                    .draw_precomputed(width, height, |buffer, _| {
-                        for (y, row) in canvas
-                            .ink
-                            .iter()
-                            .enumerate()
-                            .skip(top)
-                            .take(height as usize)
-                        {
-                            for (x, ch) in row.iter().enumerate().skip(left).take(width as usize) {
-                                let style = canvas
-                                    .owners
-                                    .get(y * canvas.width + x)
-                                    .and_then(|owner| nodes.get(*owner))
-                                    .map_or(Style::new().fg(muted), |node| {
-                                        node_style(node, selection, focused)
-                                    });
-                                buffer.set_char((x - left) as u32, (y - top) as u32, *ch, style);
-                            }
-                        }
-                        for (index, node) in nodes.iter().enumerate() {
-                            let bounds = canvas.bounds[index];
-                            let y = bounds.y as usize + 1;
-                            if y < top || y >= top + height as usize {
+        let mut buffer = slt::Buffer::empty(Rect::new(0, 0, width, height));
+        for (y, row) in canvas
+            .ink
+            .iter()
+            .enumerate()
+            .skip(top)
+            .take(height as usize)
+        {
+            for (x, ch) in row.iter().enumerate().skip(left).take(width as usize) {
+                let style = canvas
+                    .owners
+                    .get(y * canvas.width + x)
+                    .and_then(|owner| nodes.get(*owner))
+                    .map_or(Style::new().fg(muted), |node| {
+                        node_style(node, selection, focused)
+                    });
+                buffer.set_char((x - left) as u32, (y - top) as u32, *ch, style);
+            }
+        }
+        for (index, node) in nodes.iter().enumerate() {
+            let bounds = canvas.bounds[index];
+            let y = bounds.y as usize + 1;
+            if y < top || y >= top + height as usize {
+                continue;
+            }
+            let mut x = bounds.x as usize + 2;
+            for grapheme in canvas.labels[index].graphemes(true) {
+                let columns = grapheme.width();
+                if x >= left && x + columns <= left + width as usize {
+                    buffer.set_string(
+                        (x - left) as u32,
+                        (y - top) as u32,
+                        grapheme,
+                        node_style(node, selection, focused),
+                    );
+                }
+                x += columns;
+            }
+        }
+        let response = ctx
+            .container()
+            .w(width)
+            .h(height)
+            .gap(0)
+            .bubble_clicks()
+            .col(|ctx| {
+                for y in 0..height {
+                    ctx.container().w(width).h(1).line(|ctx| {
+                        let mut run = String::new();
+                        let mut style = buffer.get(0, y).style;
+                        for x in 0..width {
+                            let cell = buffer.get(x, y);
+                            if cell.is_continuation() {
                                 continue;
                             }
-                            let mut x = bounds.x as usize + 2;
-                            for grapheme in canvas.labels[index].graphemes(true) {
-                                let columns = grapheme.width();
-                                if x >= left && x + columns <= left + width as usize {
-                                    buffer.set_string(
-                                        (x - left) as u32,
-                                        (y - top) as u32,
-                                        grapheme,
-                                        node_style(node, selection, focused),
-                                    );
-                                }
-                                x += columns;
+                            if cell.style != style {
+                                ctx.styled(std::mem::take(&mut run), style);
+                                style = cell.style;
                             }
+                            run.push_str(&cell.symbol);
+                        }
+                        if !run.is_empty() {
+                            ctx.styled(run, style);
                         }
                     });
-        });
-        draw_result?;
+                }
+            });
         // Both the hit rectangle and canvas are the ones actually displayed on
         // the previous frame. Reordering cannot retarget a click by position.
         if response.clicked
@@ -459,6 +478,39 @@ mod tests {
         let canvas = graph.canvas.as_ref().unwrap();
         let label_width = canvas.labels[0].width();
         assert_eq!(canvas.bounds[0].width as usize, label_width + 4);
+    }
+
+    #[test]
+    fn graph_respects_opaque_modal_and_retains_selected_wide_label_style() {
+        let nodes = [node("environment-a", "project-a", "日本語 🚀")];
+        let mut graph = ProjectGraph::default();
+        let mut backend = TestBackend::new(32, 14);
+        for modal in [false, true, false] {
+            for _ in 0..2 {
+                backend.render(|ctx| {
+                    graph.draw(ctx, &nodes, &[], None, 32, 14).unwrap();
+                    if modal {
+                        ctx.modal(|ctx| {
+                            ctx.container().w(32).h(14).bg(Color::Blue).col(|ctx| {
+                                ctx.text("Opaque modal");
+                            });
+                        });
+                    }
+                });
+            }
+            if modal {
+                backend.assert_contains("Opaque modal");
+                backend.assert_not_contains("日本語 🚀");
+            } else {
+                backend.assert_contains("日本語 🚀");
+                let (x, y) = backend.find_text("日").unwrap();
+                for x in x..x + 2 {
+                    let cell = backend.buffer().get(x, y);
+                    assert_eq!(cell.style.bg, Some(slt::palette::tailwind::SLATE.c800));
+                    assert_eq!(cell.style.fg, Some(nodes[0].color));
+                }
+            }
+        }
     }
 
     #[test]

@@ -1269,39 +1269,169 @@ fn returning_slt_focus_to_prompt_settles_displayed_source_without_editing() {
 
 #[test]
 fn loaded_navigation_and_restore_read_active_slt_layout() {
-    let mut fixture = Fixture::new(0);
-    fixture.load_pages();
-    fixture.open_thread(0, "thread-review");
-    let mut backend = ::slt::TestBackend::new(110, 38);
-    let mut surface = crate::slt_ui::SurfaceState::new();
-    let render = |app: &mut App,
-                  backend: &mut ::slt::TestBackend,
-                  surface: &mut crate::slt_ui::SurfaceState| {
-        app.populate_surface(surface);
-        let view = app.view();
-        backend.render(|ctx| {
-            crate::slt_ui::draw(
-                ctx,
-                &view,
-                &mut app.composer,
-                &mut app.modal_editor,
-                None,
-                surface,
-            );
+    for find in [false, true] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open_thread(0, "thread-review");
+        let mut snapshot = fixture
+            .app
+            .active
+            .as_ref()
+            .unwrap()
+            .projection
+            .snapshot()
+            .unwrap()
+            .as_wire_value();
+        snapshot["revision"] = json!(snapshot["revision"].as_u64().unwrap() + 100);
+        snapshot["items"][1]["text"] = json!(
+            (0..60)
+                .map(|index| format!("Long source paragraph {index}.\n\n"))
+                .collect::<String>()
+        );
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot.clone(), "thread-review")
+            .unwrap();
+        let mut backend = ::slt::TestBackend::new(110, 38).with_run_config(
+            ::slt::RunConfig::default()
+                .activation_boundaries(true)
+                .idle_redraw(false),
+        );
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        for _ in 0..4 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        assert!(fixture.app.follow);
+        assert!(fixture.app.transcript_scroll > 0);
+        if find {
+            fixture
+                .app
+                .command("find Inspect Finished refactor")
+                .unwrap();
+            fixture.app.command("find-next").unwrap();
+        } else {
+            fixture.app.command("loaded-jump 1").unwrap();
+        }
+        for _ in 0..4 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+            if fixture.app.workspace.pending_jump.is_none() {
+                break;
+            }
+        }
+        assert!(
+            fixture.app.workspace.pending_jump.is_none(),
+            "valid layout accepted the jump"
+        );
+        assert!(
+            !fixture.app.follow,
+            "accepted jump preserves navigation intent"
+        );
+        backend.assert_contains("Inspect Finished refactor.");
+        let identity = json!(["profile-0", "native-0", "thread-review"]).to_string();
+        let saved = fixture.app.state.snapshot()["rustReadingPositions"][&identity].clone();
+        assert_eq!(
+            saved["follow"], false,
+            "persist accepted position before another action"
+        );
+        assert_eq!(saved["offset"], 0);
+        assert!(
+            saved["digest"]
+                .as_str()
+                .is_some_and(|digest| digest.len() == 64)
+        );
+        fixture.open_thread(0, "thread-fork");
+        let returned = &fixture.app.return_positions["0\0thread-review"];
+        assert_eq!((returned.0, returned.1), (0, false));
+        for _ in 0..3 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        fixture.open_thread(0, "thread-review");
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot, "thread-review")
+            .unwrap();
+        for _ in 0..4 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        backend.assert_contains("Inspect Finished refactor.");
+        assert_eq!(fixture.app.transcript_scroll, 0);
+        assert!(!fixture.app.follow);
+        assert_eq!(
+            fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+            saved
+        );
+        fixture.app.command("loaded-jump 1").unwrap();
+        backend.run_with_events(::slt::EventBuilder::new().resize(86, 31).build(), |ctx| {
+            fixture.draw_slt(ctx, &mut surface);
         });
-        app.observe_slt_layout(surface);
-    };
-    for _ in 0..3 {
-        render(&mut fixture.app, &mut backend, &mut surface);
+        assert!(
+            fixture.app.workspace.pending_jump.is_some(),
+            "resize waits for valid geometry"
+        );
+        for _ in 0..3 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        assert!(fixture.app.workspace.pending_jump.is_none());
+        assert!(!fixture.app.follow);
+        backend.assert_contains("Inspect Finished refactor.");
+        let position = fixture.app.state.snapshot()["rustReadingPositions"][&identity].clone();
+        for _ in 0..3 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        assert_eq!(
+            fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+            position,
+            "idle frames do not change the anchor"
+        );
+        fixture.app.follow = true;
+        for _ in 0..3 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        let old_bottom = fixture.app.transcript_scroll;
+        let mut growth = fixture
+            .app
+            .active
+            .as_ref()
+            .unwrap()
+            .projection
+            .snapshot()
+            .unwrap()
+            .as_wire_value();
+        growth["revision"] = json!(growth["revision"].as_u64().unwrap() + 1);
+        let text = format!(
+            "{}{}",
+            growth["items"][1]["text"].as_str().unwrap(),
+            "New streamed paragraph.\n\n".repeat(10)
+        );
+        growth["items"][1]["text"] = json!(text);
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(growth, "thread-review")
+            .unwrap();
+        for _ in 0..4 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+        }
+        assert!(fixture.app.follow);
+        assert!(
+            fixture.app.transcript_scroll > old_bottom,
+            "following tail tracks new content"
+        );
+        let (x, y) = backend.find_text("New streamed paragraph.").unwrap();
+        backend.run_with_events(::slt::EventBuilder::new().scroll_up(x, y).build(), |ctx| {
+            fixture.draw_slt(ctx, &mut surface);
+        });
+        assert!(!fixture.app.follow, "manual scrolling leaves the tail");
     }
-    fixture.app.command("find Ready for review").unwrap();
-    fixture.app.command("find-next").unwrap();
-    assert!(fixture.app.workspace.pending_jump.is_some());
-    render(&mut fixture.app, &mut backend, &mut surface);
-    assert!(
-        fixture.app.workspace.pending_jump.is_none(),
-        "the actual SLT layout consumed the source-qualified jump"
-    );
-    fixture.app.save_reading_position().unwrap();
-    assert!(fixture.app.state.snapshot()["rustReadingPositions"].is_object());
 }

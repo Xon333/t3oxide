@@ -218,6 +218,7 @@ const MAX_MEASUREMENTS: usize = 4096;
 pub(crate) struct TranscriptLayout {
     pub items: Vec<(String, usize, usize)>,
     pub top: usize,
+    pub follow: bool,
     pub content: usize,
     pub visible: usize,
     pub max: usize,
