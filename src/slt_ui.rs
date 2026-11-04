@@ -49,6 +49,7 @@ pub struct AttentionItem {
     pub supporting_markdown: String,
     pub supporting_source_key: String,
     pub supporting_revision: String,
+    pub supporting_truncated: bool,
     pub request: Value,
 }
 
@@ -101,6 +102,9 @@ pub struct SurfaceState {
     navigator_keys: Vec<String>,
     navigator_selection: usize,
     transcript: ScrollState,
+    pub(crate) transcript_layout: Option<ui::TranscriptLayout>,
+    pub(crate) transcript_jump: Option<(String, String, usize)>,
+    controller_scroll: Option<(usize, bool)>,
     attention_scroll: ScrollState,
     support_scroll: ScrollState,
     project_graph: project_graph::ProjectGraph,
@@ -136,6 +140,7 @@ pub fn draw(
     state: &mut SurfaceState,
 ) -> Vec<Action> {
     let mut actions = Vec::new();
+    state.transcript_layout = None;
     if state.composer_key != state.active_key {
         if !state.composer_key.is_empty() {
             state.tab_editors.insert(
@@ -149,6 +154,7 @@ pub fn draw(
             .unwrap_or_default();
         state.composer_key = state.active_key.clone();
         state.transcript = ScrollState::new().stick_to_bottom(true);
+        state.controller_scroll = None;
         state.command_escape = None;
         state.command_open = false;
         ctx.focus_by_name("composer");
@@ -475,34 +481,93 @@ fn draw_transcript(
             actions.push(Action::CopyId);
         }
     });
-    ctx.scrollable(&mut state.transcript)
-        .grow(1)
-        .border(Border::Rounded)
-        .p(1)
-        .col(|ctx| {
-            for message in &view.messages {
-                ctx.group(&message.key).col(|ctx| {
-                    ctx.text(&message.role).bold().fg(if message.role == "You" {
-                        tailwind::CYAN.c300
-                    } else {
-                        tailwind::VIOLET.c300
+    if state.controller_scroll != Some((view.transcript_scroll, view.follow)) {
+        state.transcript.offset = if view.follow {
+            usize::MAX
+        } else {
+            view.transcript_scroll
+        };
+        state.controller_scroll = Some((view.transcript_scroll, view.follow));
+    }
+    let group = format!("t3oxide.transcript:{}", state.active_key);
+    let measured = ctx.measured_layout_rect(&group);
+    let items: Option<Vec<_>> = measured.and_then(|viewport| {
+        view.messages
+            .iter()
+            .map(|message| {
+                let rect = ctx.measured_layout_rect(&transcript_message_group(message))?;
+                Some((
+                    message.key.clone(),
+                    rect.y.saturating_sub(viewport.y + 2) as usize,
+                    rect.height as usize,
+                ))
+            })
+            .collect()
+    });
+    if let Some((key, revision, inner)) = &state.transcript_jump {
+        if let Some(message) = view.messages.iter().find(|message| {
+            &message.key == key && &reports::content_revision(&message.text) == revision
+        }) && let Some((_, offset, height)) = items
+            .as_ref()
+            .and_then(|items| items.iter().find(|(id, _, _)| id == &message.key))
+        {
+            state.transcript.offset = offset.saturating_add((*inner).min(height.saturating_sub(1)));
+            state.transcript_jump = None;
+            ctx.request_frame();
+        } else {
+            ctx.request_frame();
+        }
+    }
+    ctx.group(&group).grow(1).col(|ctx| {
+        ctx.scrollable(&mut state.transcript)
+            .grow(1)
+            .border(Border::Rounded)
+            .p(1)
+            .col(|ctx| {
+                for message in &view.messages {
+                    ctx.group(&transcript_message_group(message)).col(|ctx| {
+                        ctx.text(&message.role).bold().fg(if message.role == "You" {
+                            tailwind::CYAN.c300
+                        } else {
+                            tailwind::VIOLET.c300
+                        });
+                        state.reports.draw(
+                            ctx,
+                            &message.key,
+                            &reports::content_revision(&message.text),
+                            &message.text,
+                            geometry,
+                        );
+                        if message.truncated {
+                            ctx.text("Excerpt").dim();
+                        }
+                        if message.streaming {
+                            ctx.spinner(&state.spinner);
+                        }
                     });
-                    state.reports.draw(
-                        ctx,
-                        &message.key,
-                        &reports::content_revision(&message.text),
-                        &message.text,
-                        geometry,
-                    );
-                    if message.truncated {
-                        ctx.text("Excerpt").dim();
-                    }
-                    if message.streaming {
-                        ctx.spinner(&state.spinner);
-                    }
-                });
-            }
+                }
+            });
+    });
+    if let (Some(items), Some(rect)) = (items, measured) {
+        state.transcript_layout = Some(ui::TranscriptLayout {
+            items,
+            top: state.transcript.offset,
+            content: state.transcript.content_height() as usize,
+            visible: state.transcript.viewport_height() as usize,
+            max: state.transcript.max_offset(),
+            width: u16::try_from(rect.width.saturating_sub(4)).unwrap_or(u16::MAX),
         });
+    } else {
+        ctx.request_frame();
+    }
+}
+
+fn transcript_message_group(message: &ui::MessageView) -> String {
+    format!(
+        "t3oxide.message:{}:{}",
+        message.key,
+        reports::content_revision(&message.text)
+    )
 }
 
 fn draw_composer(
@@ -816,6 +881,9 @@ fn draw_attention(
                         .grow(1)
                         .title("Supporting content")
                         .col(|ctx| {
+                            if question.supporting_truncated {
+                                ctx.text("Excerpt").dim();
+                            }
                             state.reports.draw(
                                 ctx,
                                 &question.supporting_source_key,
@@ -883,66 +951,80 @@ fn draw_modal(
     ctx.modal(|ctx| {
         let width = ctx.width().saturating_sub(8).clamp(30, 90);
         let height = ctx.height().saturating_sub(4);
-        ctx.container().w(width).max_h(height).p(1).col(|ctx| {
-            ctx.row(|ctx| {
-                ctx.text(&modal.title).bold().grow(1);
-                if ctx.button("×").clicked && !layout_changed {
-                    actions.push(Action::CloseModal);
-                }
-            });
-            if !modal.description.is_empty() {
-                ctx.text(&modal.description).wrap();
-            }
-            if modal.editor {
-                let focused = ctx.register_focusable_named("modal-editor");
-                palette_keys(ctx, focused, palette, modal, state, actions);
-                if ctx
-                    .disabled(layout_changed && !palette, |ctx| {
-                        ctx.textarea(&mut state.modal_editor, 3)
-                    })
-                    .changed
-                {
-                    *legacy = ui::editor(&state.modal_editor.value(), "violet", "Type here…");
-                    actions.push(Action::ModalEditChanged);
-                }
-                if ctx
-                    .button("Continue")
-                    .variant(ButtonVariant::Primary)
-                    .clicked
-                    && !layout_changed
-                {
-                    actions.push(Action::ModalSubmit);
-                }
-            }
-            let detail_height = ctx.height().saturating_sub(13).max(3);
-            ctx.scrollable(&mut state.modal_scroll)
-                .max_h(detail_height)
-                .col(|ctx| {
-                    if !modal.detail.is_empty() {
-                        ctx.markdown(&modal.detail);
-                    }
-                    for (index, item) in modal.items.iter().enumerate() {
-                        let variant = if item.checked || palette && index == state.modal_selected {
-                            ButtonVariant::Primary
-                        } else {
-                            ButtonVariant::Default
-                        };
-                        ctx.register_focusable_named(&format!(
-                            "modal-choice:{}:{index}",
-                            modal.action_stamp
-                        ));
-                        if ctx.button(&item.label).variant(variant).clicked && !layout_changed {
-                            actions.push(Action::ModalChoice(index));
-                        }
-                        if !item.description.is_empty() {
-                            ctx.text(&item.description).dim().wrap();
-                        }
+        let background = ctx.theme().bg;
+        ctx.group("t3oxide.modal")
+            .bg(background)
+            .w(width)
+            .max_h(height)
+            .p(1)
+            .col(|ctx| {
+                ctx.row(|ctx| {
+                    ctx.text(&modal.title).bold().grow(1);
+                    if ctx.button("×").clicked && !layout_changed {
+                        actions.push(Action::CloseModal);
                     }
                 });
-            if !modal.footer.is_empty() {
-                ctx.text(&modal.footer).dim().wrap();
-            }
-        });
+                if !modal.description.is_empty() {
+                    ctx.text(&modal.description).wrap();
+                }
+                if modal.editor {
+                    let focused = ctx.register_focusable_named("modal-editor");
+                    palette_keys(
+                        ctx,
+                        focused && (!layout_changed || palette),
+                        palette,
+                        modal,
+                        state,
+                        actions,
+                    );
+                    if ctx
+                        .disabled(layout_changed && !palette, |ctx| {
+                            ctx.textarea(&mut state.modal_editor, 3)
+                        })
+                        .changed
+                    {
+                        *legacy = ui::editor(&state.modal_editor.value(), "violet", "Type here…");
+                        actions.push(Action::ModalEditChanged);
+                    }
+                    if ctx
+                        .button("Continue")
+                        .variant(ButtonVariant::Primary)
+                        .clicked
+                        && !layout_changed
+                    {
+                        actions.push(Action::ModalSubmit);
+                    }
+                }
+                let detail_height = ctx.height().saturating_sub(13).max(3);
+                ctx.scrollable(&mut state.modal_scroll)
+                    .max_h(detail_height)
+                    .col(|ctx| {
+                        if !modal.detail.is_empty() {
+                            ctx.markdown(&modal.detail);
+                        }
+                        for (index, item) in modal.items.iter().enumerate() {
+                            let variant =
+                                if item.checked || palette && index == state.modal_selected {
+                                    ButtonVariant::Primary
+                                } else {
+                                    ButtonVariant::Default
+                                };
+                            ctx.register_focusable_named(&format!(
+                                "modal-choice:{}:{index}",
+                                modal.action_stamp
+                            ));
+                            if ctx.button(&item.label).variant(variant).clicked && !layout_changed {
+                                actions.push(Action::ModalChoice(index));
+                            }
+                            if !item.description.is_empty() {
+                                ctx.text(&item.description).dim().wrap();
+                            }
+                        }
+                    });
+                if !modal.footer.is_empty() {
+                    ctx.text(&modal.footer).dim().wrap();
+                }
+            });
     });
     if state.modal_stamp != Some(modal.action_stamp) {
         state.modal_stamp = Some(modal.action_stamp);
@@ -1023,6 +1105,17 @@ fn palette_keys(
     state: &mut SurfaceState,
     actions: &mut Vec<Action>,
 ) {
+    if focused && !palette {
+        let submit: Vec<_> = ctx
+            .key_presses_when(true)
+            .filter(|(_, key)| send_key(&key.code, key.modifiers))
+            .map(|(index, _)| index)
+            .collect();
+        for index in submit {
+            ctx.consume_event(index);
+            actions.push(Action::ModalSubmit);
+        }
+    }
     if palette && focused {
         let mut consumed = Vec::new();
         for (index, key) in ctx.key_presses_when(focused) {
@@ -1156,6 +1249,172 @@ fn identity_color(identity: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_qualified_jump_uses_full_slt_measurements_after_layout_and_resize() {
+        let mut backend = slt::TestBackend::new(110, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/thread".into();
+        let mut view = ui::View {
+            follow: true,
+            ..ui::View::default()
+        };
+        view.messages = (0..12)
+            .map(|index| ui::MessageView {
+                key: format!("env/thread/generation/item-{index}"),
+                text: format!("Message {index}\n\n{}", "Paragraph\n\n".repeat(6)),
+                ..ui::MessageView::default()
+            })
+            .collect();
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        let layout = state.transcript_layout.as_ref().unwrap();
+        assert_eq!(
+            layout.items.len(),
+            12,
+            "offscreen messages retain full measurements"
+        );
+        assert!(layout.max > 0);
+        let expected = layout.items[5].1;
+        assert!(expected > 0 && expected < layout.max);
+        view.follow = false;
+        let target = &view.messages[5];
+        state.transcript_jump = Some((
+            target.key.clone(),
+            reports::content_revision(&target.text),
+            0,
+        ));
+        backend.render(|ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        assert!(state.transcript_jump.is_none());
+        assert_eq!(state.transcript_layout.as_ref().unwrap().top, expected);
+        backend.assert_contains("Message 5");
+        view.transcript_scroll = expected;
+        state.transcript_jump = Some((
+            target.key.clone(),
+            reports::content_revision(&target.text),
+            1,
+        ));
+        backend.run_with_events(slt::EventBuilder::new().resize(110, 38).build(), |ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        assert!(
+            state.transcript_jump.is_some(),
+            "resize invalidates previous geometry without discarding the jump"
+        );
+        backend.render(|ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        assert!(state.transcript_jump.is_none());
+        assert_eq!(state.transcript_layout.as_ref().unwrap().top, expected + 1);
+    }
+
+    #[test]
+    fn modal_save_chord_submits_only_the_focused_settled_editor() {
+        let mut backend = slt::TestBackend::new(110, 38);
+        let mut state = SurfaceState::new();
+        let view = ui::View::default();
+        let modal = ui::Modal {
+            title: "Find in loaded messages".into(),
+            editor: true,
+            action_stamp: 1,
+            ..ui::Modal::default()
+        };
+        let mut editor = ui::editor("draft", "violet", "");
+        let mut modal_editor = ui::editor("match", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+            });
+        }
+        let mut actions = Vec::new();
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .key_with(KeyCode::Char(']'), KeyModifiers::CONTROL)
+                .build(),
+            |ctx| {
+                actions = draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+            },
+        );
+        assert_eq!(modal_editor.lines().join("\n"), "match");
+        assert_eq!(editor.lines().join("\n"), "draft");
+        assert_eq!(
+            actions
+                .iter()
+                .filter(|action| matches!(action, Action::ModalSubmit))
+                .count(),
+            1
+        );
+        assert!(actions.iter().all(|action| !matches!(action, Action::Send)));
+    }
+
+    #[test]
+    fn modal_clears_underlying_transcript_in_its_entire_rectangle() {
+        let mut backend = slt::TestBackend::new(110, 38);
+        let mut state = SurfaceState::new();
+        let view = ui::View {
+            messages: vec![ui::MessageView {
+                key: "underlay".into(),
+                text: (0..40)
+                    .map(|_| "▒".repeat(90))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ..ui::MessageView::default()
+            }],
+            ..ui::View::default()
+        };
+        let modal = ui::Modal {
+            title: "Opaque modal".into(),
+            detail: "Visible controls".into(),
+            ..ui::Modal::default()
+        };
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        let mut rect = None;
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+                rect = ctx.measured_layout_rect("t3oxide.modal");
+            });
+        }
+        let rect = rect.expect("modal has settled geometry");
+        for y in rect.y..rect.y + rect.height {
+            for x in rect.x..rect.x + rect.width {
+                assert_ne!(
+                    backend.buffer().get(x, y).symbol.as_str(),
+                    "▒",
+                    "underlay at {x},{y}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn graph_mouse_navigation_retains_content_and_exact_source() {
@@ -1315,6 +1574,7 @@ mod tests {
             supporting_markdown: "Retained native evidence".into(),
             supporting_source_key: "env/thread/item".into(),
             supporting_revision: "item-revision".into(),
+            supporting_truncated: true,
             request: serde_json::json!({"id":"request", "question":"Original question wording"}),
         };
         let mut state = SurfaceState::new();
@@ -1347,6 +1607,7 @@ mod tests {
         backend.assert_contains("Source changed");
         backend.assert_contains("Original question wording");
         backend.assert_contains("Retained native evidence");
+        backend.assert_contains("Excerpt");
         let (x, y) = backend
             .find_text("Answer")
             .expect("disabled answer stays visible");

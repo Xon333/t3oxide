@@ -108,11 +108,13 @@ impl Thread {
     }
     pub fn working(&self) -> bool {
         !self.attention()
-            && (matches!(
-                self.status.as_str(),
-                "preparing" | "queued" | "starting" | "running"
-            ) || self.status == "waiting"
-                && self.inbox()["activeRunId"].as_str().is_some_and(valid_id))
+            && self.inbox()["working"].as_bool().unwrap_or_else(|| {
+                matches!(
+                    self.status.as_str(),
+                    "preparing" | "queued" | "starting" | "running"
+                ) || self.status == "waiting"
+                    && self.inbox()["activeRunId"].as_str().is_some_and(valid_id)
+            })
     }
     pub fn attention(&self) -> bool {
         self.inbox()["pendingRequestCount"].as_u64().unwrap_or(0) > 0
@@ -806,7 +808,19 @@ mod tests {
         Thread::parse(profile,json!({"id":id,"title":id,"lineage":{"parentThreadId":parent,"relationshipToParent":parent.map(|_|"subagent")},"inbox":{"settled":false}})).unwrap()
     }
     #[test]
-    fn running_requires_native_execution_not_stale_inbox_or_ambiguous_waiting() {
+    fn running_honors_native_background_work_and_older_adapter_fallback() {
+        for status in ["completed", "waiting"] {
+            let row = Thread::parse(
+                0,
+                json!({"id":"background","status":status,"inbox":{"working":true}}),
+            )
+            .unwrap();
+            assert!(row.running(), "native background work: {status}");
+            assert!(
+                !row.matches_lane("Open"),
+                "background work is not Completed"
+            );
+        }
         for status in [
             "completed",
             "stopped",
@@ -817,13 +831,17 @@ mod tests {
         ] {
             let row = Thread::parse(
                 0,
-                json!({"id":"exact","status":status,"inbox":{"working":true,"runId":"old-run"}}),
+                json!({"id":"exact","status":status,"inbox":{"working":false,"runId":"old-run"}}),
             )
             .unwrap();
             assert!(!row.working(), "{status}");
         }
         for status in ["preparing", "queued", "starting", "running", "waiting"] {
-            let mut row = Thread::parse(0, json!({"id":"exact","status":status,"inbox":{"working":false,"activeRunId":"active-run"}})).unwrap();
+            let mut row = Thread::parse(
+                0,
+                json!({"id":"exact","status":status,"inbox":{"activeRunId":"active-run"}}),
+            )
+            .unwrap();
             assert!(row.working(), "{status}");
             row.raw["inbox"]["pendingRequestCount"] = json!(1);
             assert!(!row.working() && row.attention());

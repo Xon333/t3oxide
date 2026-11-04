@@ -235,14 +235,14 @@ fn settle_aliases_dispatch_exact_native_revision_and_refresh_visibility() {
 fn unread_and_completed_use_durable_source_generations_and_independent_running_state() {
     let mut fixture = Fixture::new(0);
     let rows = [
-        ("fresh", "completed", true, false, false),
-        ("read", "completed", true, false, true),
-        ("idle", "idle", true, false, false),
-        ("stopped", "interrupted", true, false, false),
+        ("fresh", "completed", false, false, false),
+        ("read", "completed", false, false, true),
+        ("idle", "idle", false, false, false),
+        ("stopped", "interrupted", false, false, false),
         ("request", "waiting", true, true, false),
         ("failed", "failed", true, false, false),
-        ("running", "running", false, false, false),
-        ("waiting", "waiting", true, false, false),
+        ("running", "running", true, false, false),
+        ("waiting", "waiting", false, false, false),
         ("review", "completed", false, false, false),
     ];
     fixture.app.hosts[0].page.threads = rows.into_iter().map(|(id, status, working, request, pinned)| {
@@ -1028,10 +1028,17 @@ fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
         0
     );
     drop(store);
+    fixture
+        .app
+        .context_action(context::Action::Source(pack.rows[0].id.clone()))
+        .unwrap();
+    let detail = &fixture.app.dialog.as_ref().unwrap().detail;
+    assert!(detail.contains("native-0") && detail.contains("project-a"));
+    assert!(detail.contains("capturedItemOnly") && detail.contains("historical"));
     fixture.open_thread(0, "thread-review");
     fixture.app.replace_text("Unsent exact draft 日本語".into());
     fixture.app.flush_draft().unwrap();
-    let pending = json!({"id":"original-context-operation","environmentId":"native-0","threadId":"thread-review","op":"send","message":"Original unsent operation"});
+    let pending = json!({"id":"original-context-operation","environmentId":"native-0","threadId":"thread-review","op":"answer","requestId":"original-request","revision":"original-request-revision","answers":{"field":"value"}});
     fixture
         .app
         .state
@@ -1040,6 +1047,8 @@ fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
     fixture.app.command("resume").unwrap();
     let dialog = fixture.app.dialog.as_ref().unwrap();
     assert!(dialog.detail.contains("original-context-operation"));
+    assert!(dialog.detail.contains("original-request-revision"));
+    assert!(dialog.detail.contains("original-request"));
     assert!(dialog.detail.contains("Unsent exact draft 日本語"));
     assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
     assert_eq!(fixture.app.text(), "Unsent exact draft 日本語");
@@ -1085,4 +1094,43 @@ fn source_inventory_keeps_empty_projects_and_rejects_malformed_replacement_atomi
             .error
             .contains("duplicate native project identity")
     );
+}
+
+#[test]
+fn loaded_navigation_and_restore_read_active_slt_layout() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let mut backend = ::slt::TestBackend::new(110, 38);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let render = |app: &mut App,
+                  backend: &mut ::slt::TestBackend,
+                  surface: &mut crate::slt_ui::SurfaceState| {
+        app.populate_surface(surface);
+        let view = app.view();
+        backend.render(|ctx| {
+            crate::slt_ui::draw(
+                ctx,
+                &view,
+                &mut app.composer,
+                &mut app.modal_editor,
+                None,
+                surface,
+            );
+        });
+        app.observe_slt_layout(surface);
+    };
+    for _ in 0..3 {
+        render(&mut fixture.app, &mut backend, &mut surface);
+    }
+    fixture.app.command("find Ready for review").unwrap();
+    fixture.app.command("find-next").unwrap();
+    assert!(fixture.app.workspace.pending_jump.is_some());
+    render(&mut fixture.app, &mut backend, &mut surface);
+    assert!(
+        fixture.app.workspace.pending_jump.is_none(),
+        "the actual SLT layout consumed the source-qualified jump"
+    );
+    fixture.app.save_reading_position().unwrap();
+    assert!(fixture.app.state.snapshot()["rustReadingPositions"].is_object());
 }

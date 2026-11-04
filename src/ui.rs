@@ -213,6 +213,17 @@ const MAX_CACHE_ITEMS: usize = 128;
 const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MEASUREMENTS: usize = 4096;
 
+/// Measurements from SLT's previous completed layout, in scroll-content rows.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TranscriptLayout {
+    pub items: Vec<(String, usize, usize)>,
+    pub top: usize,
+    pub content: usize,
+    pub visible: usize,
+    pub max: usize,
+    pub width: u16,
+}
+
 #[derive(Default)]
 pub struct Renderer {
     cache: VecDeque<CachedText>,
@@ -223,13 +234,24 @@ pub struct Renderer {
     transcript_lines: usize,
     transcript_visible: usize,
     transcript_top: usize,
+    transcript_max: Option<usize>,
     transcript_items: Vec<(String, usize, usize)>,
 }
 
 impl Renderer {
     pub fn transcript_max_scroll(&self) -> usize {
-        self.transcript_lines
-            .saturating_sub(self.transcript_visible)
+        self.transcript_max.unwrap_or_else(|| {
+            self.transcript_lines
+                .saturating_sub(self.transcript_visible)
+        })
+    }
+
+    pub(crate) fn update_transcript_layout(&mut self, layout: &TranscriptLayout) {
+        self.transcript_items.clone_from(&layout.items);
+        self.transcript_top = layout.top;
+        self.transcript_lines = layout.content;
+        self.transcript_visible = layout.visible;
+        self.transcript_max = Some(layout.max);
     }
 
     pub fn transcript_scroll(&self) -> usize {
@@ -266,6 +288,7 @@ impl Renderer {
         modal: Option<&Modal>,
         modal_editor: &TextArea<'static>,
     ) -> HitMap {
+        self.transcript_max = None;
         let area = frame.area();
         let theme = Theme::named(&view.theme);
         let mut hits = HitMap::default();

@@ -164,8 +164,21 @@ impl App {
                         && record["threadId"] == source.thread_id
                     {
                         let mut pending_source = source.clone();
-                        pending_source.revision =
-                            crate::reports::content_revision(&serde_json::to_string(&record)?);
+                        pending_source.request_id = record["requestId"].as_str().map(str::to_owned);
+                        if let Some(revision) = record["revision"]
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                        {
+                            pending_source.revision = revision.to_owned();
+                        }
+                        pending_source.observed["operationPayloadSha256"] = json!(
+                            crate::reports::content_revision(&serde_json::to_string(&record)?)
+                        );
+                        pending_source.observed["operationRevisionAvailable"] = json!(
+                            record["revision"]
+                                .as_str()
+                                .is_some_and(|value| !value.is_empty())
+                        );
                         records.push(NativeRecord {
                             source: pending_source,
                             kind: NativeKind::PendingOperation,
@@ -294,8 +307,13 @@ impl App {
             dialog.detail = pack.markdown;
             for record in &pack.native_records {
                 dialog.detail.push_str(&format!(
-                    "\n- {:?}: {} · {}\n\n{}\n",
-                    record.kind, record.identity, record.status, record.summary
+                    "\n- {:?}: {} · {}\n\n{}\n\n```json\n{}\n```\n",
+                    record.kind,
+                    record.identity,
+                    record.status,
+                    record.summary,
+                    serde_json::to_string_pretty(&record.source)
+                        .expect("source provenance serializes")
                 ));
             }
             for warning in &pack.degradation {
@@ -387,9 +405,8 @@ impl App {
                 self.detail(
                     "Captured source",
                     format!(
-                        "{} @ {}\nSHA-256: {}\n\n{}",
-                        captured.source.thread_id,
-                        captured.source.revision,
+                        "```json\n{}\n```\nSHA-256: {}\n\n{}",
+                        serde_json::to_string_pretty(&captured.source)?,
                         captured.sha256,
                         String::from_utf8_lossy(&captured.bytes)
                     ),

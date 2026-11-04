@@ -22,14 +22,14 @@ impl ViewSource {
             generation: active.generation,
         })
     }
-    fn check(&self, app: &App) -> Result<()> {
+    pub(super) fn check(&self, app: &App) -> Result<()> {
         ensure!(
             Self::active(app)? == *self,
             "Conversation changed; reopen this action on its original source"
         );
         Ok(())
     }
-    fn display_key(&self, row: &str) -> String {
+    pub(super) fn display_key(&self, row: &str) -> String {
         format!(
             "{}\0{}\0{}\0{row}",
             self.profile, self.thread, self.generation
@@ -134,7 +134,7 @@ pub(crate) struct WorkspaceState {
     last_detail: Option<(String, String)>,
     inspected: Option<(String, Value)>,
     review: Option<ReviewContext>,
-    pending_jump: Option<(ViewSource, String, String, usize)>,
+    pub(super) pending_jump: Option<(ViewSource, String, String, usize)>,
     restored_generation: Option<u64>,
     rank_undo: Option<Value>,
     pub batch: Option<BatchBinding>,
@@ -197,7 +197,7 @@ pub(super) fn migrate_launch_forms(state: &State, environments: &[Environment]) 
     })
 }
 
-fn digest(text: &str) -> String {
+pub(super) fn digest(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 fn rank_key(environment: &str, project: &str, thread: &str) -> String {

@@ -98,6 +98,7 @@ impl App {
                             modal.as_ref(),
                             &mut surface,
                         );
+                        app.observe_slt_layout(&surface);
                         for action in actions {
                             if let Err(error) = app.surface_action(action, &mut surface) {
                                 app.error(error);
@@ -253,7 +254,27 @@ impl App {
         projects.into_values().collect()
     }
 
-    pub(super) fn populate_surface(&self, surface: &mut SurfaceState) {
+    pub(super) fn populate_surface(&mut self, surface: &mut SurfaceState) {
+        surface.transcript_jump = None;
+        if let Some((source, key, digest, inner)) = self.workspace.pending_jump.clone() {
+            if source.check(self).is_ok()
+                && self
+                    .active
+                    .as_ref()
+                    .and_then(|active| active.projection.snapshot())
+                    .is_some_and(|snapshot| {
+                        snapshot
+                            .items
+                            .iter()
+                            .any(|row| row.key == key && workspace::digest(&row.text) == digest)
+                    })
+            {
+                surface.transcript_jump =
+                    Some((source.display_key(&key), format!("sha256:{digest}"), inner));
+            } else {
+                self.workspace.pending_jump = None;
+            }
+        }
         surface.projects = self.project_sources();
         surface.thread_sources = self
             .threads
@@ -346,6 +367,7 @@ impl App {
                     supporting_markdown,
                     supporting_source_key,
                     supporting_revision,
+                    supporting_truncated: supporting_row.is_some_and(|row| row.truncated),
                     request,
                 }
             })
@@ -391,6 +413,7 @@ impl App {
                     supporting_markdown: String::new(),
                     supporting_source_key: String::new(),
                     supporting_revision: String::new(),
+                    supporting_truncated: false,
                     request: request.clone(),
                 });
             }
@@ -437,6 +460,18 @@ impl App {
             Ok(_) => "Dependencies · unknown".into(),
             Err(error) => format!("Dependencies unavailable · {error}"),
         };
+    }
+
+    pub(super) fn observe_slt_layout(&mut self, surface: &SurfaceState) {
+        if let Some(layout) = &surface.transcript_layout {
+            self.renderer.update_transcript_layout(layout);
+            self.hits.transcript.width = layout.width;
+            self.transcript_scroll = layout.top;
+            self.follow = layout.top == layout.max;
+            if surface.transcript_jump.is_none() {
+                self.workspace.pending_jump = None;
+            }
+        }
     }
 
     fn open_pending_question(&mut self) -> Result<()> {
