@@ -45,6 +45,10 @@ impl App {
                 .title("T3oxide")
                 .mouse(mouse)
                 .kitty_keyboard(true)
+                // The reader otherwise exits on Ctrl+C before a focused editor
+                // can consume a selection copy. Explicit Quit remains Ctrl+Q.
+                .handle_ctrl_c(false)
+                .activation_boundaries(true)
                 .idle_redraw(false)
                 .max_fps(60);
             let session = runtime.block_on(async {
@@ -99,10 +103,20 @@ impl App {
                             &mut surface,
                         );
                         app.observe_slt_layout(&surface);
+                        if !actions.is_empty() {
+                            // Controller actions change the next frame's widgets,
+                            // focus or editor even when no worker/input wakes us.
+                            ui.request_frame();
+                        }
                         for action in actions {
                             if let Err(error) = app.surface_action(action, &mut surface) {
                                 app.error(error);
                             }
+                        }
+                        if modal.is_none() && app.dialog.is_some() && !surface.attention_mode {
+                            // The modal captures its return focus next frame. Keep
+                            // subsequent typing in this conversation's next draft.
+                            ui.focus_by_name("composer");
                         }
                         if let Some(text) = app.clipboard_request.take() {
                             ui.copy_to_clipboard(text);

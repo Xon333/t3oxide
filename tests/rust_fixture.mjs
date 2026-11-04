@@ -3,7 +3,7 @@
 // It runs the REAL companion admission, T3 projection, stream reducer and host
 // journal. Only native HTTP/RPC endpoints are replaced; no T3 service is used.
 // Configure through a private --config host.json. Optional fixture fields:
-// { stateFile, logFile, dropAckOnce, ackDelayMs, disconnectAfterMs, unavailable, stream }.
+// { stateFile, logFile, dropAckOnce, rejectSend, ackDelayMs, disconnectAfterMs, unavailable, stream }.
 import { readFileSync, writeFileSync, appendFileSync, existsSync, realpathSync, renameSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { run } from '../adapter/main.mjs';
@@ -163,6 +163,10 @@ export function createFixture(config, emit) {
     } else {
       if (!p) throw new Fault('unavailable', 'Fixture thread not found.');
       if (payload.type === 'message.dispatch') {
+        if (options.rejectSend) {
+          if (ackDelayMs) await new Promise(resolve => later(resolve, ackDelayMs));
+          throw new Fault('invalid_request', 'Fixture rejected this exact send.');
+        }
         const row = wrap(p.thread.id, { id: `${payload.commandId}-user`, messageId: payload.messageId, type: 'user_message', text: payload.text });
         p.visibleTurnItems.push(row); p.turnItems.push(row.item);
         const answer = wrap(p.thread.id, { id: `${payload.commandId}-answer`, messageId: `${payload.commandId}-response`, type: 'assistant_message', text: 'Accepted exact fixture message.', streaming: true });

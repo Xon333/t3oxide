@@ -23,7 +23,7 @@ def main():
         "t3oxide Rust dependency notices\n",
         "This inventory covers the complete Cargo.lock graph, including build and\n"
         "platform-specific dependencies. A particular binary links only its enabled\n"
-        "target graph. Upstream files are used unmodified. Source archives are\n"
+        "target graph. Vendored modifications are identified per package. Source archives are\n"
         "available from the exact URLs below, with Cargo.lock SHA-256 checksums\n"
         "for registry archives and exact commits for Git sources.\n\n"
         "License text below normalizes trailing whitespace; inventory hashes\n"
@@ -33,13 +33,16 @@ def main():
         "No MPL-covered source file is modified or copied into t3oxide source.\n"
     ]
     for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version"])):
-        if not package.get("source"):
+        if package["id"] == root_package["id"]:
             continue
         name, version = package["name"], package["version"]
         source = Path(package["manifest_path"]).parent
+        vendor = (package.get("metadata") or {}).get("t3oxide-vendor")
+        if not package.get("source") and not vendor:
+            raise SystemExit(f"Unattributed local dependency: {name} {version}")
         files = sorted(p for p in source.iterdir() if p.is_file() and
                        p.name.upper().startswith(("LICENSE", "COPYING", "NOTICE", "COPYRIGHT")))
-        if not files and package["source"].startswith("git+"):
+        if not files and (package["source"] or "").startswith("git+"):
             # Workspace crates may inherit the reviewed repository-root grant.
             # Stay inside the exact Cargo Git checkout, never the cache parent.
             git_root = Path(subprocess.check_output(
@@ -58,7 +61,10 @@ def main():
             texts = [("upstream license", supplement["text"], supplement["url"])]
         archive = f"https://crates.io/api/v1/crates/{name}/{version}/download"
         git_commit = None
-        if package["source"].startswith("git+"):
+        if vendor:
+            git_commit = vendor["upstream-commit"]
+            archive = f"{package['repository']}/archive/{git_commit}.tar.gz"
+        elif package["source"].startswith("git+"):
             git_commit = package["source"].rsplit("#", 1)[1]
             archive = f"{package['repository']}/archive/{git_commit}.tar.gz"
         vcs_file = source / ".cargo_vcs_info.json"
@@ -71,8 +77,17 @@ def main():
             "licenseFiles": [{"path": path, "sha256": hashlib.sha256(text.encode()).hexdigest(),
                               **({"source": url} if url else {})} for path, text, url in texts],
         }
+        if vendor:
+            item["vendoredPath"] = str(source.relative_to(ROOT))
+            item["patch"] = vendor["patch"]
+            item["modifiedFiles"] = {
+                path: hashlib.sha256((source / path).read_bytes()).hexdigest()
+                for path in vendor["modified-files"]
+            }
         inventory.append(item)
         notices.append(f"\n{'=' * 78}\n{name} {version}\nLicense: {package['license']}\nSource: {archive}\n")
+        if vendor:
+            notices.append(f"Vendored: {item['vendoredPath']}\nPatch: {vendor['patch']} (see UPSTREAM.md)\n")
         for path, text, url in texts:
             rendered = "\n".join(line.rstrip() for line in text.splitlines()).rstrip()
             notices.append(f"\n--- {path}{' (' + url + ')' if url else ''} ---\n{rendered}\n")

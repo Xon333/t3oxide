@@ -5,11 +5,127 @@ No installed T3 service, credentials, launcher or Rex configuration is accessed.
 Run with uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/debug/t3oxide.
 """
 import argparse
+import base64
 import json
 from pathlib import Path
 import tempfile
 
 from rust_terminal import ENTER, ESC, Terminal, fixture, native_payloads, wait_file
+
+CTRL_ENTER = b"\x1b[13;5:1u\x1b[13;5:3u"
+
+
+def ordered_sends(binary, directory):
+    checks = []
+    for outcome, options in [("accepted", {}), ("rejected", {"rejectSend": True}),
+                             ("uncertain", {"dropAckOnce": True})]:
+        paths = fixture(directory / outcome, stream=False, ackDelayMs=1200, **options)
+        terminal = Terminal(binary, paths["config"], paths["state"], columns=86, rows=31)
+        try:
+            terminal.wait("Ready for review")
+            # One PTY write: preceding edits, activation Press/Release, next draft.
+            terminal.send(b"first" + CTRL_ENTER + b"second", settle=0.3)
+            saved = wait_file(terminal, paths["state"], lambda value:
+                              value.get("drafts", {}).get("fixture-env/thread-a") == "second")
+            original = saved["pending"]["fixture-env"]
+            assert original["message"] == "first" and original["threadId"] == "thread-a", original
+            assert original["environmentId"] == "fixture-env" and original["op"] == "send"
+            assert any(row["kind"] == "attempt" and row["text"] == "first" and
+                       row["environment"] == "fixture-env" and row["thread"] == "thread-a"
+                       for row in saved["promptHistory"])
+            if outcome == "uncertain":
+                wait_file(terminal, paths["native"], lambda value: value.get("dropped"))
+                terminal.wait("Unconfirmed")
+                saved = json.loads(paths["state"].read_text())
+                assert saved["pending"]["fixture-env"] == original
+            else:
+                if outcome == "rejected":
+                    terminal.wait("Fixture rejected this exact send.")
+                saved = wait_file(terminal, paths["state"], lambda value: not value.get("pending"))
+            assert saved["drafts"]["fixture-env/thread-a"] == "second", saved
+            payloads = native_payloads(paths)
+            assert len(payloads) == 1 and payloads[0]["text"] == "first", payloads
+            assert payloads[0]["commandId"] == original["id"]
+            effects = json.loads(paths["native"].read_text())["effects"] if paths["native"].exists() else 0
+            assert effects == (0 if outcome == "rejected" else 1)
+            assert terminal.close() == 0
+        finally:
+            terminal.close()
+        resumed = Terminal(binary, paths["config"], paths["state"], columns=86, rows=31)
+        try:
+            resumed.wait("second")
+            resumed.pump(0.2)
+            assert len(native_payloads(paths)) == 1, "restart never retries a mutation"
+            if outcome == "uncertain":
+                assert json.loads(paths["state"].read_text())["pending"]["fixture-env"] == original
+            assert resumed.close() == 0
+        finally:
+            resumed.close()
+        checks.append(f"single-batch first/send/second retains exact source/operation and next draft under delayed {outcome} result and restart")
+    return checks
+
+
+def commands_pointer_and_copy(binary, directory):
+    paths = fixture(directory / "ordered-ui", stream=False, ackDelayMs=600)
+    terminal = Terminal(binary, paths["config"], paths["state"], columns=86, rows=31)
+    try:
+        terminal.wait("Ready for review")
+        for label in ["Unread", "Running", "Pins", "Settled", "Project", "Env", "Ctrl+] send", "Send"]:
+            terminal.wait(label)
+        terminal.send(b"/help\r")
+        terminal.wait("Input and focus")
+        terminal.send(ESC)
+        saved = wait_file(terminal, paths["state"], lambda value:
+                          value.get("drafts", {}).get("fixture-env/thread-a") == "/help")
+        assert not saved.get("pending") and not native_payloads(paths)
+        # Forwarded Control Press+Release must reach a selected focused textarea.
+        click(terminal, "Prompt")
+        terminal.send(b"\x1b[97;5:1u\x1b[97;5:3u\x1b[99;5:1u\x1b[99;5:3u")
+        assert terminal.process.poll() is None
+        expected = b"\x1b]52;c;" + base64.b64encode(b"/help")
+        assert expected in terminal.raw, "selected editor copy must emit its exact OSC52 text"
+        terminal.send(b"\x7f")
+        terminal.send(b"\x03")  # No selection: no copied text and no reader-level exit.
+        assert terminal.process.poll() is None
+        # Pointer activation has the same edit/submit/tail boundary as the chord.
+        matches = [(line.index("Send") + 1, row + 1) for row, line in enumerate(terminal.lines) if "Send" in line]
+        x, y = matches[-1]
+        pointer = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
+        terminal.send(b"mouse-first" + pointer + b"mouse-next", settle=0.3)
+        saved = wait_file(terminal, paths["state"], lambda value:
+                          value.get("drafts", {}).get("fixture-env/thread-a") == "mouse-next")
+        assert saved["pending"]["fixture-env"]["message"] == "mouse-first"
+        wait_file(terminal, paths["state"], lambda value: not value.get("pending"))
+        assert [row["text"] for row in native_payloads(paths)] == ["mouse-first"]
+        terminal.resize(140, 38)
+        terminal.wait("mouse-next")
+        terminal.resize(86, 31)
+        terminal.wait("Ctrl+] send")
+        # Exact text before modal save; tail is routed to the next prompt draft.
+        click(terminal, "Commands")
+        click(terminal, "Enter command")
+        terminal.wait("Explicit command entry.")
+        terminal.send(b"latest\x1dTAIL", settle=0.4)
+        saved = wait_file(terminal, paths["state"], lambda value:
+                          value.get("drafts", {}).get("fixture-env/thread-a") == "mouse-nextTAIL")
+        assert len(native_payloads(paths)) == 1
+        assert "Unknown action" not in terminal.text
+        click(terminal, "Commands")
+        click(terminal, "Enter command")
+        terminal.wait("Explicit command entry.")
+        matches = [(line.index("Continue") + 1, row + 1) for row, line in enumerate(terminal.lines) if "Continue" in line]
+        x, y = matches[-1]
+        pointer = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
+        terminal.send(b"latest" + pointer + b"POINTERTAIL", settle=0.4)
+        wait_file(terminal, paths["state"], lambda value:
+                  value.get("drafts", {}).get("fixture-env/thread-a") == "mouse-nextTAILPOINTERTAIL")
+        assert "Unknown action" not in terminal.text and len(native_payloads(paths)) == 1
+        assert terminal.close() == 0
+    finally:
+        terminal.close()
+    return ["batched command Enter consumes without newline/send; compact controls and draft survive resize",
+            "focused Control select-all/copy Press+Release emits exact clipboard text; unselected Ctrl+C cannot exit",
+            "batched pointer Send separates preceding edits from next draft; modal text/save/tail stays ordered"]
 
 
 def click(terminal, label, last=False):
@@ -119,6 +235,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="t3oxide-slt-pty-") as directory:
         checks = run(args.binary.resolve(), Path(directory))
         checks.extend(answers(args.binary.resolve(), Path(directory)))
+        checks.extend(ordered_sends(args.binary.resolve(), Path(directory)))
+        checks.extend(commands_pointer_and_copy(args.binary.resolve(), Path(directory)))
     print(json.dumps({"scope": "synthetic PTY; native Rex/M4 acceptance remains separate", "checks": checks}, indent=2))
 
 

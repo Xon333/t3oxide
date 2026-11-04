@@ -1,0 +1,71 @@
+//! Flexbox layout engine: builds a tree from commands, computes positions,
+//! and renders to a [`Buffer`].
+
+use crate::buffer::Buffer;
+use crate::rect::Rect;
+use crate::style::{
+    Align, Border, BorderSides, Color, Constraints, HeightSpec, Justify, Margin, Padding, Style,
+    WidthSpec,
+};
+use crate::width::UnicodeSegmentation;
+#[cfg(test)]
+use unicode_width::UnicodeWidthStr;
+
+mod collect;
+mod command;
+mod flexbox;
+mod focus;
+mod render;
+mod string_pool;
+mod tree;
+
+pub(crate) use collect::{FrameData, HitMeta, NO_HIT_PARENT, collect_all};
+pub use command::Direction;
+pub(crate) use command::{BeginContainerArgs, BeginScrollableArgs, Command};
+pub(crate) use flexbox::compute;
+pub(crate) use focus::{
+    FocusScrollState, GeometryFeedback, ScrollAdjustment, ScrollPolicy, apply_scroll_adjustments,
+};
+pub(crate) use render::{InspectorFocus, render, render_debug_overlay, render_inspector};
+pub(crate) use string_pool::StringPool;
+pub(crate) use tree::{
+    LayoutArena, LayoutNode, MAX_LAYOUT_DEPTH, NodeKind, build_tree, build_tree_in, wrap_lines,
+    wrap_segments,
+};
+
+/// Test-only entry point exposing `wrap_segments` for allocation-budget tests.
+///
+/// Not part of the stable API. Used by `tests/alloc_budget.rs`.
+#[doc(hidden)]
+pub fn __bench_wrap_segments(
+    segments: &[(String, Style)],
+    max_width: u32,
+) -> Vec<Vec<(String, Style)>> {
+    tree::wrap_segments(segments, max_width)
+}
+
+/// Test-only entry point exposing the modal-aware dim path.
+///
+/// Not part of the stable API. Used by `tests/alloc_budget.rs` and the
+/// `examples/perf_audit.rs` demo.
+#[doc(hidden)]
+pub fn __bench_dim_buffer_around(buf: &mut Buffer, modal_rect: Rect) {
+    render::__bench_dim_buffer_around(buf, modal_rect);
+}
+
+/// Crate-internal test access to the modal dim helpers.
+#[cfg(test)]
+pub(crate) mod render_test_hooks {
+    use super::{Buffer, Rect, render};
+
+    pub(crate) fn dim_entire(buf: &mut Buffer) {
+        render::dim_entire_buffer(buf);
+    }
+
+    pub(crate) fn dim_around(buf: &mut Buffer, modal_rect: Rect) {
+        render::__bench_dim_buffer_around(buf, modal_rect);
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -1957,7 +1957,6 @@ dependencies = [
 [[package]]
 name = "superlighttui"
 version = "0.26.0"
-source = "git+https://github.com/subinium/SuperLightTUI?rev=d4537d74f4b42188e06cb224fbfe7684397897fb#d4537d74f4b42188e06cb224fbfe7684397897fb"
 dependencies = [
  "compact_str 0.10.0",
  "crossterm",

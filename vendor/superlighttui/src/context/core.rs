@@ -1,0 +1,414 @@
+//! The [`Context`] struct and the per-frame state it carries: command list,
+//! hook slots, focus bookkeeping, previous-frame geometry and the rollback
+//! snapshot used by error boundaries.
+
+use super::*;
+
+/// The main rendering context passed to your closure each frame.
+///
+/// Provides all methods for building UI: text, containers, widgets, and event
+/// handling. You receive a `&mut Context` on every frame and describe what to
+/// render by calling its methods. SLT collects those calls, lays them out with
+/// flexbox, diffs against the previous frame, and flushes only changed cells.
+///
+/// # Example
+///
+/// ```no_run
+/// slt::run(|ui: &mut slt::Context| {
+///     if ui.key('q') { ui.quit(); }
+///     ui.text("Hello, world!").bold();
+/// });
+/// ```
+pub struct Context {
+    pub(crate) commands: Vec<Command>,
+    /// Cleared text buffers from the previous frame's layout tree, lent by
+    /// `FrameState::layout_arena` for widgets that format their own rows
+    /// (see [`Context::pooled_string`]). Returned before the tree is built.
+    pub(crate) string_pool: crate::layout::StringPool,
+    pub(crate) geometry_cursor: usize,
+    pub(crate) geometry_stack: Vec<(usize, Option<usize>)>,
+    pub(crate) geometry_pending_interaction: Option<usize>,
+    pub(crate) events: Vec<Event>,
+    pub(crate) consumed: Vec<bool>,
+    pub(crate) should_quit: bool,
+    pub(crate) area_width: u32,
+    pub(crate) area_height: u32,
+    pub(crate) tick: u64,
+    pub(crate) focus_index: usize,
+    pub(crate) hook_states: Vec<Box<dyn std::any::Any>>,
+    pub(crate) named_states: std::collections::HashMap<&'static str, Box<dyn std::any::Any>>,
+    /// Issue #215: persistent state keyed by a runtime `String`. Mirrors
+    /// `named_states` but accepts dynamic keys (e.g. `format!("item-{i}")`).
+    /// The map is moved into `Context::new` from `FrameState` and moved back
+    /// at frame end, identical to the `named_states` lifetime.
+    pub(crate) keyed_states: std::collections::HashMap<String, Box<dyn std::any::Any>>,
+    /// Issue #262: cross-frame partial-chord buffer for [`Context::key_chord`].
+    /// Moved into `Context::new` from `FrameState` and moved back at frame end,
+    /// identical to the `keyed_states` lifetime.
+    pub(crate) chord: crate::widgets::ChordState,
+    pub(crate) context_stack: Vec<Box<dyn std::any::Any>>,
+    pub(crate) prev_focus_count: usize,
+    pub(crate) prev_modal_focus_start: usize,
+    pub(crate) prev_modal_focus_count: usize,
+    pub(crate) prev_modal_id: Option<usize>,
+    /// `(content_extent, viewport_extent, is_horizontal)` per scrollable from
+    /// the previous frame (#247).
+    pub(crate) prev_scroll_infos: Vec<(u32, u32, bool)>,
+    pub(crate) prev_scroll_rects: Vec<Rect>,
+    pub(crate) scroll_wheel_targets: Option<Vec<Option<usize>>>,
+    pub(crate) prev_hit_map: Vec<Rect>,
+    pub(crate) prev_allocated_areas: Vec<Rect>,
+    pub(crate) prev_geometry: crate::layout::GeometryFeedback,
+    pub(crate) pending_scroll: std::collections::HashMap<u64, crate::layout::ScrollAdjustment>,
+    pub(crate) prev_group_rects: Vec<(std::sync::Arc<str>, Rect)>,
+    pub(crate) prev_focus_groups: Vec<Option<std::sync::Arc<str>>>,
+    pub(crate) mouse_pos: Option<(u32, u32)>,
+    /// Issue #439: every press this frame plus the previous frame's hit-test
+    /// z-order, used to resolve each press to one topmost, innermost slot.
+    /// Replaces the single `click_pos` / `right_click_pos` /
+    /// `double_click_pos` slots that dropped all but the last press.
+    pub(crate) pointer: PointerFrame,
+    /// Position of the most recent scroll-wheel event this frame, used
+    /// to hover-gate `Response::scroll_delta`. `None` when the wheel did not
+    /// move.
+    pub(crate) scroll_pos: Option<(u32, u32)>,
+    /// Net vertical wheel delta accumulated this frame (positive =
+    /// up, negative = down). Surfaced per-widget through
+    /// `Response::scroll_delta` when `scroll_pos` falls inside the widget rect.
+    pub(crate) scroll_delta_frame: i32,
+    pub(crate) prev_modal_active: bool,
+    pub(crate) clipboard_text: Option<String>,
+    pub(crate) debug: bool,
+    /// Issue #201: which layers the F12 debug overlay should outline. Read
+    /// from `state.diagnostics.debug_layer` at frame start and written back
+    /// at frame end so [`Context::set_debug_layer`] persists across frames.
+    pub(crate) debug_layer: crate::DebugLayer,
+    /// Issue #268: whether the devtools inspector panel (Ctrl+F12) is active.
+    /// Read from `state.diagnostics.inspector_mode` at frame start and written
+    /// back at frame end so [`Context::set_inspector`] persists across frames.
+    pub(crate) inspector_mode: bool,
+    pub(crate) theme: Theme,
+    pub(crate) is_real_terminal: bool,
+    /// Issue #264: read-only snapshot of negotiated terminal capabilities
+    /// (DA1/DA2/XTGETTCAP), exposed via [`Context::capabilities`]. Populated
+    /// from the process-global probe in `run_frame_kernel`; defaults
+    /// conservatively on headless backends. Diagnostics-only — image rendering
+    /// routes through the automatic blitter ladder, so app code never branches
+    /// on this.
+    #[cfg(feature = "crossterm")]
+    pub(crate) capabilities: crate::terminal::Capabilities,
+    pub(crate) deferred_draws: Vec<Option<RawDrawCallback>>,
+    pub(crate) rollback: ContextRollbackState,
+    pub(crate) pending_tooltips: Vec<PendingTooltip>,
+    /// Issue #279: screen-navigation requests recorded by
+    /// [`Context::push_screen`] / [`Context::pop_screen`] /
+    /// [`Context::reset_screen`] from inside a [`Context::screen`] closure.
+    /// Drained and applied to the active [`crate::ScreenState`] right after the
+    /// closure returns. Deferring the mutation here lets app code navigate from
+    /// within the closure without a double mutable borrow of its `ScreenState`.
+    pub(crate) pending_screen_nav: Vec<ScreenNav>,
+    /// Number of currently active `screen` closures. Each `screen` keeps its
+    /// own pending-navigation start index on the call stack; this depth lets
+    /// navigation helpers reject calls made outside any screen without a
+    /// per-frame heap allocation.
+    pub(crate) screen_nav_depth: usize,
+    pub(crate) screen_focus_ranges: std::collections::HashMap<u64, ScreenFocusRange>,
+    pub(crate) screen_focus_scopes: Vec<ScreenFocusScope>,
+    /// Original active screen for each `ScreenState` that navigated this frame.
+    /// Later `screen` declarations keep rendering this origin until the next
+    /// frame, preventing source and destination screens from being composed in
+    /// the same terminal buffer. Keys are per-frame `ScreenState` addresses.
+    pub(crate) screen_nav_render_origins: std::collections::HashMap<usize, String>,
+    pub(crate) hovered_groups: std::collections::HashSet<std::sync::Arc<str>>,
+    /// Issue #273: version keys recorded by [`Context::cached`] regions on the
+    /// PREVIOUS frame, moved in from `FrameState::region_versions`. Indexed by
+    /// the order `cached` regions are declared this frame; consulted by
+    /// `cached` to classify a region as a hit (key unchanged) or miss.
+    pub(crate) region_versions_prev: Vec<u64>,
+    /// Issue #273: version keys recorded by `cached` regions on THIS frame, in
+    /// declaration order. Swapped back into `FrameState::region_versions` at
+    /// frame end to become next frame's `region_versions_prev`.
+    pub(crate) region_versions_cur: Vec<u64>,
+    /// Issue #273: number of `cached` regions this frame whose key matched the
+    /// previous frame (a cache hit). Diagnostics-only — exposed via
+    /// [`Context::region_cache_hits`].
+    pub(crate) region_cache_hits: u32,
+    /// Issue #273: number of `cached` regions this frame whose key changed or
+    /// was new/first-frame (a cache miss). Exposed via
+    /// [`Context::region_cache_misses`].
+    pub(crate) region_cache_misses: u32,
+    pub(crate) scroll_lines_per_event: u32,
+    pub(crate) screen_hook_map:
+        std::collections::HashMap<u64, std::collections::HashMap<String, (usize, usize)>>,
+    pub(crate) widget_theme: WidgetTheme,
+    /// Issue #208: which focus index was current at the END of the previous
+    /// frame. `None` on the very first frame. Used to compute
+    /// `Response::gained_focus` / `Response::lost_focus` per widget.
+    pub(crate) prev_focus_index: Option<usize>,
+    /// Issue #217: name → focus-index map built in the previous frame, used
+    /// to resolve `focus_by_name(...)` requests at the start of this frame.
+    /// Empty on the first frame.
+    pub(crate) focus_name_map_prev: std::collections::HashMap<String, usize>,
+    /// Issue #217: name → focus-index map being built this frame as widgets
+    /// call `register_focusable_named(...)`. Swapped into `focus_name_map_prev`
+    /// at frame end.
+    pub(crate) focus_name_map: std::collections::HashMap<String, usize>,
+    /// Issue #217: name requested by `focus_by_name(...)`; consumed at the
+    /// start of the next frame. Outlives a single frame so the resolution
+    /// happens against `focus_name_map_prev`.
+    pub(crate) pending_focus_name: Option<String>,
+    /// Issues #453 / #454: per-slot focus metadata for this and the previous
+    /// frame. Moved in from `FrameState` at frame start, handed back by
+    /// [`Context::finish_focus_identity`] at frame end.
+    pub(crate) focus_identity: crate::runtime::FocusIdentity,
+    /// Issue #465: a text widget handled a mouse press / drag / release this
+    /// frame for its own selection, so the screen-level selection overlay
+    /// must not start or copy.
+    pub(crate) text_pointer_capture: bool,
+    /// Issue #469: this frame runs under the accessible linear runtime.
+    /// Interactive widgets check this one flag before recording accessible
+    /// nodes or applying a line answer, so the visual path pays nothing else.
+    pub(crate) accessible: bool,
+    /// Issue #248: wall-clock instant sampled once at frame start. All
+    /// frame-clock timer deadlines (`schedule`/`every`/`debounce`) compare
+    /// against this single instant so every timer sampled in the same frame
+    /// sees a consistent "now". Deliberately wall-clock, not the frame tick
+    /// (`run_frame_kernel` never advances `diagnostics.tick`).
+    pub(crate) frame_instant: crate::clock::Instant,
+    /// Issue #248: persistent timer table. Moved in from `FrameState` at
+    /// frame start and moved back at frame end (where untouched slots are
+    /// GC'd), identical to the `named_states` lifetime.
+    pub(crate) scheduler: SchedulerState,
+    /// Issue #490: earliest instant this frame asked to be redrawn at
+    /// ([`Context::request_frame`] / [`Context::request_frame_after`]). A
+    /// `Cell` so `&self` paths such as [`Context::elapsed`] can request too.
+    pub(crate) frame_request: std::cell::Cell<Option<crate::clock::Instant>>,
+    /// Issue #234: in-frame async task registry backing
+    /// [`Context::spawn`](crate::Context::spawn) /
+    /// [`Context::poll`](crate::Context::poll). Round-tripped through
+    /// `FrameState` like `scheduler`. Gated behind `async`; the field does not
+    /// exist (zero overhead) when the feature is off.
+    #[cfg(feature = "async")]
+    pub(crate) async_tasks: AsyncTasks,
+}
+
+impl Context {
+    /// An empty `String` with room for `len` bytes, recycled from the
+    /// previous frame's text when possible.
+    ///
+    /// Widgets that build their own row text (list rows, table rows,
+    /// separators, progress bars) format into this instead of a fresh
+    /// `String`, so a steady-state frame allocates nothing for it.
+    #[inline]
+    pub(crate) fn pooled_string(&mut self, len: usize) -> String {
+        self.string_pool.take(len)
+    }
+}
+
+type RawDrawCallback = Box<dyn FnOnce(&mut crate::buffer::Buffer, Rect)>;
+
+#[derive(Clone)]
+pub(crate) struct ScreenFocusRange {
+    pub name: std::sync::Arc<str>,
+    pub start: usize,
+    pub count: usize,
+}
+
+pub(crate) struct ScreenFocusScope {
+    pub id: u64,
+    pub range: ScreenFocusRange,
+    pub updates: crate::widgets::PendingScreenFocus,
+    pub generation: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ScreenFocusGuard {
+    pub start: usize,
+    pub previous_count: usize,
+    pub blocked_generation: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingTooltip {
+    pub anchor_rect: Rect,
+    pub lines: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ContextRollbackState {
+    pub(crate) focus_origin: Option<usize>,
+    pub(crate) focus_history_origin: Option<usize>,
+    pub(crate) focus_generation: u64,
+    pub(crate) focus_count_origin: usize,
+    pub(crate) screen_focus_guard: Option<ScreenFocusGuard>,
+    pub(crate) new_focus_slot: bool,
+    pub(crate) focus_interaction_origin: Option<(usize, usize)>,
+    pub(crate) focused_widget_id: Option<usize>,
+    pub(crate) current_modal_id: Option<usize>,
+    pub(crate) modal_id: Option<usize>,
+    pub(crate) modal_count: usize,
+    pub(crate) modal_request_local: Option<usize>,
+    pub(crate) modal_focus_rebase: Option<(usize, usize)>,
+    pub(crate) modal_restore_index: Option<usize>,
+    pub(crate) last_text_idx: Option<usize>,
+    pub(crate) focus_count: usize,
+    /// Issue #453: text-entry ownership claimed this frame by a widget that
+    /// takes keys without a focus slot (an open command palette).
+    pub(crate) text_entry_claim: Option<crate::runtime::TextEntryKind>,
+    /// Issue #454: slot that took focus through the key rule this frame.
+    /// Once set, no other slot reports focus while the key rule applies.
+    pub(crate) focus_key_match: Option<usize>,
+    /// Issue #208: id assigned by the most recent `register_focusable()` /
+    /// `register_focusable_named(...)` call. `begin_widget_interaction`
+    /// reads this to compute `Response::gained_focus` / `lost_focus`
+    /// without changing the public `register_focusable` signature. Reset
+    /// to `None` at frame start; left alone after read so widgets that
+    /// don't pair `register_focusable` with `begin_widget_interaction`
+    /// still get correct behavior.
+    pub(crate) last_focusable_id: Option<usize>,
+    /// Issue #217 follow-up: slot id reserved by the most-recent
+    /// `register_focusable_named(name)` for the next `register_focusable()`
+    /// to *reuse* instead of allocating a fresh slot.
+    ///
+    /// `register_focusable_named` allocates the slot eagerly (so the name
+    /// is already bound in `focus_name_map` and `focused_name()` works
+    /// even when no widget follows), and stores the slot id here. When a
+    /// SLT widget like `text_input` / `button` / `tabs` calls
+    /// `register_focusable()` immediately after — every such widget does
+    /// — the call drains this reservation and reuses the same slot, so
+    /// the name binds to the slot the widget actually occupies rather
+    /// than to a dummy slot allocated by `register_focusable_named`.
+    ///
+    /// Cleared in three cases:
+    ///   1. drained by the next `register_focusable()` and reused (common
+    ///      path: named widget),
+    ///   2. overwritten by a second `register_focusable_named()` that
+    ///      runs without an intervening widget (last-write-wins on the
+    ///      reservation; the first slot is left orphaned but harmless,
+    ///      its name binding already lives in `focus_name_map`),
+    ///   3. dropped by the modal/overlay suppression branch when the
+    ///      named registration itself is suppressed.
+    pub(crate) pending_focusable_id: Option<usize>,
+    pub(crate) interaction_count: usize,
+    pub(crate) scroll_count: usize,
+    pub(crate) group_count: usize,
+    pub(crate) group_stack: Vec<std::sync::Arc<str>>,
+    /// Issue #458: hover state of each open `group()` instance, innermost
+    /// last, so rows sharing a group name style independently.
+    pub(crate) group_hover_stack: smallvec::SmallVec<[bool; 8]>,
+    /// Issue #458: nesting depth of `Context::disabled(true, ..)` scopes.
+    pub(crate) disabled_depth: u32,
+    pub(crate) overlay_depth: usize,
+    pub(crate) modal_active: bool,
+    pub(crate) modal_focus_start: usize,
+    pub(crate) modal_focus_count: usize,
+    pub(crate) hook_cursor: usize,
+    pub(crate) dark_mode: bool,
+    pub(crate) notification_queue: Vec<(String, ToastLevel, u64)>,
+    pub(crate) text_color_stack: Vec<Option<Color>>,
+}
+
+pub(super) struct ContextCheckpoint {
+    focus_index: usize,
+    prev_focus_count: usize,
+    prev_focus_index: Option<usize>,
+    prev_modal_focus_start: usize,
+    pending_focus_name: Option<String>,
+    commands_len: usize,
+    hook_states_len: usize,
+    deferred_draws_len: usize,
+    context_stack_len: usize,
+    pending_tooltips_len: usize,
+    /// Issue #279: drop deferred screen-navigation requests recorded by a
+    /// panicking subtree inside an `error_boundary`, so a rolled-back screen
+    /// closure does not leave a phantom push/pop queued for its `ScreenState`.
+    pending_screen_nav_len: usize,
+    /// Drop navigation scopes opened by a panicking nested `screen` call.
+    screen_nav_depth: usize,
+    screen_focus_scopes_len: usize,
+    /// Issue #273: `cached` region keys recorded so far, so a panicking
+    /// `cached` region inside an `error_boundary` rolls back its key entry
+    /// (and any nested ones) — keeping the recorded keys consistent with the
+    /// commands that actually survived the rollback.
+    region_versions_cur_len: usize,
+    /// Pointer records made by a panicking subtree (#439/#440/#443/#452):
+    /// hit-test flags of its slots, overscroll containment, scroll anchoring
+    /// policies and pointer shapes.
+    pointer_contain_len: usize,
+    pointer_policies_len: usize,
+    pointer_shapes_len: usize,
+    pointer_passthrough_depth: u32,
+    pointer_slot_keys_len: usize,
+    pointer_pending_key: Option<u64>,
+    rollback: ContextRollbackState,
+}
+
+impl ContextCheckpoint {
+    pub(super) fn capture(ctx: &Context) -> Self {
+        Self {
+            focus_index: ctx.focus_index,
+            prev_focus_count: ctx.prev_focus_count,
+            prev_focus_index: ctx.prev_focus_index,
+            prev_modal_focus_start: ctx.prev_modal_focus_start,
+            pending_focus_name: ctx.pending_focus_name.clone(),
+            commands_len: ctx.commands.len(),
+            hook_states_len: ctx.hook_states.len(),
+            deferred_draws_len: ctx.deferred_draws.len(),
+            context_stack_len: ctx.context_stack.len(),
+            pending_tooltips_len: ctx.pending_tooltips.len(),
+            pending_screen_nav_len: ctx.pending_screen_nav.len(),
+            screen_nav_depth: ctx.screen_nav_depth,
+            pointer_contain_len: ctx.pointer.contain.len(),
+            pointer_policies_len: ctx.pointer.scroll_policies.len(),
+            pointer_shapes_len: ctx.pointer.shapes.len(),
+            pointer_passthrough_depth: ctx.pointer.passthrough_depth,
+            pointer_slot_keys_len: ctx.pointer.slot_keys.len(),
+            pointer_pending_key: ctx.pointer.pending_key,
+            screen_focus_scopes_len: ctx.screen_focus_scopes.len(),
+            region_versions_cur_len: ctx.region_versions_cur.len(),
+            rollback: ctx.rollback.clone(),
+        }
+    }
+
+    pub(super) fn restore(&self, ctx: &mut Context) {
+        ctx.focus_index = self.focus_index;
+        ctx.prev_focus_count = self.prev_focus_count;
+        ctx.prev_focus_index = self.prev_focus_index;
+        ctx.prev_modal_focus_start = self.prev_modal_focus_start;
+        ctx.pending_focus_name.clone_from(&self.pending_focus_name);
+        ctx.focus_name_map
+            .retain(|_, id| *id < self.rollback.focus_count);
+        ctx.commands.truncate(self.commands_len);
+        ctx.invalidate_geometry_cache();
+        ctx.hook_states.truncate(self.hook_states_len);
+        ctx.deferred_draws.truncate(self.deferred_draws_len);
+        ctx.context_stack.truncate(self.context_stack_len);
+        ctx.rollback = self.rollback.clone();
+        // Drop tooltips queued by the panicking widget but keep any that were
+        // already pending before the error boundary was entered.
+        ctx.pending_tooltips.truncate(self.pending_tooltips_len);
+        // Issue #279: drop screen-navigation requests queued by the panicking
+        // subtree but keep any recorded before the error boundary was entered.
+        ctx.pending_screen_nav.truncate(self.pending_screen_nav_len);
+        ctx.screen_nav_depth = self.screen_nav_depth;
+        ctx.screen_focus_scopes
+            .truncate(self.screen_focus_scopes_len);
+        // Issue #273: drop `cached` keys recorded by the panicking subtree.
+        ctx.region_versions_cur
+            .truncate(self.region_versions_cur_len);
+        // Slots allocated by the panicking subtree are reused by the
+        // fallback: they must not inherit its passthrough/bubble/drag flags.
+        let first_rolled_back = self.rollback.interaction_count;
+        if ctx.pointer.hit_flags.len() > first_rolled_back {
+            ctx.pointer.hit_flags.truncate(first_rolled_back);
+        }
+        ctx.pointer.contain.truncate(self.pointer_contain_len);
+        ctx.pointer
+            .scroll_policies
+            .truncate(self.pointer_policies_len);
+        ctx.pointer.shapes.truncate(self.pointer_shapes_len);
+        ctx.pointer.passthrough_depth = self.pointer_passthrough_depth;
+        ctx.pointer.slot_keys.truncate(self.pointer_slot_keys_len);
+        ctx.pointer.pending_key = self.pointer_pending_key;
+    }
+}

@@ -17,6 +17,7 @@ SLT owns Tab/Shift+Tab focus, mouse hit tests, text selection and terminal input
 | Native requests | Ctrl+Y; Questions button |
 | Model and effort | Model · effort button; /model, /effort |
 | Copy exact thread ID | Cmd+I / Ctrl+I where delivered; Copy ID button |
+| Select / copy editor text, if forwarded | Cmd+A/C or Ctrl+A/C; focused editor selection |
 | Settle native thread | Ctrl+T; /settle |
 | Restore settled thread | /unsettle |
 | Close tab, retain draft | Cmd+W / Ctrl+W where delivered; tab close button |
@@ -28,8 +29,17 @@ The application accepts richer send key events when the terminal forwards them. 
 
 Typing `/` at the start of a prompt opens completion. Up/Down selects; Enter consumes the command without adding a newline or sending. Commands needing arguments open their native review controls. Esc returns to unsent text; `//` permits literal slash text. Pasted slash commands and pasted newlines remain text. Copy, cut, paste, word movement and undo use SLT's editor support when the terminal forwards their key events.
 
+The focused editor consumes copy only with a selection. An unselected or
+unfocused Ctrl+C does not copy an editor draft or exit the client. Terminal
+forwarding, OS clipboard receipt and actual focus remain separate native checks.
+
 Forms retain drafts when dismissed, changed or cancelled at the source. Continue validates a field; Submit is a separate native mutation. Widget-local completion never indicates delivery. An acknowledgement must match the original source revision and operation identity. Changed-source drafts remain recoverable.
 
 ## Recovery
 
 Disconnect and client exit never stop accepted native work or retry a mutation. Recovery keeps the original ID and exact payload. Stop uses an independent lane. Uncertain answers stay uncertain until an explicit reconciliation returns the matching receipt.
+
+Sending starts a separate next draft after the original operation and attempted
+text are saved. A delayed acknowledgement, rejection or uncertain result cannot
+append to or overwrite that draft. Rejected text remains in Prompt recall;
+uncertain operations remain in Recovery with their original payload.

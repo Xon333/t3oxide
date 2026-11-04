@@ -306,12 +306,40 @@ impl State {
     }
     /// Refuses replacement of any unresolved operation, even if its ID is reused.
     pub fn save_pending(&self, environment: &str, stop: bool, record: Value) -> Result<()> {
+        self.stage_pending(environment, stop, record, false)
+    }
+
+    /// Persist a new send and its recall before starting a separate next draft.
+    /// A rejection may retire the operation, but never its recoverable human text.
+    pub fn save_send_detaching_draft(&self, environment: &str, record: Value) -> Result<()> {
+        self.stage_pending(environment, false, record, true)
+    }
+
+    fn stage_pending(
+        &self,
+        environment: &str,
+        stop: bool,
+        record: Value,
+        detach_draft: bool,
+    ) -> Result<()> {
         validate_record(environment, &record)?;
         ensure!(
             !stop || record["op"] == "stop",
             "only Stop may use the reserved recovery lane"
         );
         self.update(|value| {
+            if detach_draft {
+                let thread = record["threadId"].as_str().context("send needs a thread")?;
+                let message = record["message"].as_str().context("send needs text")?;
+                ensure!(
+                    record["op"] == "send"
+                        && value[lane(stop)].get(environment).is_none()
+                        && value["drafts"][key(environment, thread)] == message,
+                    "submitted draft changed; preserve it before sending"
+                );
+                remember_prompt(value, environment, thread, "attempt", message)?;
+                object_mut(value, "drafts")?.remove(&key(environment, thread));
+            }
             if record["op"] == "stop" {
                 if stop {
                     ensure!(value["pending"].get(environment).is_none_or(|v|v["op"] != "stop"), "an older Stop remains saved in the ordinary lane; recover its exact identity first");

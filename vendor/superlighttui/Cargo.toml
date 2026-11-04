@@ -1,0 +1,179 @@
+[package]
+name = "superlighttui"
+version = "0.26.0"
+edition = "2024"
+description = "Super Light TUI - A lightweight, ergonomic terminal UI library"
+license = "MIT"
+repository = "https://github.com/subinium/SuperLightTUI"
+homepage = "https://github.com/subinium/SuperLightTUI"
+documentation = "https://docs.rs/superlighttui"
+readme = "README.md"
+keywords = ["tui", "terminal", "cli", "ui", "immediate-mode"]
+categories = ["command-line-interface"]
+# let-chains (`if let … && let …`) used across the core were stabilized in
+# Rust 1.88.0; edition 2024 alone (1.85) is not enough. MSRV is therefore 1.88.
+rust-version = "1.88"
+# Keep the published crate to library + docs only. The agent/skill scaffolding,
+# VHS recordings, and dev/CI config are not needed by downstream consumers
+# (they were leaking into 0.21.0's tarball — ~140KB of non-library content).
+exclude = [
+    "examples/",
+    ".github/",
+    "assets/",
+    "AUDIT-REPORT.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".agents/",
+    ".claude/",
+    "scripts/",
+    "benches/",
+    "tests/",
+    "deny.toml",
+    "_typos.toml",
+    "*.tape",
+    ".gitignore",
+]
+# Disable cargo's `examples/*.rs` auto-discovery: only the binaries listed
+# below as `[[example]]` are exposed via `cargo run --example`. Source
+# demos that compose into a tour (the `widgets_tour` parts, cookbook_*,
+# most demo_*) stay in examples/ but are reached only via
+# `#[path = ...] mod` includes from the tour binaries or tests. Every
+# `examples/*.rs` file must be reachable from one of those targets;
+# `tests/docs_contract.rs` enforces it. See `docs/internals/demo-guide.md` for the
+# archetype rules.
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.rustdoc]
+broken_intra_doc_links = "warn"
+private_intra_doc_links = "warn"
+
+[lib]
+name = "slt"
+
+[dependencies]
+# Public dependency: re-exported as `slt::crossterm` and used by
+# `event::from_crossterm`. Default features are off only to drop 0.29's new
+# `derive-more` proc-macro (syn + derive_more) from default builds; the
+# remaining set equals crossterm 0.28's defaults.
+crossterm = { version = "0.29", default-features = false, features = ["bracketed-paste", "events", "windows"], optional = true }
+unicode-width = "0.2"
+unicode-segmentation = "1"
+smallvec = "1"
+tokio = { version = "1", features = ["rt", "sync", "macros", "time"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "1.1", optional = true }
+notify = { version = "8.2", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
+# Public dependency: `Cell::symbol` is a `CompactString`.
+compact_str = { version = "0.10", default-features = false }
+unicode-bidi = { version = "0.3", optional = true }
+flate2 = { version = "1", optional = true }
+qrcode = { version = "0.14", optional = true, default-features = false }
+# Pinned to 0.26: tree-sitter-highlight 0.27 (and tree-sitter-language
+# 0.1.9) declare `rust-version = "1.90"`, above SLT's MSRV of 1.88, and would
+# break every `syntax-*` feature on 1.88. Revisit when the MSRV reaches 1.90
+# (0.27 also changes `Highlighter::highlight` to five arguments; #475).
+tree-sitter-highlight = { version = "0.26", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-ruby = { version = "0.23", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+# Render-only ratatui widget bridge (issue #470). `ratatui-core` carries the
+# `Widget` trait and `Buffer`/`Rect`/`Style` types without any backend, so no
+# second crossterm is pulled. Pinned to the ratatui 0.30 line (core 0.1.x).
+ratatui-core = { version = "0.1.2", optional = true, default-features = false, features = ["underline-color"] }
+
+# Unix job-control suspend/resume (Ctrl+Z / `fg`). Safe API only — used to
+# restore the terminal before SIGTSTP stops the process and re-enter it on
+# SIGCONT, preserving `#![forbid(unsafe_code)]` (issue #263). Target-gated so
+# non-unix builds (Windows/WASM) never pull it.
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.3", optional = true }
+rustix = { version = "1", features = ["fs", "stdio", "termios"], optional = true }
+mio = { version = "1", features = ["os-poll", "os-ext"], optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+web-time = "1.1"
+
+[features]
+crossterm = ["dep:crossterm", "dep:signal-hook", "dep:rustix", "dep:mio"]
+bidi = ["dep:unicode-bidi"]
+default = ["crossterm", "bidi"]
+async = ["dep:tokio", "crossterm"]
+serde = ["dep:serde", "dep:toml"]
+theme-watch = ["serde", "dep:notify"]
+image = ["dep:image"]
+qrcode = ["dep:qrcode"]
+syntax-rust = ["dep:tree-sitter-highlight", "dep:tree-sitter-rust"]
+syntax-python = ["dep:tree-sitter-highlight", "dep:tree-sitter-python"]
+syntax-javascript = ["dep:tree-sitter-highlight", "dep:tree-sitter-javascript"]
+syntax-go = ["dep:tree-sitter-highlight", "dep:tree-sitter-go"]
+syntax-bash = ["dep:tree-sitter-highlight", "dep:tree-sitter-bash"]
+syntax-json = ["dep:tree-sitter-highlight", "dep:tree-sitter-json"]
+syntax-toml = ["dep:tree-sitter-highlight", "dep:tree-sitter-toml-ng"]
+syntax-c = ["dep:tree-sitter-highlight", "dep:tree-sitter-c"]
+syntax-cpp = ["dep:tree-sitter-highlight", "dep:tree-sitter-cpp", "dep:tree-sitter-c"]
+syntax-typescript = [
+    "dep:tree-sitter-highlight",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+]
+syntax-java = ["dep:tree-sitter-highlight", "dep:tree-sitter-java"]
+syntax-ruby = ["dep:tree-sitter-highlight", "dep:tree-sitter-ruby"]
+syntax-css = ["dep:tree-sitter-highlight", "dep:tree-sitter-css"]
+syntax-html = ["dep:tree-sitter-highlight", "dep:tree-sitter-html"]
+syntax-yaml = ["dep:tree-sitter-highlight", "dep:tree-sitter-yaml"]
+syntax = [
+    "syntax-rust",
+    "syntax-python",
+    "syntax-javascript",
+    "syntax-typescript",
+    "syntax-go",
+    "syntax-bash",
+    "syntax-json",
+    "syntax-toml",
+    "syntax-c",
+    "syntax-cpp",
+    "syntax-java",
+    "syntax-ruby",
+    "syntax-css",
+    "syntax-html",
+    "syntax-yaml",
+]
+kitty-compress = ["dep:flate2"]
+# Dev-only test harness (issue #274): exposes `PtyBackend`/`PtyFrame`, which
+# drive the real `Terminal` flush pipeline into an in-process byte sink for
+# end-to-end escape-code / image-protocol assertions. Off by default; pulls
+# `crossterm` for the SGR/queue! emitters. Not part of `full`.
+pty-test = ["crossterm"]
+# Render ratatui-core `Widget`s inside SLT containers (issue #470). Opt-in and
+# deliberately NOT part of `full`, so default/full dependency trees stay
+# unchanged.
+ratatui = ["dep:ratatui-core"]
+full = ["crossterm", "async", "serde", "theme-watch", "image", "qrcode", "kitty-compress", "bidi"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+
+[package.metadata.t3oxide-vendor]
+upstream-commit = "d4537d74f4b42188e06cb224fbfe7684397897fb"
+patch = "ordered-activation-v1"
+modified-files = ["src/runtime/config.rs", "src/runtime/kernel.rs", "src/runtime/frame_state.rs"]

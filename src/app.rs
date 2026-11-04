@@ -1549,7 +1549,26 @@ impl App {
                 "An action in this lane is awaiting acknowledgement"
             );
         }
-        if let Err(error) = self.state.save_pending(&env.environment_id, stop, record) {
+        let submitted_version = self.draft_version;
+        let saved = if op == "send" && retry.is_none() {
+            // Hold the autosave cache lock across the durable handoff so an old
+            // save cannot resurrect submitted text as the next draft.
+            let key = format!("{}/{}", env.environment_id, string(&fields, "threadId"));
+            let mut cache = self.draft_cache.lock().unwrap();
+            let saved = self
+                .state
+                .save_send_detaching_draft(&env.environment_id, record);
+            if saved.is_ok() {
+                self.draft_version = self.draft_version.saturating_add(1);
+                cache.insert(key, (self.draft_version, String::new()));
+                self.composer = ui::editor("", &self.theme, "Write a message…");
+                self.save_at = None;
+            }
+            saved
+        } else {
+            self.state.save_pending(&env.environment_id, stop, record)
+        };
+        if let Err(error) = saved {
             self.in_flight.lock().unwrap().remove(&lane);
             return Err(error);
         }
@@ -1579,15 +1598,7 @@ impl App {
             generation: self.generation,
             profile,
             draft_version: if op == "send" && retry.is_none() {
-                self.draft_cache
-                    .lock()
-                    .unwrap()
-                    .get(&format!(
-                        "{}/{}",
-                        env.environment_id,
-                        string(&fields, "threadId")
-                    ))
-                    .map(|(v, _)| *v)
+                Some(submitted_version)
             } else {
                 None
             },

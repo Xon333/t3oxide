@@ -24,7 +24,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 shell-words = "1.1"
-slt = { package = "superlighttui", git = "https://github.com/subinium/SuperLightTUI", rev = "d4537d74f4b42188e06cb224fbfe7684397897fb", version = "=0.26.0", features = ["async"] }
+slt = { package = "superlighttui", path = "vendor/superlighttui", version = "=0.26.0", features = ["async"] }
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 tempfile = "3.23"
 termiflow = { git = "https://github.com/dnvt/termiflow", rev = "cdd62fe1717aad26fe53ca1b0ad07454aa4f0e76", version = "=0.2.9" }

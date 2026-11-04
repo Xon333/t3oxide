@@ -1,0 +1,576 @@
+//! Chart rendering entry point: turns a [`ChartConfig`] into styled rows of
+//! axis labels, plot cells and legend.
+
+use super::*;
+#[cfg(test)]
+use unicode_width::UnicodeWidthStr;
+
+/// Render a chart into styled row segments.
+pub(crate) fn render_chart(config: &ChartConfig) -> Vec<ChartRow> {
+    let width = config.width as usize;
+    let height = config.height as usize;
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let frame_style = config.x_axis.style;
+    let dim_style = Style::new().fg(Color::Indexed(238));
+    let axis_style = config.y_axis.style;
+    let title_style = Style::new()
+        .bold()
+        .fg(config.x_axis.style.fg.unwrap_or(Color::White));
+    let title_style = config.title_style.unwrap_or(title_style);
+
+    let title_rows = usize::from(config.title.is_some());
+    let has_x_title = config.x_axis_visible && config.x_axis.title.is_some();
+    let x_title_rows = usize::from(has_x_title);
+    let frame_rows = if config.frame_visible { 2 } else { 0 };
+    let x_axis_rows = if config.x_axis_visible {
+        1 + x_title_rows
+    } else {
+        0
+    };
+
+    // Row budget: title + top_frame + plot + axis_line + x_labels + [x_title] + bottom_frame
+    //           = title_rows + 1 + plot_height + 1 + 1 + x_title_rows + 1
+    //           = title_rows + plot_height + 3 + x_title_rows
+    // Solve for plot_height:
+    let overhead = title_rows + frame_rows + x_axis_rows;
+    if height <= overhead || width < 3 {
+        return minimal_chart(config, width, frame_style, title_style);
+    }
+    let plot_height = height.saturating_sub(overhead).max(1);
+
+    let (x_min, x_max) = resolve_bounds(
+        config
+            .datasets
+            .iter()
+            .flat_map(|d| d.data.iter().map(|p| p.0)),
+        config.x_axis.bounds,
+    );
+    let (y_min, y_max) = resolve_bounds(
+        config
+            .datasets
+            .iter()
+            .flat_map(|d| d.data.iter().map(|p| p.1)),
+        config.y_axis.bounds,
+    );
+
+    let y_label_chars: Vec<char> = if config.y_axis_visible {
+        config
+            .y_axis
+            .title
+            .as_deref()
+            .and_then(|t| {
+                let chars: Vec<char> = t.chars().collect();
+                if chars.len() <= plot_height {
+                    Some(chars)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let y_label_col_width = if y_label_chars.is_empty() { 0 } else { 2 };
+
+    let legend_items = build_legend_items(&config.datasets);
+    let legend_on_right = matches!(
+        config.legend,
+        LegendPosition::TopRight | LegendPosition::BottomRight
+    );
+    // Each legend row is `"  X name"` (2 spaces, 1-cell symbol, 1 space, name).
+    const LEGEND_PREFIX_COLS: usize = 4;
+    let legend_width_uncapped = if legend_on_right && !legend_items.is_empty() {
+        legend_items
+            .iter()
+            .map(|(_, name, _)| LEGEND_PREFIX_COLS + crate::width::unicode_width(name.as_str()))
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let y_ticks = if let Some(ref manual) = config.y_axis.ticks {
+        let values: Vec<f64> = manual
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .collect();
+        if values.is_empty() {
+            build_tui_ticks(y_min, y_max, plot_height)
+        } else {
+            let step = values
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .find(|step| step.is_finite() && *step > 0.0)
+                .unwrap_or(1.0);
+            TickSpec { values, step }
+        }
+    } else {
+        build_tui_ticks(y_min, y_max, plot_height)
+    };
+    let y_min = y_ticks.values.first().copied().unwrap_or(y_min).min(y_min);
+    let y_max = y_ticks.values.last().copied().unwrap_or(y_max).max(y_max);
+
+    let use_manual_y_labels = config.y_axis.ticks.is_some() && config.y_axis.labels.is_some();
+    let y_tick_labels: Vec<String> = if use_manual_y_labels {
+        config
+            .y_axis
+            .labels
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .take(y_ticks.values.len())
+            .cloned()
+            .collect()
+    } else {
+        y_ticks
+            .values
+            .iter()
+            .map(|v| format_number(*v, y_ticks.step))
+            .collect()
+    };
+    let y_tick_width = y_tick_labels
+        .iter()
+        .map(|s| crate::width::unicode_width(s.as_str()))
+        .max()
+        .unwrap_or(1);
+    let y_axis_width = if config.y_axis_visible {
+        y_tick_width + 2
+    } else {
+        0
+    };
+
+    let inner_width = if config.frame_visible {
+        width.saturating_sub(2)
+    } else {
+        width
+    };
+    // Cap the legend so it never starves the plot. Reserve at least
+    // `MIN_PLOT_COLS` for the plot itself; if the leftover budget is smaller
+    // than `LEGEND_PREFIX_COLS + 1` we drop the legend entirely (a label of 0
+    // cells would render as just the colored prefix and confuse readers).
+    const MIN_PLOT_COLS: usize = 4;
+    let legend_budget = inner_width
+        .saturating_sub(y_label_col_width)
+        .saturating_sub(y_axis_width)
+        .saturating_sub(MIN_PLOT_COLS);
+    let legend_width = if legend_on_right && legend_budget > LEGEND_PREFIX_COLS {
+        legend_width_uncapped.min(legend_budget)
+    } else {
+        0
+    };
+    let plot_width = inner_width
+        .saturating_sub(y_label_col_width)
+        .saturating_sub(y_axis_width)
+        .saturating_sub(legend_width)
+        .max(1);
+    let content_width = y_label_col_width + y_axis_width + plot_width + legend_width;
+
+    let x_ticks = if let Some(ref manual) = config.x_axis.ticks {
+        let values: Vec<f64> = manual
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .collect();
+        if values.is_empty() {
+            build_tui_ticks(x_min, x_max, plot_width)
+        } else {
+            let step = values
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .find(|step| step.is_finite() && *step > 0.0)
+                .unwrap_or(1.0);
+            TickSpec { values, step }
+        }
+    } else {
+        build_tui_ticks(x_min, x_max, plot_width)
+    };
+    let x_min = x_ticks.values.first().copied().unwrap_or(x_min).min(x_min);
+    let x_max = x_ticks.values.last().copied().unwrap_or(x_max).max(x_max);
+
+    let mut plot_chars: Vec<char> = vec![' '; plot_width * plot_height];
+    let mut plot_styles: Vec<Style> = vec![Style::new(); plot_width * plot_height];
+
+    apply_grid(
+        config,
+        GridSpec {
+            x_ticks: &x_ticks.values,
+            y_ticks: &y_ticks.values,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        },
+        &mut plot_chars,
+        &mut plot_styles,
+        plot_width,
+        plot_height,
+        config.grid_style.unwrap_or(dim_style),
+    );
+
+    for &(y_val, ref style) in &config.hlines {
+        if !y_val.is_finite() {
+            continue;
+        }
+        let row = map_value_to_cell(y_val, y_min, y_max, plot_height, true);
+        if row < plot_height {
+            for col in 0..plot_width {
+                let idx = row * plot_width + col;
+                plot_chars[idx] = '─';
+                plot_styles[idx] = *style;
+            }
+        }
+    }
+    for &(x_val, ref style) in &config.vlines {
+        if !x_val.is_finite() {
+            continue;
+        }
+        let col = map_value_to_cell(x_val, x_min, x_max, plot_width, false);
+        if col < plot_width {
+            for row in 0..plot_height {
+                let idx = row * plot_width + col;
+                if plot_chars[idx] == ' ' || plot_chars[idx] == '·' {
+                    plot_chars[idx] = '│';
+                    plot_styles[idx] = *style;
+                }
+            }
+        }
+    }
+
+    for dataset in &config.datasets {
+        match dataset.graph_type {
+            GraphType::Line | GraphType::Area | GraphType::Scatter => {
+                draw_braille_dataset(
+                    dataset,
+                    x_min,
+                    x_max,
+                    y_min,
+                    y_max,
+                    &mut plot_chars,
+                    &mut plot_styles,
+                    plot_width,
+                    plot_height,
+                );
+            }
+            GraphType::Bar => {
+                draw_bar_dataset(
+                    dataset,
+                    x_min,
+                    x_max,
+                    y_min,
+                    y_max,
+                    &mut plot_chars,
+                    &mut plot_styles,
+                    plot_width,
+                    plot_height,
+                );
+            }
+        }
+    }
+
+    let y_tick_rows = build_y_tick_row_map(
+        &y_ticks.values,
+        if use_manual_y_labels {
+            config.y_axis.labels.as_deref()
+        } else {
+            None
+        },
+        y_min,
+        y_max,
+        plot_height,
+    );
+    let x_tick_cols = build_x_tick_col_map(
+        &x_ticks.values,
+        config.x_axis.labels.as_deref(),
+        config.x_axis.ticks.is_some() && config.x_axis.labels.is_some(),
+        x_min,
+        x_max,
+        plot_width,
+    );
+
+    let mut rows: Vec<ChartRow> = Vec::with_capacity(height);
+
+    // --- Title row ---
+    if let Some(title) = &config.title {
+        rows.push(ChartRow {
+            segments: vec![(center_text(title, width), title_style)],
+        });
+    }
+
+    if config.frame_visible {
+        rows.push(ChartRow {
+            segments: vec![(format!("┌{}┐", "─".repeat(content_width)), frame_style)],
+        });
+    }
+
+    let y_label_start = if y_label_chars.is_empty() {
+        0
+    } else {
+        plot_height.saturating_sub(y_label_chars.len()) / 2
+    };
+    let y_title_style = config.y_axis.title_style.unwrap_or(axis_style);
+
+    let zero_label = format_number(0.0, y_ticks.step);
+    for row in 0..plot_height {
+        let mut segments: Vec<(String, Style)> = Vec::new();
+        if config.frame_visible {
+            segments.push(("│".to_string(), frame_style));
+        }
+
+        if config.y_axis_visible {
+            if y_label_col_width > 0 {
+                let label_idx = row.wrapping_sub(y_label_start);
+                if label_idx < y_label_chars.len() {
+                    segments.push((format!("{} ", y_label_chars[label_idx]), y_title_style));
+                } else {
+                    segments.push(("  ".to_string(), Style::new()));
+                }
+            }
+
+            let (label, divider) =
+                if let Some(index) = y_tick_rows.iter().position(|(r, _)| *r == row) {
+                    let is_zero = y_tick_rows[index].1 == zero_label;
+                    (
+                        y_tick_rows[index].1.clone(),
+                        if is_zero { '┼' } else { '┤' },
+                    )
+                } else {
+                    (String::new(), '│')
+                };
+            let label_width = crate::width::unicode_width(label.as_str());
+            let padded = format!(
+                "{}{}",
+                " ".repeat(y_tick_width.saturating_sub(label_width)),
+                label
+            );
+            segments.push((padded, axis_style));
+            segments.push((format!("{divider} "), axis_style));
+        }
+
+        let mut current_style = Style::new();
+        let mut buffer = String::new();
+        let legend_start = match config.legend {
+            LegendPosition::TopLeft => Some(0),
+            LegendPosition::BottomLeft => Some(plot_height.saturating_sub(legend_items.len())),
+            _ => None,
+        };
+        let legend_cells = legend_start
+            .and_then(|start| row.checked_sub(start))
+            .and_then(|index| legend_items.get(index))
+            .map(|item| {
+                let range = row * plot_width..(row + 1) * plot_width;
+                overlay_legend_row(item, plot_width, &mut plot_styles[range], axis_style)
+            });
+        for col in 0..plot_width {
+            let idx = row * plot_width + col;
+            let style = plot_styles[idx];
+            if col == 0 {
+                current_style = style;
+            }
+            if style != current_style {
+                if !buffer.is_empty() {
+                    segments.push((buffer.clone(), current_style));
+                    buffer.clear();
+                }
+                current_style = style;
+            }
+            if let Some(cell) = legend_cells.as_ref().and_then(|cells| cells.get(col)) {
+                buffer.push_str(cell);
+            } else {
+                buffer.push(plot_chars[idx]);
+            }
+        }
+        if !buffer.is_empty() {
+            segments.push((buffer, current_style));
+        }
+
+        if legend_on_right && legend_width > 0 {
+            let legend_row = match config.legend {
+                LegendPosition::TopRight => row,
+                LegendPosition::BottomRight => {
+                    row.wrapping_add(legend_items.len().saturating_sub(plot_height))
+                }
+                _ => usize::MAX,
+            };
+            if let Some((symbol, name, color)) = legend_items.get(legend_row) {
+                let name_budget = legend_width.saturating_sub(LEGEND_PREFIX_COLS);
+                let display_name = truncate_label(name, name_budget);
+                let raw = format!("  {symbol} {display_name}");
+                let raw_w = crate::width::unicode_width(raw.as_str());
+                let pad = legend_width.saturating_sub(raw_w);
+                let text = format!("{raw}{}", " ".repeat(pad));
+                segments.push((text, Style::new().fg(*color)));
+            } else {
+                segments.push((" ".repeat(legend_width), Style::new()));
+            }
+        }
+
+        if config.frame_visible {
+            segments.push(("│".to_string(), frame_style));
+        }
+        rows.push(ChartRow { segments });
+    }
+
+    if config.x_axis_visible {
+        let footer_legend_pad = " ".repeat(legend_width);
+        let footer_ylabel_pad = if config.y_axis_visible {
+            " ".repeat(y_label_col_width)
+        } else {
+            String::new()
+        };
+
+        let mut x_label_line: Vec<String> = vec![" ".to_string(); plot_width];
+        let mut occupied_until: usize = 0;
+        // Reserve the final endpoint before accepting interior labels. Dropping
+        // an overlapping label is preferable to hiding the range's upper bound.
+        let final_start = x_tick_cols.last().and_then(|(col, label)| {
+            let width = crate::width::unicode_width(label.as_str());
+            (width > 0 && width <= plot_width)
+                .then(|| col.saturating_sub(width / 2).min(plot_width - width))
+        });
+        for (index, (col, label)) in x_tick_cols.iter().enumerate() {
+            if label.is_empty() {
+                continue;
+            }
+            let label_width = crate::width::unicode_width(label.as_str());
+            if label_width > plot_width {
+                continue;
+            }
+            let start = col
+                .saturating_sub(label_width / 2)
+                .min(plot_width.saturating_sub(label_width));
+            if start < occupied_until
+                || (index + 1 < x_tick_cols.len()
+                    && final_start.is_some_and(|end| start + label_width + 1 > end))
+            {
+                continue;
+            }
+            write_text_cells(&mut x_label_line, start, label);
+            occupied_until = start + label_width + 1;
+        }
+
+        let mut x_label_segments: Vec<(String, Style)> = Vec::new();
+        if config.frame_visible {
+            x_label_segments.push(("│".to_string(), frame_style));
+        }
+        if config.y_axis_visible {
+            x_label_segments.push((footer_ylabel_pad.clone(), Style::new()));
+            x_label_segments.push((" ".repeat(y_axis_width), Style::new()));
+        }
+        x_label_segments.push((x_label_line.concat(), axis_style));
+        x_label_segments.push((footer_legend_pad.clone(), Style::new()));
+        if config.frame_visible {
+            x_label_segments.push(("│".to_string(), frame_style));
+        }
+        rows.push(ChartRow {
+            segments: x_label_segments,
+        });
+
+        if has_x_title {
+            let x_title_text = config.x_axis.title.as_deref().unwrap_or_default();
+            let x_title = center_text(x_title_text, plot_width);
+            let x_title_style = config.x_axis.title_style.unwrap_or(axis_style);
+            let mut x_title_segments: Vec<(String, Style)> = Vec::new();
+            if config.frame_visible {
+                x_title_segments.push(("│".to_string(), frame_style));
+            }
+            if config.y_axis_visible {
+                x_title_segments.push((footer_ylabel_pad, Style::new()));
+                x_title_segments.push((" ".repeat(y_axis_width), Style::new()));
+            }
+            x_title_segments.push((x_title, x_title_style));
+            x_title_segments.push((footer_legend_pad, Style::new()));
+            if config.frame_visible {
+                x_title_segments.push(("│".to_string(), frame_style));
+            }
+            rows.push(ChartRow {
+                segments: x_title_segments,
+            });
+        }
+    }
+
+    if config.frame_visible {
+        rows.push(ChartRow {
+            segments: vec![(format!("└{}┘", "─".repeat(content_width)), frame_style)],
+        });
+    }
+
+    rows
+}
+
+fn minimal_chart(
+    config: &ChartConfig,
+    width: usize,
+    frame_style: Style,
+    title_style: Style,
+) -> Vec<ChartRow> {
+    let mut rows = Vec::new();
+    if let Some(title) = &config.title {
+        rows.push(ChartRow {
+            segments: vec![(center_text(title, width), title_style)],
+        });
+    }
+    if config.frame_visible {
+        let inner = width.saturating_sub(2);
+        rows.push(ChartRow {
+            segments: vec![(format!("┌{}┐", "─".repeat(inner)), frame_style)],
+        });
+        rows.push(ChartRow {
+            segments: vec![(format!("│{}│", " ".repeat(inner)), frame_style)],
+        });
+        rows.push(ChartRow {
+            segments: vec![(format!("└{}┘", "─".repeat(inner)), frame_style)],
+        });
+    } else {
+        rows.push(ChartRow {
+            segments: vec![(" ".repeat(width), Style::new())],
+        });
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cjk_and_combining_x_tick_labels_preserve_cell_width() {
+        let axis_style = Style::new().fg(Color::White);
+        let mut builder = ChartBuilder::new(24, 8, axis_style, axis_style);
+        builder.line(&[(0.0, 0.0), (1.0, 1.0)]).label("series");
+        builder
+            .xtick_labels(&[0.0, 0.5, 1.0], &["시작", "e\u{301}", "끝"])
+            .legend(LegendPosition::None);
+        let rows = render_chart(&builder.build());
+        let rendered: Vec<String> = rows
+            .iter()
+            .map(|row| row.segments.iter().map(|(text, _)| text.as_str()).collect())
+            .collect();
+
+        let labels = rendered
+            .iter()
+            .find(|line| line.contains("시작") && line.contains("끝"))
+            .expect("x tick label row");
+        assert_eq!(UnicodeWidthStr::width(labels.as_str()), 24);
+        assert!(labels.contains("e\u{301}"));
+    }
+
+    #[test]
+    fn non_finite_manual_ticks_do_not_escape_rendering() {
+        let axis_style = Style::new().fg(Color::White);
+        let mut builder = ChartBuilder::new(20, 7, axis_style, axis_style);
+        builder.line(&[(0.0, 0.0), (1.0, 1.0)]);
+        builder
+            .xticks(&[f64::NAN, 0.0, f64::INFINITY, 1.0])
+            .yticks(&[f64::NEG_INFINITY, 0.0, 1.0]);
+        let text: String = render_chart(&builder.build())
+            .iter()
+            .flat_map(|row| row.segments.iter().map(|(text, _)| text.as_str()))
+            .collect();
+        assert!(!text.contains("NaN"));
+        assert!(!text.contains("inf"));
+    }
+}

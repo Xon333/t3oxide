@@ -1,7 +1,7 @@
 t3oxide Rust dependency notices
 This inventory covers the complete Cargo.lock graph, including build and
 platform-specific dependencies. A particular binary links only its enabled
-target graph. Upstream files are used unmodified. Source archives are
+target graph. Vendored modifications are identified per package. Source archives are
 available from the exact URLs below, with Cargo.lock SHA-256 checksums
 for registry archives and exact commits for Git sources.
 
@@ -37275,6 +37275,8 @@ SOFTWARE.
 superlighttui 0.26.0
 License: MIT
 Source: https://github.com/subinium/SuperLightTUI/archive/d4537d74f4b42188e06cb224fbfe7684397897fb.tar.gz
+Vendored: vendor/superlighttui
+Patch: ordered-activation-v1 (see UPSTREAM.md)
 
 --- LICENSE ---
 MIT License

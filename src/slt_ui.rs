@@ -158,6 +158,7 @@ pub fn draw(
         state.command_escape = None;
         state.command_open = false;
         ctx.focus_by_name("composer");
+        ctx.request_frame();
     }
     sync_editor(&mut state.composer, composer);
     let width = ctx.width();
@@ -324,8 +325,12 @@ fn draw_navigator(
 ) {
     let width = if ctx.width() >= 100 { 36 } else { 27 };
     ctx.container().w(width).border(Border::Rounded).col(|ctx| {
+        let compact = width < 36;
         ctx.row(|ctx| {
             for (lane, label) in [("Open", "Unread"), ("Running", "Running"), ("Pins", "Pins")] {
+                if compact && lane == "Pins" {
+                    continue;
+                }
                 let variant = if view.lane == lane {
                     ButtonVariant::Primary
                 } else {
@@ -337,9 +342,23 @@ fn draw_navigator(
             }
         });
         ctx.row(|ctx| {
+            if compact
+                && ctx
+                    .button("Pins")
+                    .variant(if view.lane == "Pins" {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Default
+                    })
+                    .clicked
+            {
+                actions.push(Action::Lane("Pins".into()));
+            }
             if ctx.button("Settled").clicked {
                 actions.push(Action::Lane("Settled".into()));
             }
+        });
+        ctx.row(|ctx| {
             if ctx.button("Project").clicked {
                 actions.push(Action::Command("project".into()));
             }
@@ -363,7 +382,7 @@ fn draw_navigator(
         ctx.register_focusable_named("navigator");
         let response = ctx.virtual_list_variable(
             &mut state.navigator,
-            height.saturating_sub(11).max(3),
+            height.saturating_sub(12).max(3),
             |ctx, index| {
                 let row = &view.rows[index];
                 let attention = matches!(
@@ -585,6 +604,9 @@ fn draw_composer(
             let available = ctx.width().saturating_sub(8).max(10);
             state.composer.wrap_width = Some(available);
             let focused = ctx.register_focusable_named("composer");
+            let typed_slash = ctx.key_presses_when(focused).any(|(_, key)| {
+                key.code == KeyCode::Char('/') && key.modifiers == KeyModifiers::NONE
+            });
             composer_keys(ctx, focused, state, actions);
             if ctx
                 .textarea(&mut state.composer, if height < 24 { 3 } else { 5 })
@@ -592,6 +614,10 @@ fn draw_composer(
             {
                 *legacy = ui::editor(&state.composer.value(), &view.theme, "Write a message…");
                 state.command_selected = 0;
+                if typed_slash && state.composer.value().starts_with('/') {
+                    state.command_open = true;
+                    state.command_escape = None;
+                }
                 actions.push(Action::DraftChanged);
             }
             let indices = if state.command_open {
@@ -623,14 +649,22 @@ fn draw_composer(
                     }
                 }
             }
+            let compact = ctx.width() < 110 || state.show_context;
+            if compact {
+                ctx.text("↵ newline · Ctrl↵ / Ctrl+] send").dim();
+            }
             ctx.row(|ctx| {
                 if ctx.button("Model · effort").clicked {
                     actions.push(Action::Command("model".into()));
                 }
-                ctx.text("↵ newline · ⌘↵ / Ctrl+] send")
-                    .dim()
-                    .truncate()
-                    .grow(1);
+                if compact {
+                    ctx.spacer();
+                } else {
+                    ctx.text("↵ newline · Ctrl↵ / Ctrl+] send")
+                        .dim()
+                        .truncate()
+                        .grow(1);
+                }
                 if ctx.button("Stop").clicked {
                     actions.push(Action::Stop);
                 }
@@ -643,6 +677,8 @@ fn draw_composer(
                     .clicked
                 {
                     actions.push(Action::Send);
+                    ctx.focus_by_name("composer");
+                    ctx.request_frame();
                 }
             });
         });
@@ -946,6 +982,7 @@ fn draw_modal(
     let layout_changed = state.modal_stamp != Some(modal.action_stamp);
     if layout_changed {
         state.modal_selected = modal.selected;
+        ctx.request_frame();
     }
     let palette = modal.editor && modal.title == "Commands";
     ctx.modal(|ctx| {
@@ -1249,6 +1286,166 @@ fn identity_color(identity: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_open_requests_layout_and_focus_before_typing() {
+        let mut backend = slt::TestBackend::new(140, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/thread".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor("draft", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        let modal = ui::Modal {
+            title: "Commands".into(),
+            editor: true,
+            action_stamp: 1,
+            ..ui::Modal::default()
+        };
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+            });
+        }
+        backend.run_with_events(slt::EventBuilder::new().paste("command").build(), |ctx| {
+            draw(
+                ctx,
+                &view,
+                &mut editor,
+                &mut modal_editor,
+                Some(&modal),
+                &mut state,
+            );
+        });
+        assert_eq!(modal_editor.lines().join("\n"), "command");
+    }
+
+    #[test]
+    fn focused_composer_selects_and_consumes_copy_without_an_app_action() {
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+            let mut backend = slt::TestBackend::new(86, 31);
+            let mut state = SurfaceState::new();
+            state.active_key = "env/thread".into();
+            let view = ui::View::default();
+            let mut editor = ui::editor("café 日本語\nnext line", "violet", "");
+            let mut modal_editor = ui::editor("", "violet", "");
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                });
+            }
+            let mut actions = Vec::new();
+            backend.run_with_events(
+                slt::EventBuilder::new()
+                    .key_with(KeyCode::Char('c'), modifiers)
+                    .build(),
+                |ctx| {
+                    actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    assert!(
+                        ctx.key_mod('c', modifiers),
+                        "no selection leaves copy unclaimed"
+                    );
+                },
+            );
+            assert!(state.composer.selected_text().is_none());
+            assert!(actions.is_empty());
+            backend.run_with_events(
+                slt::EventBuilder::new()
+                    .key_with(KeyCode::Char('a'), modifiers)
+                    .key_with(KeyCode::Char('c'), modifiers)
+                    .build(),
+                |ctx| {
+                    actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    assert!(!ctx.key_mod('a', modifiers));
+                    assert!(
+                        !ctx.key_mod('c', modifiers),
+                        "selected focused editor owns copy"
+                    );
+                },
+            );
+            assert_eq!(
+                state.composer.selected_text().as_deref(),
+                Some("café 日本語\nnext line")
+            );
+            assert_eq!(editor.lines().join("\n"), "café 日本語\nnext line");
+            assert!(actions.is_empty());
+            backend.render(|ctx| {
+                ctx.focus_by_name("navigator");
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+            backend.run_with_events(
+                slt::EventBuilder::new()
+                    .key_with(KeyCode::Char('c'), modifiers)
+                    .build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    assert!(
+                        ctx.key_mod('c', modifiers),
+                        "an unfocused selection cannot claim copy"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn compact_and_normal_controls_are_visible_and_addressable() {
+        for (width, height) in [(86, 31), (140, 38)] {
+            let mut backend = slt::TestBackend::new(width, height);
+            let mut state = SurfaceState::new();
+            state.active_key = "env/thread".into();
+            let view = ui::View::default();
+            let mut editor = ui::editor("retained draft", "violet", "");
+            let mut modal_editor = ui::editor("", "violet", "");
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                });
+            }
+            for label in [
+                "Unread",
+                "Running",
+                "Pins",
+                "Settled",
+                "Project",
+                "Env",
+                "Model · effort",
+                "Ctrl+] send",
+                "Stop",
+                "Send",
+            ] {
+                backend.assert_contains(label);
+            }
+            let (x, y) = backend
+                .find_text("Env")
+                .expect("environment control visible");
+            let mut actions = Vec::new();
+            backend.run_with_events(slt::EventBuilder::new().click(x, y).build(), |ctx| {
+                actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+            assert!(actions.iter().any(
+                |action| matches!(action, Action::Command(command) if command == "environments")
+            ));
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            assert_eq!(editor.lines().join("\n"), "retained draft");
+        }
+    }
 
     #[test]
     fn source_qualified_jump_uses_full_slt_measurements_after_layout_and_resize() {

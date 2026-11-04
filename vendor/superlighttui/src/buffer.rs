@@ -1,0 +1,3714 @@
+//! Double-buffer grid of [`Cell`]s with clip-stack support.
+//!
+//! Two buffers are maintained per frame (current and previous). Only the diff
+//! is flushed to the terminal, giving immediate-mode ergonomics with
+//! retained-mode efficiency.
+
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use crate::cell::{
+    Cell, char_display_width, display_width, is_printable_ascii, is_printable_ascii_byte,
+    normalize_cell_symbol, normalize_grapheme, sanitize_cell_char, standalone_scalar,
+};
+use crate::rect::Rect;
+use crate::style::Style;
+use crate::width::UnicodeSegmentation;
+
+/// Maximum cells allocated by one [`Buffer`].
+///
+/// At the current 64-byte `Cell` budget this limits one grid to 64 MiB and a
+/// terminal's current/previous pair to 128 MiB, before small row metadata.
+pub const MAX_BUFFER_CELLS: usize = 1_048_576;
+/// Maximum row metadata entries allocated by one [`Buffer`].
+pub const MAX_BUFFER_ROWS: usize = MAX_BUFFER_CELLS;
+
+/// Error returned by checked buffer construction and resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferError {
+    /// The rectangle's exclusive right or bottom edge is not representable.
+    InvalidEdges,
+    /// The rectangle exceeds [`MAX_BUFFER_CELLS`].
+    CellBudgetExceeded {
+        /// Number of cells requested by the rectangle.
+        requested: u64,
+        /// Maximum cells allowed in one buffer.
+        maximum: usize,
+    },
+    /// The height exceeds [`MAX_BUFFER_ROWS`] even when cell area is zero.
+    RowBudgetExceeded {
+        /// Number of rows requested by the rectangle.
+        requested: u32,
+        /// Maximum rows allowed in one buffer.
+        maximum: usize,
+    },
+    /// The allocator rejected a bounded allocation request.
+    AllocationFailed,
+}
+
+impl fmt::Display for BufferError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidEdges => write!(f, "buffer rectangle edges overflow u32 coordinates"),
+            Self::CellBudgetExceeded { requested, maximum } => write!(
+                f,
+                "buffer requires {requested} cells, exceeding the {maximum}-cell budget"
+            ),
+            Self::RowBudgetExceeded { requested, maximum } => write!(
+                f,
+                "buffer requires {requested} rows, exceeding the {maximum}-row budget"
+            ),
+            Self::AllocationFailed => write!(f, "buffer allocation failed within the cell budget"),
+        }
+    }
+}
+
+impl std::error::Error for BufferError {}
+
+/// Hard cap on pixel count processed by image decode/encode paths.
+///
+/// 16_777_216 ≈ 4096×4096 — well above any sane terminal image payload,
+/// but guards 32-bit targets (WASM) from overflow and prevents a
+/// hostile `width`/`height` pair from triggering multi-GiB allocations.
+pub(crate) const MAX_IMAGE_PIXELS: u64 = 16_777_216;
+
+/// Returns `true` if `s` contains any codepoint that can trigger
+/// right-to-left or explicit bidirectional reordering under the Unicode
+/// Bidirectional Algorithm (UAX #9).
+///
+/// Pure-LTR strings (ASCII, Latin, CJK, …) return `false` and take the
+/// zero-allocation fast path in [`Buffer::set_string`]: no `String` is
+/// allocated and `unicode-bidi` is never invoked. Only strings that carry
+/// Hebrew, Arabic, Syriac, Thaana, Arabic presentation forms, or the
+/// explicit bidi control characters (RLM/LRM, RLE/LRE, RLO/LRO, PDF,
+/// RLI/LRI/FSI/PDI) need the full reorder pass.
+///
+/// This is intentionally a cheap, conservative character-class scan rather
+/// than a full UAX #9 resolution: a `true` here only *gates* the (possibly
+/// no-op) reorder, so over-inclusion costs at worst one extra reorder call,
+/// never incorrect output. Under-inclusion would silently mirror RTL text,
+/// so the ranges err toward inclusion.
+#[cfg(feature = "bidi")]
+#[inline]
+pub(crate) fn needs_bidi_reorder(s: &str) -> bool {
+    use unicode_bidi::BidiClass::{AL, FSI, LRE, LRI, LRO, PDF, PDI, R, RLE, RLI, RLO};
+
+    // No ASCII code point has an R/AL class or is an explicit embedding,
+    // override or isolate control.
+    if s.is_ascii() {
+        return false;
+    }
+    s.chars().any(|ch| {
+        may_trigger_bidi(ch)
+            && matches!(
+                unicode_bidi::bidi_class(ch),
+                R | AL | RLE | RLO | RLI | LRE | LRO | LRI | FSI | PDI | PDF
+            )
+    })
+}
+
+/// Cheap prefilter for [`needs_bidi_reorder`]: `false` only for code points
+/// whose bidi class is never R, AL or an explicit embedding, override or
+/// isolate, so their binary-searched class lookup can be skipped.
+///
+/// Covers the text that dominates terminal UIs (ASCII, Latin, Greek,
+/// Cyrillic, general punctuation, box drawing, CJK, Hangul). An exhaustive
+/// test checks every scalar against `unicode_bidi::bidi_class`.
+#[cfg(feature = "bidi")]
+#[inline]
+fn may_trigger_bidi(ch: char) -> bool {
+    match ch as u32 {
+        // ASCII through Armenian.
+        0..=0x058F => false,
+        // General punctuation: only RLM, the embeddings/overrides and the
+        // isolates qualify.
+        0x2000..=0x206F => matches!(ch as u32, 0x200F | 0x202A..=0x202E | 0x2066..=0x2069),
+        // Letterlike symbols through CJK, Yi and Hangul syllables.
+        0x2070..=0xD7FF => false,
+        _ => true,
+    }
+}
+
+/// Reorder one logical-order line into visual (display) order per UAX #9.
+///
+/// The input is treated as a single paragraph (callers already split on
+/// `\n` upstream — see [`Buffer::set_string`]). The base paragraph
+/// direction is resolved from the first strong character (no override),
+/// matching default UAX #9 behavior. Returns the visually-ordered string.
+///
+/// Only ever called after [`needs_bidi_reorder`] returns `true`, so the
+/// `String` allocation here is incurred solely on the RTL path; pure-LTR
+/// input never reaches this function.
+#[cfg(feature = "bidi")]
+pub(crate) fn reorder_line_visual(s: &str) -> String {
+    use unicode_bidi::BidiInfo;
+    // No paragraph override: let the first strong char set base direction.
+    let info = BidiInfo::new(s, None);
+    let Some(para) = info.paragraphs.first() else {
+        return s.to_string();
+    };
+
+    // Reorder display atoms rather than scalar values. `unicode-bidi` exposes
+    // byte-indexed levels; sampling the resolved level at each grapheme start
+    // applies UAX #9 L2 while keeping combining and ZWJ sequences atomic.
+    let resolved = info.reordered_levels(para, para.range.clone());
+    let graphemes: Vec<(usize, &str)> = s.grapheme_indices(true).collect();
+    let levels: Vec<_> = graphemes.iter().map(|(byte, _)| resolved[*byte]).collect();
+    let visual_to_logical = BidiInfo::reorder_visual(&levels);
+    let mut reordered = String::with_capacity(s.len());
+    for logical in visual_to_logical {
+        reordered.push_str(graphemes[logical].1);
+    }
+    reordered
+}
+
+/// Structured Kitty graphics protocol image placement.
+///
+/// Stored separately from raw escape sequences so the terminal can manage
+/// image IDs, compression, and placement lifecycle. Images are deduplicated
+/// by `content_hash` — identical pixel data is uploaded only once.
+#[derive(Clone, Debug)]
+pub(crate) struct KittyPlacement {
+    /// Hash of the RGBA pixel data for dedup (avoids re-uploading).
+    pub content_hash: u64,
+    /// Reference-counted raw RGBA pixel data (shared across frames).
+    pub rgba: Arc<Vec<u8>>,
+    /// Source image width in pixels.
+    pub src_width: u32,
+    /// Source image height in pixels.
+    pub src_height: u32,
+    /// Screen cell position.
+    pub x: u32,
+    pub y: u32,
+    /// Cell columns/rows to display.
+    pub cols: u32,
+    pub rows: u32,
+    /// Source crop Y offset in pixels (for scroll clipping).
+    pub crop_y: u32,
+    /// Source crop height in pixels (0 = full height from crop_y).
+    pub crop_h: u32,
+}
+
+/// Per-cell coverage state of a [`SprixelPlacement`]'s footprint.
+///
+/// Borrowed from notcurses' sprixel damage model. Each owned cell records how a
+/// pixel graphic relates to the text cell beneath it, so the flush layer can
+/// decide whether a text write forces a re-blit of the whole graphic (issue
+/// #265). Sixel and iTerm2 (OSC 1337) graphics own a footprint of these cells;
+/// Kitty keeps its separate `KittyImageManager` lifecycle.
+///
+/// All four variants form the spec'd damage vocabulary (issue #265): the image
+/// entry points currently emit fully-`Opaque` footprints, while `Mixed` /
+/// `Transparent` are reserved for partial-coverage callers and `Annihilated`
+/// for the flush-time damage flip. The full set is exercised by the flush tests
+/// and is part of the matrix contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Mixed / Transparent / Annihilated are matched by the flush damage model but constructed only by tests until partial-coverage callers exist (#265)"
+    )
+)]
+pub(crate) enum SprixelCell {
+    /// Graphic fully covers the cell; a text write here forces a re-blit.
+    Opaque,
+    /// Graphic partially covers the cell; a text write here forces a re-blit.
+    Mixed,
+    /// No graphic ink in this cell; text is free and triggers no re-blit.
+    Transparent,
+    /// Text overwrote graphic ink in this cell this frame, so the owning
+    /// graphic is dirty and must be re-emitted.
+    Annihilated,
+}
+
+/// A non-Kitty pixel-graphic placement (Sixel or iTerm2 OSC 1337) tracked with
+/// a per-cell damage footprint.
+///
+/// Unlike a flat [`Buffer::raw_sequence`] entry, a sprixel records the cell
+/// footprint it covers so the flush layer can re-emit a graphic **only** when a
+/// text cell annihilates its ink or its `(x, y, content_hash)` changed, rather
+/// than re-blitting every stored sequence on any delta (issue #265).
+///
+/// `seq` / `cells` are read only by the `crossterm` flush layer
+/// (`flush_sprixels`).
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(feature = "crossterm"),
+    expect(
+        dead_code,
+        reason = "seq / cells are read only by the crossterm flush layer, which is compiled out"
+    )
+)]
+pub(crate) struct SprixelPlacement {
+    /// Hash of the source bytes for change detection across frames.
+    pub content_hash: u64,
+    /// Encoded passthrough payload (Sixel `DCS` or iTerm2 OSC 1337).
+    pub seq: Arc<str>,
+    /// Screen cell position of the top-left corner.
+    pub x: u32,
+    pub y: u32,
+    /// Cell columns/rows the graphic footprint covers.
+    pub cols: u32,
+    pub rows: u32,
+    /// Row-major per-cell coverage state; `cells.len() == (cols * rows)`.
+    pub cells: Vec<SprixelCell>,
+}
+
+impl PartialEq for SprixelPlacement {
+    fn eq(&self, other: &Self) -> bool {
+        // Equality drives the "did this placement change?" flush check. A
+        // re-blit is needed when position or content shifts; the per-cell
+        // damage matrix (`cells`) is recomputed each frame from the text diff
+        // and is deliberately excluded so two structurally identical
+        // placements compare equal regardless of transient annihilation state.
+        self.content_hash == other.content_hash
+            && self.x == other.x
+            && self.y == other.y
+            && self.cols == other.cols
+            && self.rows == other.rows
+    }
+}
+
+#[cfg(test)]
+mod buffer_contract_tests {
+    use super::*;
+
+    proptest::proptest! {
+        #[test]
+        fn distant_suffix_writes_are_noops(
+            origin_x in 0u32..1000,
+            origin_y in 0u32..1000,
+            width in 0u32..16,
+            height in 0u32..8,
+            distance in 1u32..=u32::MAX,
+        ) {
+            let area = Rect::new(origin_x, origin_y, width, height);
+            let mut buffer = Buffer::empty(area);
+            buffer.set_string(origin_x, origin_y, "ABCDEFGHIJKLMNOP", Style::new());
+            let before = buffer.content.clone();
+            buffer.set_char(area.right().saturating_add(distance), origin_y, '\u{301}', Style::new());
+            proptest::prop_assert_eq!(buffer.content, before);
+        }
+    }
+
+    #[test]
+    fn media_requires_full_visibility_and_uncropped_source() {
+        let mut buffer = Buffer::empty(Rect::new(3, 4, 10, 8));
+        let rect = Rect::new(4, 5, 4, 3);
+        assert!(buffer.media_rect_visible(rect));
+        assert!(!buffer.media_rect_visible(Rect::new(2, 5, 4, 3)));
+        assert!(!buffer.media_rect_visible(Rect::new(u32::MAX, 5, 4, 3)));
+        assert!(!buffer.media_rect_visible(Rect::default()));
+        buffer.push_clip(rect);
+        assert!(buffer.media_rect_visible(rect));
+        buffer.push_clip(Rect::new(5, 5, 3, 3));
+        assert!(!buffer.media_rect_visible(rect));
+        buffer.pop_clip();
+        buffer.push_kitty_clip(KittyClipInfo {
+            top_clip_rows: 1,
+            original_height: 4,
+        });
+        assert!(!buffer.media_rect_visible(rect));
+        buffer.pop_kitty_clip();
+        buffer.push_kitty_clip(KittyClipInfo {
+            top_clip_rows: 0,
+            original_height: 4,
+        });
+        assert!(!buffer.media_rect_visible(rect));
+        buffer.pop_kitty_clip();
+        buffer.push_kitty_horizontal_clip(KittyHorizontalClipInfo {
+            left_clip_cols: 1,
+            original_width: 5,
+        });
+        assert!(!buffer.media_rect_visible(rect));
+        buffer.pop_kitty_horizontal_clip();
+        buffer.push_kitty_horizontal_clip(KittyHorizontalClipInfo {
+            left_clip_cols: 0,
+            original_width: 5,
+        });
+        assert!(!buffer.media_rect_visible(rect));
+        buffer.pop_kitty_horizontal_clip();
+        assert!(buffer.media_rect_visible(rect));
+    }
+
+    #[test]
+    fn kitty_identity_includes_original_raster_shape() {
+        let placement = KittyPlacement {
+            content_hash: 1,
+            rgba: Arc::new(vec![0; 32]),
+            src_width: 4,
+            src_height: 2,
+            x: 0,
+            y: 0,
+            cols: 4,
+            rows: 2,
+            crop_y: 0,
+            crop_h: 0,
+        };
+        let mut other = placement.clone();
+        other.src_width = 2;
+        other.src_height = 4;
+        assert_ne!(placement, other);
+    }
+
+    #[test]
+    fn public_caret_getter_tracks_reset_without_consuming_it() {
+        let mut buffer = Buffer::empty(Rect::new(3, 4, 10, 8));
+        assert_eq!(buffer.cursor_position(), None);
+        buffer.set_cursor_pos(5, 6, false);
+        assert_eq!(buffer.cursor_position(), Some((5, 6)));
+        assert_eq!(buffer.cursor_position(), Some((5, 6)));
+        buffer.reset();
+        assert_eq!(buffer.cursor_position(), None);
+    }
+}
+
+/// FNV-1a 64-bit offset basis (the standard seed for the algorithm).
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+/// FNV-1a 64-bit prime multiplier.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// A tiny, allocation-free [`Hasher`] implementing the FNV-1a algorithm.
+///
+/// Used for RGBA content hashing ([`hash_rgba`]). Image equality is **not** a
+/// security boundary, so the crypto-strength SipHash that
+/// [`std::collections::hash_map::DefaultHasher`] uses is unnecessary tax in the
+/// per-frame flush loop. FNV-1a is a non-cryptographic hash with no DoS
+/// resistance, which is exactly the right trade-off here: it is faster, has no
+/// extra dependency, and is deterministic within (and across) process runs.
+/// The digest is never persisted, so cross-run stability is incidental, not
+/// relied upon.
+pub(crate) struct Fnv1a(u64);
+
+impl Default for Fnv1a {
+    #[inline]
+    fn default() -> Self {
+        Self(FNV_OFFSET_BASIS)
+    }
+}
+
+impl Hasher for Fnv1a {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = self.0;
+        for &byte in bytes {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        self.0 = hash;
+    }
+}
+
+/// Compute a content hash for RGBA pixel data.
+///
+/// Uses a non-cryptographic FNV-1a digest ([`Fnv1a`]) — image dedup is not a
+/// security boundary and the digest is never persisted.
+pub(crate) fn hash_rgba(data: &[u8]) -> u64 {
+    let mut hasher = Fnv1a::default();
+    data.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn crop_kitty_horizontal(placement: &mut KittyPlacement, info: KittyHorizontalClipInfo) -> bool {
+    if info.original_width == 0 || placement.src_width == 0 || placement.src_height == 0 {
+        return false;
+    }
+    let visible_start = info.left_clip_cols.min(info.original_width);
+    let visible_end = visible_start
+        .saturating_add(placement.cols)
+        .min(info.original_width);
+    if visible_start >= visible_end {
+        return false;
+    }
+
+    let source_width = u64::from(placement.src_width);
+    let original_width = u64::from(info.original_width);
+    let start_pixel = source_width.saturating_mul(u64::from(visible_start)) / original_width;
+    let scaled_end = source_width.saturating_mul(u64::from(visible_end));
+    let end_pixel = scaled_end
+        .saturating_add(original_width.saturating_sub(1))
+        .checked_div(original_width)
+        .unwrap_or(0)
+        .min(source_width);
+    let crop_width = end_pixel.saturating_sub(start_pixel);
+    if crop_width == 0 {
+        return false;
+    }
+    if start_pixel == 0 && crop_width == source_width {
+        return true;
+    }
+
+    let Some(source_stride) = usize::try_from(source_width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+    else {
+        return false;
+    };
+    let Some(crop_stride) = usize::try_from(crop_width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+    else {
+        return false;
+    };
+    let Some(expected_source) = source_stride.checked_mul(placement.src_height as usize) else {
+        return false;
+    };
+    if placement.rgba.len() < expected_source {
+        return false;
+    }
+    let Some(cropped_len) = crop_stride.checked_mul(placement.src_height as usize) else {
+        return false;
+    };
+    let mut cropped = Vec::new();
+    if cropped.try_reserve_exact(cropped_len).is_err() {
+        return false;
+    }
+    let start_byte = start_pixel as usize * 4;
+    for row in 0..placement.src_height as usize {
+        let row_start = row * source_stride + start_byte;
+        cropped.extend_from_slice(&placement.rgba[row_start..row_start + crop_stride]);
+    }
+
+    placement.src_width = crop_width as u32;
+    placement.content_hash = hash_rgba(&cropped);
+    placement.rgba = Arc::new(cropped);
+    true
+}
+
+impl PartialEq for KittyPlacement {
+    fn eq(&self, other: &Self) -> bool {
+        self.content_hash == other.content_hash
+            && self.src_width == other.src_width
+            && self.src_height == other.src_height
+            && self.x == other.x
+            && self.y == other.y
+            && self.cols == other.cols
+            && self.rows == other.rows
+            && self.crop_y == other.crop_y
+            && self.crop_h == other.crop_h
+    }
+}
+
+/// Scroll clip information applied to Kitty image placements emitted inside a
+/// raw-draw callback.
+///
+/// Stored on a stack so that nested raw-draw regions restore the outer clip
+/// info on pop, rather than silently clobbering it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KittyClipInfo {
+    /// Rows of the source region already scrolled off the top.
+    pub top_clip_rows: u32,
+    /// Original total row count of the scrollable content.
+    pub original_height: u32,
+}
+
+/// Horizontal source crop information for Kitty placements in a raw draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KittyHorizontalClipInfo {
+    /// Columns of the source region already clipped from the left.
+    pub left_clip_cols: u32,
+    /// Original total column count of the raw draw region.
+    pub original_width: u32,
+}
+
+/// A 2D grid of [`Cell`]s backing the terminal display.
+///
+/// Two buffers are kept (current + previous); only the diff is flushed to the
+/// terminal, giving immediate-mode ergonomics with retained-mode efficiency.
+///
+/// The buffer also maintains a clip stack. Push a [`Rect`] with
+/// [`Buffer::push_clip`] to restrict writes to that region, and pop it with
+/// [`Buffer::pop_clip`] when done.
+pub struct Buffer {
+    /// The area this buffer covers, in terminal coordinates.
+    pub area: Rect,
+    /// Flat row-major storage of all cells. Length equals `area.width * area.height`.
+    ///
+    /// Prefer the cell-write methods ([`Buffer::set_string`],
+    /// [`Buffer::set_char`], [`Buffer::get_mut`], ...), which record the
+    /// columns they change. After writing this vector directly, call
+    /// [`Buffer::mark_touched_rect`] for the changed region: [`Buffer::reset`]
+    /// re-blanks only recorded cells and the terminal flush skips rows that
+    /// were recorded in neither frame.
+    pub content: Vec<Cell>,
+    pub(crate) clip_stack: Vec<Rect>,
+    pub(crate) raw_sequences: Vec<(u32, u32, String)>,
+    /// Non-Kitty pixel-graphic placements (Sixel / iTerm2) with per-cell damage
+    /// footprints. Drives the sprixel-aware flush that re-emits a graphic only
+    /// when its ink is annihilated or its content/position changed (issue #265).
+    pub(crate) sprixels: Vec<SprixelPlacement>,
+    pub(crate) kitty_placements: Vec<KittyPlacement>,
+    pub(crate) cursor_pos: Option<(u32, u32)>,
+    cursor_masked: bool,
+    /// Stack of scroll clip infos set by the run loop before invoking draw
+    /// closures. The top entry is the active clip; nested raw-draw regions
+    /// push and pop without losing the outer clip.
+    pub(crate) kitty_clip_info_stack: Vec<KittyClipInfo>,
+    /// Horizontal counterpart to `kitty_clip_info_stack`.
+    pub(crate) kitty_horizontal_clip_stack: Vec<KittyHorizontalClipInfo>,
+    /// Per-row written span (issues #485/#486).
+    ///
+    /// Invariant: every cell of row `y` outside `touched[y - area.y]` equals
+    /// [`Buffer::fill_cell`], the blank cell of the last reset. Every
+    /// mutating `Buffer` method widens the span of the columns it may have
+    /// changed; code that writes [`Buffer::content`] directly must call
+    /// [`Buffer::mark_touched_rect`]. Length equals `area.height`.
+    pub(crate) touched: Vec<RowSpan>,
+    /// Background of the blank fill cell written by the last reset (`None`
+    /// after [`Buffer::reset`], `Some(bg)` after [`Buffer::reset_with_bg`]).
+    pub(crate) fill_bg: Option<crate::style::Color>,
+}
+
+/// Half-open column span `[lo, hi)`, relative to `area.x`, of a row's cells
+/// that may differ from the buffer's fill cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RowSpan {
+    pub(crate) lo: u32,
+    pub(crate) hi: u32,
+}
+
+impl RowSpan {
+    /// The empty span: no cell differs from the fill.
+    pub(crate) const EMPTY: Self = Self {
+        lo: u32::MAX,
+        hi: 0,
+    };
+
+    /// Whether the span covers no column.
+    #[inline]
+    pub(crate) fn is_empty(self) -> bool {
+        self.lo >= self.hi
+    }
+
+    /// Smallest span covering both `self` and `[lo, hi)`.
+    #[inline]
+    pub(crate) fn widen(&mut self, lo: u32, hi: u32) {
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+    }
+
+    /// Smallest span covering both spans.
+    #[inline]
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            lo: self.lo.min(other.lo),
+            hi: self.hi.max(other.hi),
+        }
+    }
+}
+
+fn checked_buffer_dimensions(area: Rect) -> Result<(usize, usize), BufferError> {
+    if !area.has_valid_edges() {
+        return Err(BufferError::InvalidEdges);
+    }
+    let requested = area.area_u64();
+    if requested > MAX_BUFFER_CELLS as u64 {
+        return Err(BufferError::CellBudgetExceeded {
+            requested,
+            maximum: MAX_BUFFER_CELLS,
+        });
+    }
+    if u64::from(area.height) > MAX_BUFFER_ROWS as u64 {
+        return Err(BufferError::RowBudgetExceeded {
+            requested: area.height,
+            maximum: MAX_BUFFER_ROWS,
+        });
+    }
+    let cells = usize::try_from(requested).map_err(|_| BufferError::CellBudgetExceeded {
+        requested,
+        maximum: MAX_BUFFER_CELLS,
+    })?;
+    let rows = usize::try_from(area.height).map_err(|_| BufferError::CellBudgetExceeded {
+        requested,
+        maximum: MAX_BUFFER_CELLS,
+    })?;
+    Ok((cells, rows))
+}
+
+fn try_repeated<T: Clone>(value: T, len: usize) -> Result<Vec<T>, BufferError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(len)
+        .map_err(|_| BufferError::AllocationFailed)?;
+    values.resize(len, value);
+    Ok(values)
+}
+
+fn trim_excess_capacity<T>(values: &mut Vec<T>) {
+    const RETAIN_FACTOR: usize = 4;
+    const HEADROOM_FACTOR: usize = 2;
+
+    if values.capacity() > values.len().saturating_mul(RETAIN_FACTOR) {
+        values.shrink_to(values.len().saturating_mul(HEADROOM_FACTOR));
+    }
+}
+
+impl Buffer {
+    /// Validate rectangle edges and allocation budgets without allocating.
+    ///
+    /// Terminal backends should call this before constructing a current/previous
+    /// buffer pair so invalid geometry is rejected before either allocation.
+    pub fn validate_area(area: Rect) -> Result<(), BufferError> {
+        checked_buffer_dimensions(area).map(|_| ())
+    }
+
+    /// Create a buffer filled with blank cells covering `area`.
+    ///
+    /// # Panics
+    ///
+    /// Panics deterministically when `area` has unrepresentable edges, exceeds
+    /// [`MAX_BUFFER_CELLS`], or the bounded allocation fails. Use
+    /// [`Buffer::try_empty`] for geometry originating outside the process.
+    pub fn empty(area: Rect) -> Self {
+        Self::try_empty(area)
+            .unwrap_or_else(|error| panic!("Buffer::empty({area:?}) failed: {error}"))
+    }
+
+    /// Try to create a blank buffer without risking an oversized allocation.
+    pub fn try_empty(area: Rect) -> Result<Self, BufferError> {
+        let (size, height) = checked_buffer_dimensions(area)?;
+        Ok(Self {
+            area,
+            content: try_repeated(Cell::default(), size)?,
+            clip_stack: Vec::new(),
+            raw_sequences: Vec::new(),
+            sprixels: Vec::new(),
+            kitty_placements: Vec::new(),
+            cursor_pos: None,
+            cursor_masked: false,
+            kitty_clip_info_stack: Vec::new(),
+            kitty_horizontal_clip_stack: Vec::new(),
+            touched: try_repeated(RowSpan::EMPTY, height)?,
+            fill_bg: None,
+        })
+    }
+
+    /// The blank cell every untouched cell holds: a space with default style
+    /// and the background of the last reset.
+    #[inline]
+    pub(crate) fn fill_cell(&self) -> Cell {
+        let mut cell = Cell::default();
+        cell.style.bg = self.fill_bg;
+        cell
+    }
+
+    /// Widen row `y`'s written span by the absolute columns `[x_lo, x_hi)`.
+    ///
+    /// Coordinates outside the area are clamped; rows outside the area are
+    /// ignored.
+    #[inline]
+    pub(crate) fn touch_cols(&mut self, y: u32, x_lo: u32, x_hi: u32) {
+        if y < self.area.y {
+            return;
+        }
+        let row = (y - self.area.y) as usize;
+        let lo = x_lo.max(self.area.x) - self.area.x;
+        let hi = x_hi.min(self.area.right()).saturating_sub(self.area.x);
+        if lo >= hi {
+            return;
+        }
+        if let Some(span) = self.touched.get_mut(row) {
+            span.widen(lo, hi);
+        }
+    }
+
+    /// Record that the cells of `rect` may have been written directly.
+    ///
+    /// Every `Buffer` method that mutates cells already does this. Code that
+    /// writes [`Buffer::content`] directly (for example a `draw` callback
+    /// indexing the cell vector) must call this for the region it changed:
+    /// `reset` only re-blanks touched cells and the terminal flush skips rows
+    /// that were not touched in either frame. The region is clamped to the
+    /// buffer area.
+    pub fn mark_touched_rect(&mut self, rect: Rect) {
+        let Some(rect) = self.area.intersection(rect) else {
+            return;
+        };
+        for y in rect.y..rect.bottom() {
+            self.touch_cols(y, rect.x, rect.right());
+        }
+    }
+
+    /// Paint every cell of `rect` as a blank space in `style` (#493).
+    ///
+    /// Produces exactly the cells of writing `" "` with `style` to each cell
+    /// of `rect` in row-major order through [`Buffer::set_string`]: writes
+    /// are restricted to the area and the active clip, a cell that holds a
+    /// one-byte symbol is replaced directly (in bulk runs), and any other
+    /// cell (a wide leading cell, a continuation, a combined cluster) goes
+    /// through the general write so a grapheme straddling the rect edge is
+    /// cleared as a unit, or left alone when clearing it would cross the
+    /// clip.
+    pub(crate) fn fill_rect(&mut self, rect: Rect, style: Style) {
+        let clip = self.effective_clip().copied();
+        let Some(mut region) = self.area.intersection(rect) else {
+            return;
+        };
+        if let Some(clip) = clip {
+            let Some(clipped) = region.intersection(clip) else {
+                return;
+            };
+            region = clipped;
+        }
+        let blank = Cell {
+            symbol: compact_str::CompactString::const_new(" "),
+            style,
+            hyperlink: None,
+        };
+        let (left, right) = (region.x, region.right());
+        for y in region.y..region.bottom() {
+            self.touch_cols(y, left, right);
+            let row_base = self.index_of(left, y);
+            let mut col = left;
+            while col < right {
+                let start = row_base + (col - left) as usize;
+                let mut run = 0usize;
+                for cell in &mut self.content[start..row_base + (right - left) as usize] {
+                    if cell.symbol.len() != 1 {
+                        break;
+                    }
+                    // One-byte symbols are inline: overwrite in place.
+                    cell.symbol.clone_from(&blank.symbol);
+                    cell.style = style;
+                    cell.hyperlink = None;
+                    run += 1;
+                }
+                if run > 0 {
+                    col += run as u32;
+                    continue;
+                }
+                self.set_grapheme_normalized(
+                    col,
+                    y,
+                    compact_str::CompactString::const_new(" "),
+                    1,
+                    style,
+                    None,
+                    clip,
+                );
+                col += 1;
+            }
+        }
+    }
+
+    /// Return a description of the first cell that breaks the written-span
+    /// invariant, or `None` when every untouched cell equals the fill cell.
+    #[cfg(any(test, debug_assertions))]
+    pub(crate) fn fill_invariant_violation(&self) -> Option<String> {
+        let width = self.area.width as usize;
+        if self.content.len() != width * self.area.height as usize
+            || self.touched.len() != self.area.height as usize
+        {
+            return Some("content or span length does not match the area".to_string());
+        }
+        let fill = self.fill_cell();
+        for (row, span) in self.touched.iter().enumerate() {
+            let cells = &self.content[row * width..(row + 1) * width];
+            for (col, cell) in cells.iter().enumerate() {
+                let inside =
+                    !span.is_empty() && (span.lo as usize..span.hi as usize).contains(&col);
+                if !inside && *cell != fill {
+                    return Some(format!(
+                        "untouched cell ({}, {}) = {cell:?} differs from fill {fill:?}",
+                        self.area.x as usize + col,
+                        self.area.y as usize + row
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// Push a scroll clip info frame.
+    pub(crate) fn push_kitty_clip(&mut self, info: KittyClipInfo) {
+        self.kitty_clip_info_stack.push(info);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pop_kitty_clip(&mut self) -> Option<KittyClipInfo> {
+        self.kitty_clip_info_stack.pop()
+    }
+
+    /// Peek the currently active scroll clip info, if any.
+    pub(crate) fn current_kitty_clip(&self) -> Option<&KittyClipInfo> {
+        self.kitty_clip_info_stack.last()
+    }
+
+    /// Push horizontal crop metadata for a raw draw callback.
+    pub(crate) fn push_kitty_horizontal_clip(&mut self, info: KittyHorizontalClipInfo) {
+        self.kitty_horizontal_clip_stack.push(info);
+    }
+
+    /// Restore the previous horizontal crop metadata.
+    ///
+    /// The frame kernel restores the stack by truncating to a saved depth
+    /// (see `invoke_deferred_draw`); only tests pop single entries.
+    #[cfg(test)]
+    pub(crate) fn pop_kitty_horizontal_clip(&mut self) -> Option<KittyHorizontalClipInfo> {
+        self.kitty_horizontal_clip_stack.pop()
+    }
+
+    fn current_kitty_horizontal_clip(&self) -> Option<&KittyHorizontalClipInfo> {
+        self.kitty_horizontal_clip_stack.last()
+    }
+
+    pub(crate) fn set_cursor_pos(&mut self, x: u32, y: u32, masked: bool) {
+        if !self.area.contains(x, y)
+            || self
+                .effective_clip()
+                .is_some_and(|clip| !clip.contains(x, y))
+        {
+            return;
+        }
+        self.cursor_pos = Some((x, y));
+        self.cursor_masked = masked;
+    }
+
+    /// Return the requested caret position in buffer coordinates.
+    ///
+    /// Returns `None` when the frame has no visible caret. Browser backends can
+    /// use this position to anchor an IME input element. Resetting the buffer
+    /// clears the position; reading it does not change cursor visibility.
+    /// The frame runtime also withholds the position while a focus request
+    /// awaits the next UI declaration, so backends cannot reuse stale privacy.
+    pub fn cursor_position(&self) -> Option<(u32, u32)> {
+        self.cursor_pos
+    }
+
+    /// Whether the visible caret belongs to a masked text input.
+    ///
+    /// Browser backends must suppress plaintext IME preedit for this caret.
+    /// The flag comes from the widget's explicit privacy state, not rendered
+    /// glyphs or styling. Returns `false` without a visible caret; buffer resets
+    /// clear both the position and privacy flag.
+    pub fn cursor_is_masked(&self) -> bool {
+        self.cursor_pos.is_some() && self.cursor_masked
+    }
+
+    #[cfg(feature = "crossterm")]
+    pub(crate) fn cursor_pos(&self) -> Option<(u32, u32)> {
+        self.cursor_position()
+    }
+
+    /// Whether an uncroppable media payload fits wholly in the active region.
+    #[cfg_attr(
+        not(feature = "crossterm"),
+        expect(
+            dead_code,
+            reason = "only the crossterm image entry points place uncroppable media"
+        )
+    )]
+    pub(crate) fn media_rect_visible(&self, rect: Rect) -> bool {
+        if rect.is_empty() || !rect.has_valid_edges() || self.area.intersection(rect) != Some(rect)
+        {
+            return false;
+        }
+        if self
+            .effective_clip()
+            .is_some_and(|clip| clip.intersection(rect) != Some(rect))
+        {
+            return false;
+        }
+        if self
+            .current_kitty_clip()
+            .is_some_and(|clip| clip.top_clip_rows != 0 || clip.original_height > rect.height)
+        {
+            return false;
+        }
+        !self
+            .current_kitty_horizontal_clip()
+            .is_some_and(|clip| clip.left_clip_cols != 0 || clip.original_width > rect.width)
+    }
+
+    pub(crate) fn draw_source_offset(&self) -> (u32, u32) {
+        (
+            self.current_kitty_horizontal_clip()
+                .map_or(0, |info| info.left_clip_cols),
+            self.current_kitty_clip()
+                .map_or(0, |info| info.top_clip_rows),
+        )
+    }
+
+    /// Store a raw escape sequence to be written at position `(x, y)` during flush.
+    ///
+    /// Used for Sixel images and other passthrough sequences.
+    /// Respects the clip stack: sequences fully outside the current clip are skipped.
+    pub fn raw_sequence(&mut self, x: u32, y: u32, seq: String) {
+        if let Some(clip) = self.effective_clip()
+            && (x >= clip.right() || y >= clip.bottom())
+        {
+            return;
+        }
+        self.raw_sequences.push((x, y, seq));
+    }
+
+    /// Store a structured Kitty graphics protocol placement.
+    ///
+    /// Unlike `raw_sequence`, Kitty placements are managed with image IDs,
+    /// compression, and placement lifecycle by the terminal flush code.
+    /// Scroll crop info is automatically applied from the top of the
+    /// `kitty_clip_info_stack` (set via [`Buffer::push_kitty_clip`]).
+    pub(crate) fn kitty_place(&mut self, mut p: KittyPlacement) {
+        // Issue #491: the terminal links its image passes only through here.
+        #[cfg(feature = "crossterm")]
+        crate::terminal::enable_graphics_passes();
+        // Apply clip check
+        if let Some(clip) = self.effective_clip()
+            && (p.x >= clip.right()
+                || p.y >= clip.bottom()
+                || p.x.saturating_add(p.cols) <= clip.x
+                || p.y.saturating_add(p.rows) <= clip.y)
+        {
+            return;
+        }
+
+        if let Some(info) = self.current_kitty_horizontal_clip().copied()
+            && !crop_kitty_horizontal(&mut p, info)
+        {
+            return;
+        }
+
+        // Apply scroll crop info if any frame is active
+        if let Some(info) = self.current_kitty_clip() {
+            let top_clip_rows = info.top_clip_rows;
+            let original_height = info.original_height;
+            if original_height > 0 && (top_clip_rows > 0 || p.rows < original_height) {
+                let ratio = p.src_height as f64 / original_height as f64;
+                p.crop_y = (top_clip_rows as f64 * ratio) as u32;
+                let bottom_clip =
+                    original_height.saturating_sub(top_clip_rows.saturating_add(p.rows));
+                let bottom_pixels = (bottom_clip as f64 * ratio) as u32;
+                p.crop_h = p
+                    .src_height
+                    .saturating_sub(p.crop_y.saturating_add(bottom_pixels));
+            }
+        }
+
+        self.kitty_placements.push(p);
+    }
+
+    /// Store a non-Kitty pixel-graphic placement (Sixel or iTerm2 OSC 1337)
+    /// with its per-cell damage footprint.
+    ///
+    /// Respects the clip stack the same way [`Buffer::kitty_place`] does:
+    /// placements wholly outside the active clip are dropped. The footprint
+    /// `cells` are recorded as-supplied; the flush layer flips covered cells to
+    /// [`SprixelCell::Annihilated`] when a text write overwrites graphic ink so
+    /// only dirtied graphics are re-emitted (issue #265).
+    ///
+    /// Callers (`sixel_image` / `iterm_image*`) are `crossterm`-gated.
+    #[cfg_attr(
+        not(feature = "crossterm"),
+        expect(
+            dead_code,
+            reason = "callers sixel_image / iterm_image* are crossterm-gated"
+        )
+    )]
+    pub(crate) fn sprixel_place(&mut self, p: SprixelPlacement) {
+        // Issue #491: see `kitty_place`.
+        #[cfg(feature = "crossterm")]
+        crate::terminal::enable_graphics_passes();
+        if let Some(clip) = self.effective_clip()
+            && (p.x >= clip.right()
+                || p.y >= clip.bottom()
+                || p.x.saturating_add(p.cols) <= clip.x
+                || p.y.saturating_add(p.rows) <= clip.y)
+        {
+            return;
+        }
+        self.sprixels.push(p);
+    }
+
+    /// Push a clipping rectangle onto the clip stack.
+    ///
+    /// Subsequent writes are restricted to the intersection of all active clip
+    /// regions. Nested calls intersect with the current clip, so the effective
+    /// clip can only shrink, never grow.
+    pub fn push_clip(&mut self, rect: Rect) {
+        let effective = if let Some(current) = self.clip_stack.last() {
+            intersect_rects(*current, rect)
+        } else {
+            rect
+        };
+        self.clip_stack.push(effective);
+    }
+
+    /// Pop the most recently pushed clipping rectangle.
+    ///
+    /// After this call, writes are clipped to the previous region (or
+    /// unclipped if the stack is now empty).
+    pub fn pop_clip(&mut self) {
+        self.clip_stack.pop();
+    }
+
+    fn effective_clip(&self) -> Option<&Rect> {
+        self.clip_stack.last()
+    }
+
+    #[inline]
+    fn index_of(&self, x: u32, y: u32) -> usize {
+        ((y - self.area.y) * self.area.width + (x - self.area.x)) as usize
+    }
+
+    /// Returns `true` if `(x, y)` is within the buffer's area.
+    #[inline]
+    pub fn in_bounds(&self, x: u32, y: u32) -> bool {
+        x >= self.area.x && x < self.area.right() && y >= self.area.y && y < self.area.bottom()
+    }
+
+    /// Return a reference to the cell at `(x, y)`.
+    ///
+    /// Use [`Buffer::try_get`] when the coordinates may come from untrusted
+    /// input.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `(x, y)` is outside the buffer area.
+    #[inline]
+    pub fn get(&self, x: u32, y: u32) -> &Cell {
+        assert!(
+            self.in_bounds(x, y),
+            "Buffer::get({x}, {y}) out of bounds for area {:?}",
+            self.area
+        );
+        &self.content[self.index_of(x, y)]
+    }
+
+    /// Return a mutable reference to the cell at `(x, y)`.
+    ///
+    /// Use [`Buffer::try_get_mut`] when the coordinates may come from
+    /// untrusted input.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `(x, y)` is outside the buffer area.
+    #[inline]
+    pub fn get_mut(&mut self, x: u32, y: u32) -> &mut Cell {
+        assert!(
+            self.in_bounds(x, y),
+            "Buffer::get_mut({x}, {y}) out of bounds for area {:?}",
+            self.area
+        );
+        let idx = self.index_of(x, y);
+        self.touch_cols(y, x, x.saturating_add(1));
+        &mut self.content[idx]
+    }
+
+    /// Return a reference to the cell at `(x, y)`, or `None` if out of bounds.
+    ///
+    /// Non-panicking counterpart to [`Buffer::get`]. Prefer this inside
+    /// `draw()` closures when coordinates are computed from mouse input,
+    /// scroll offsets, or other sources that could land outside the buffer.
+    #[inline]
+    pub fn try_get(&self, x: u32, y: u32) -> Option<&Cell> {
+        if self.in_bounds(x, y) {
+            Some(&self.content[self.index_of(x, y)])
+        } else {
+            None
+        }
+    }
+
+    /// Return a mutable reference to the cell at `(x, y)`, or `None` if out
+    /// of bounds.
+    ///
+    /// Non-panicking counterpart to [`Buffer::get_mut`].
+    #[inline]
+    pub fn try_get_mut(&mut self, x: u32, y: u32) -> Option<&mut Cell> {
+        if self.in_bounds(x, y) {
+            let idx = self.index_of(x, y);
+            self.touch_cols(y, x, x.saturating_add(1));
+            Some(&mut self.content[idx])
+        } else {
+            None
+        }
+    }
+
+    /// Write a string into the buffer starting at `(x, y)`.
+    ///
+    /// Respects cell boundaries and Unicode character widths. Wide characters
+    /// (e.g., CJK) occupy two columns; the trailing cell is blanked. Writes
+    /// that fall outside the current clip region are skipped but still advance
+    /// the cursor position.
+    pub fn set_string(&mut self, x: u32, y: u32, s: &str, style: Style) {
+        self.set_string_inner(x, y, s, style, None);
+    }
+
+    /// Write a hyperlinked string into the buffer starting at `(x, y)`.
+    ///
+    /// Like [`Buffer::set_string`] but attaches an OSC 8 hyperlink URL to each
+    /// cell. The terminal renders these cells as clickable links.
+    pub fn set_string_linked(&mut self, x: u32, y: u32, s: &str, style: Style, url: &str) {
+        let link = sanitize_osc8_url(url).map(compact_str::CompactString::new);
+        self.set_string_inner(x, y, s, style, link.as_ref());
+    }
+
+    /// Shared implementation for [`Self::set_string`] and
+    /// [`Self::set_string_linked`].
+    ///
+    /// `link` is `Some` only for the OSC 8 path; both paths share clip,
+    /// wide-char, and zero-width grapheme handling. Keeping a single
+    /// implementation prevents the two call sites from drifting on edge cases
+    /// (e.g., `MAX_CELL_SYMBOL_BYTES` checks, wide-char blanking).
+    fn set_string_inner(
+        &mut self,
+        x: u32,
+        y: u32,
+        s: &str,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+    ) {
+        if y < self.area.y || y >= self.area.bottom() {
+            return;
+        }
+        let clip = self.effective_clip().copied();
+        // Printable ASCII: every byte is one width-1 grapheme that needs no
+        // sanitization and no bidi reordering, so skip segmentation entirely.
+        if is_printable_ascii(s) {
+            self.set_printable_ascii(x, y, s, style, link, clip);
+            return;
+        }
+        // Bidi (UAX #9) reorder: convert this logical-order line into visual
+        // (display) order before the positional cell-write loop below. The
+        // loop is purely left-to-right by column, so RTL runs must be
+        // reordered *here* or they render mirrored. `needs_bidi_reorder`
+        // gates the work so pure-LTR input neither allocates nor calls into
+        // `unicode-bidi` — its output is byte-identical to skipping this
+        // block entirely. Width/clip/zero-width/hyperlink handling below is
+        // order-independent and applies unchanged to the reordered glyphs.
+        #[cfg(feature = "bidi")]
+        let reordered;
+        #[cfg(feature = "bidi")]
+        let s: &str = if needs_bidi_reorder(s) {
+            reordered = reorder_line_visual(s);
+            &reordered
+        } else {
+            s
+        };
+        // Mostly-ASCII text with a few non-ASCII glyphs (table rules, list
+        // markers, dashes): write the standalone ASCII runs in bulk and only
+        // segment the stretches between them. A standalone byte is bounded by
+        // grapheme breaks on both sides (see `standalone_ascii`), so the
+        // stretches segment exactly as they would inside the whole string.
+        let bytes = s.as_bytes();
+        let mut x = x;
+        let mut i = 0;
+        while i < bytes.len() {
+            if x >= self.area.right() {
+                break;
+            }
+            let start = i;
+            if standalone_ascii(bytes, i) {
+                i += 1;
+                while i < bytes.len() && standalone_ascii(bytes, i) {
+                    i += 1;
+                }
+                self.set_printable_ascii(x, y, &s[start..i], style, link, clip);
+                x = x.saturating_add((i - start) as u32);
+                continue;
+            }
+            i += 1;
+            while i < bytes.len() && !standalone_ascii(bytes, i) {
+                i += 1;
+            }
+            x = self.set_graphemes(x, y, &s[start..i], style, link, clip);
+        }
+    }
+
+    /// The per-grapheme write loop of [`Self::set_string_inner`] for a
+    /// stretch of `s` that starts and ends on grapheme boundaries. Returns the
+    /// column after the last written grapheme.
+    fn set_graphemes(
+        &mut self,
+        mut x: u32,
+        y: u32,
+        s: &str,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+        clip: Option<Rect>,
+    ) -> u32 {
+        // Every scalar printable ASCII or `standalone_scalar`: each one is its
+        // own grapheme, so skip the segmenter (box-drawing rules, markers,
+        // dashes, CJK).
+        if s.chars()
+            .all(|ch| ch.is_ascii_graphic() || ch == ' ' || standalone_scalar(ch))
+        {
+            for (at, ch) in s.char_indices() {
+                if x >= self.area.right() {
+                    break;
+                }
+                x = self.set_one_grapheme(x, y, &s[at..at + ch.len_utf8()], style, link, clip);
+            }
+            return x;
+        }
+        for grapheme in s.graphemes(true) {
+            if x >= self.area.right() {
+                break;
+            }
+            x = self.set_one_grapheme(x, y, grapheme, style, link, clip);
+        }
+        x
+    }
+
+    /// Write one extended grapheme cluster at `x`; returns the next column.
+    #[inline]
+    fn set_one_grapheme(
+        &mut self,
+        x: u32,
+        y: u32,
+        grapheme: &str,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+        clip: Option<Rect>,
+    ) -> u32 {
+        if grapheme.len() == 1 && is_printable_ascii_byte(grapheme.as_bytes()[0]) {
+            if self.ascii_cell_writable(x, y, clip) {
+                self.touch_cols(y, x, x + 1);
+                self.write_ascii_cell(x, y, grapheme, style, link, clip);
+            }
+            return x.saturating_add(1);
+        }
+        let symbol = normalize_grapheme(grapheme);
+        let width = normalized_symbol_width(&symbol);
+        if width == 1
+            && let Some(idx) = self.narrow_cell_index(x, y, clip)
+        {
+            self.touch_cols(y, x, x + 1);
+            let cell = &mut self.content[idx];
+            cell.symbol = symbol;
+            cell.style = style;
+            cell.hyperlink = link.cloned();
+            return x.saturating_add(1);
+        }
+        let width = self.set_grapheme_normalized(x, y, symbol, width, style, link, clip);
+        x.saturating_add(width)
+    }
+
+    /// Write a printable-ASCII string: one width-1 cell per byte, clipped to
+    /// the buffer area and the active clip once for the whole run.
+    fn set_printable_ascii(
+        &mut self,
+        x: u32,
+        y: u32,
+        s: &str,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+        clip: Option<Rect>,
+    ) {
+        debug_assert!(is_printable_ascii(s));
+        let end = u64::from(x).saturating_add(s.len() as u64);
+        let mut lo = u64::from(x.max(self.area.x));
+        let mut hi = end.min(u64::from(self.area.right()));
+        if let Some(clip) = clip {
+            if y < clip.y || y >= clip.bottom() {
+                return;
+            }
+            lo = lo.max(u64::from(clip.x));
+            hi = hi.min(u64::from(clip.right()));
+        }
+        if lo >= hi {
+            return;
+        }
+        let (lo, hi) = (lo as u32, hi as u32);
+        self.touch_cols(y, lo, hi);
+        // `write_ascii_cell` per byte, with the row index computed once.
+        let base = self.index_of(lo, y);
+        let first = (lo - x) as usize;
+        for k in 0..(hi - lo) as usize {
+            let offset = first + k;
+            let symbol = &s[offset..=offset];
+            let cell = &mut self.content[base + k];
+            if cell.symbol.len() == 1 {
+                cell.symbol = compact_str::CompactString::new(symbol);
+                cell.style = style;
+                cell.hyperlink = link.cloned();
+            } else {
+                self.set_grapheme_normalized(
+                    lo + k as u32,
+                    y,
+                    compact_str::CompactString::new(symbol),
+                    1,
+                    style,
+                    link,
+                    clip,
+                );
+            }
+        }
+    }
+
+    /// Index of `(x, y)` when a width-1 grapheme written there replaces
+    /// exactly that one cell: the column is inside the area and clip and its
+    /// stored grapheme is one column wide (not a continuation, not a wide
+    /// leading cell). The general write path would then reset only this
+    /// cell, so callers may overwrite it in place.
+    #[inline]
+    fn narrow_cell_index(&self, x: u32, y: u32, clip: Option<Rect>) -> Option<usize> {
+        if !self.ascii_cell_writable(x, y, clip) {
+            return None;
+        }
+        let idx = self.index_of(x, y);
+        let old = &self.content[idx].symbol;
+        (!old.is_empty() && stored_symbol_width(old) <= 1).then_some(idx)
+    }
+
+    /// Whether a width-1 grapheme at `(x, y)` lies inside the area and clip.
+    #[inline]
+    fn ascii_cell_writable(&self, x: u32, y: u32, clip: Option<Rect>) -> bool {
+        x >= self.area.x
+            && x < self.area.right()
+            && y >= self.area.y
+            && y < self.area.bottom()
+            && clip.is_none_or(|clip| clip.contains(x, y))
+    }
+
+    /// Write one printable-ASCII byte at an in-area, in-clip `(x, y)`.
+    ///
+    /// The caller has already widened the row's written span over `x`.
+    ///
+    /// A cell whose stored symbol is one byte is a width-1 grapheme with no
+    /// continuation, so it is overwritten directly. Anything else (a wide
+    /// leading cell, a continuation, a combined cluster) takes the general
+    /// path that clears the whole old grapheme.
+    #[inline]
+    fn write_ascii_cell(
+        &mut self,
+        x: u32,
+        y: u32,
+        symbol: &str,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+        clip: Option<Rect>,
+    ) {
+        let idx = self.index_of(x, y);
+        let cell = &mut self.content[idx];
+        if cell.symbol.len() == 1 {
+            cell.symbol = compact_str::CompactString::new(symbol);
+            cell.style = style;
+            cell.hyperlink = link.cloned();
+        } else {
+            self.set_grapheme_normalized(
+                x,
+                y,
+                compact_str::CompactString::new(symbol),
+                1,
+                style,
+                link,
+                clip,
+            );
+        }
+    }
+
+    /// Write one already visually ordered grapheme and return its cell width.
+    ///
+    /// This is used by the styled bidi renderer after it remaps a whole line.
+    pub(crate) fn set_grapheme_visual(
+        &mut self,
+        x: u32,
+        y: u32,
+        grapheme: &str,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+    ) -> u32 {
+        let clip = self.effective_clip().copied();
+        let symbol = normalize_cell_symbol(grapheme);
+        let width = display_width(&symbol) as u32;
+        self.set_grapheme_normalized(x, y, symbol, width, style, link, clip)
+    }
+
+    /// Write a normalized symbol of display `width` and return the width.
+    ///
+    /// `symbol` must already be the output of [`normalize_cell_symbol`]; it
+    /// is stored without re-normalizing.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "hot-path cell writer takes the already-split grapheme fields by value"
+    )]
+    fn set_grapheme_normalized(
+        &mut self,
+        x: u32,
+        y: u32,
+        symbol: compact_str::CompactString,
+        width: u32,
+        style: Style,
+        link: Option<&compact_str::CompactString>,
+        clip: Option<Rect>,
+    ) -> u32 {
+        if width == 0 {
+            self.append_zero_width(x, y, &symbol, clip);
+            return 0;
+        }
+
+        let Some(target_right) = x.checked_add(width) else {
+            return width;
+        };
+        if y < self.area.y
+            || y >= self.area.bottom()
+            || x < self.area.x
+            || target_right > self.area.right()
+        {
+            return width;
+        }
+
+        let (mut affected_left, mut affected_right) = (x, target_right);
+        for col in x..target_right {
+            let (old_left, old_right) = self.existing_grapheme_range(col, y);
+            affected_left = affected_left.min(old_left);
+            affected_right = affected_right.max(old_right);
+        }
+        if affected_left < self.area.x || affected_right > self.area.right() {
+            return width;
+        }
+        let fully_in_clip = clip.is_none_or(|clip| {
+            y >= clip.y
+                && y < clip.bottom()
+                && affected_left >= clip.x
+                && affected_right <= clip.right()
+        });
+        if !fully_in_clip {
+            return width;
+        }
+
+        self.touch_cols(y, affected_left, affected_right);
+        for col in affected_left..affected_right {
+            let idx = self.index_of(col, y);
+            self.content[idx].reset();
+        }
+
+        let leading_idx = self.index_of(x, y);
+        let leading = &mut self.content[leading_idx];
+        leading.set_symbol_normalized(symbol);
+        leading.set_style(style);
+        leading.hyperlink = link.cloned();
+        for col in x.saturating_add(1)..target_right {
+            let idx = self.index_of(col, y);
+            self.content[idx].set_continuation(style);
+            self.content[idx].hyperlink = link.cloned();
+        }
+        width
+    }
+
+    fn existing_grapheme_range(&self, x: u32, y: u32) -> (u32, u32) {
+        // Walk back over every continuation: a cluster can be wider than two
+        // columns (for example a wide base plus a spacing mark).
+        let mut left = x;
+        while self.content[self.index_of(left, y)].is_continuation() && left > self.area.x {
+            left -= 1;
+        }
+        let width = stored_symbol_width(&self.content[self.index_of(left, y)].symbol).max(1);
+        (left, left.saturating_add(width).min(self.area.right()))
+    }
+
+    fn append_zero_width(&mut self, x: u32, y: u32, suffix: &str, clip: Option<Rect>) {
+        if suffix.is_empty()
+            || self.area.is_empty()
+            || y < self.area.y
+            || y >= self.area.bottom()
+            || x <= self.area.x
+            || x > self.area.right()
+        {
+            return;
+        }
+        let mut leading_x = x - 1;
+        while self.content[self.index_of(leading_x, y)].is_continuation() && leading_x > self.area.x
+        {
+            leading_x -= 1;
+        }
+        let (_, right) = self.existing_grapheme_range(leading_x, y);
+        if clip.is_some_and(|clip| !clip.contains(leading_x, y) || right > clip.right()) {
+            return;
+        }
+
+        let idx = self.index_of(leading_x, y);
+        let mut combined = self.content[idx].normalized_symbol();
+        combined.push_str(suffix);
+        let normalized = normalize_cell_symbol(&combined);
+        if normalized != self.content[idx].symbol {
+            self.touch_cols(y, leading_x, leading_x + 1);
+            self.content[idx].symbol = normalized;
+        }
+    }
+
+    /// Write a single character at `(x, y)` with the given style.
+    ///
+    /// No-ops if `(x, y)` is out of bounds or outside the current clip region.
+    /// A zero-width suffix may also be written at the exclusive right edge to
+    /// extend the preceding grapheme, provided that entire grapheme is visible.
+    pub fn set_char(&mut self, x: u32, y: u32, ch: char, style: Style) {
+        let ch = sanitize_cell_char(ch);
+        let clip = self.effective_clip().copied();
+        let mut encoded = [0; 4];
+        let symbol = ch.encode_utf8(&mut encoded);
+        if ch.is_ascii() {
+            // `sanitize_cell_char` replaced every ASCII control, so this is a
+            // printable byte.
+            if self.ascii_cell_writable(x, y, clip) {
+                self.touch_cols(y, x, x + 1);
+                self.write_ascii_cell(x, y, symbol, style, None, clip);
+            }
+            return;
+        }
+        let width = char_display_width(ch) as u32;
+        // Narrow non-ASCII glyph (box drawing, most symbols) over a narrow
+        // cell: overwrite it in place like the ASCII path.
+        if width == 1
+            && let Some(idx) = self.narrow_cell_index(x, y, clip)
+        {
+            self.touch_cols(y, x, x + 1);
+            let cell = &mut self.content[idx];
+            cell.symbol = compact_str::CompactString::new(symbol);
+            cell.style = style;
+            cell.hyperlink = None;
+            return;
+        }
+        let symbol = compact_str::CompactString::new(symbol);
+        self.set_grapheme_normalized(x, y, symbol, width, style, None, clip);
+    }
+
+    /// Write `ch` with `style` to `count` cells of row `y` from column `x`:
+    /// the cells of calling [`Buffer::set_char`] for `x..x + count` in order,
+    /// with the sanitize, width and clip work done once (border edges).
+    pub(crate) fn set_char_row(&mut self, x: u32, y: u32, count: u32, ch: char, style: Style) {
+        let ch = sanitize_cell_char(ch);
+        let end = x.saturating_add(count);
+        if ch.is_ascii() || char_display_width(ch) != 1 {
+            for col in x..end {
+                self.set_char(col, y, ch, style);
+            }
+            return;
+        }
+        let clip = self.effective_clip().copied();
+        let mut encoded = [0; 4];
+        let symbol = compact_str::CompactString::new(ch.encode_utf8(&mut encoded));
+        // Outside the area or clip a narrow write is a no-op, so only the
+        // visible columns are visited.
+        let mut lo = x.max(self.area.x);
+        let mut hi = end.min(self.area.right());
+        if y < self.area.y || y >= self.area.bottom() {
+            return;
+        }
+        if let Some(clip) = clip {
+            if y < clip.y || y >= clip.bottom() {
+                return;
+            }
+            lo = lo.max(clip.x);
+            hi = hi.min(clip.right());
+        }
+        for col in lo..hi {
+            self.set_narrow_symbol(col, y, &symbol, style, clip);
+        }
+    }
+
+    /// Column counterpart of [`Buffer::set_char_row`]: `ch` at `x` on rows
+    /// `y..y + count`, as [`Buffer::set_char`] would write them.
+    pub(crate) fn set_char_column(&mut self, x: u32, y: u32, count: u32, ch: char, style: Style) {
+        let ch = sanitize_cell_char(ch);
+        let end = y.saturating_add(count);
+        if ch.is_ascii() || char_display_width(ch) != 1 {
+            for row in y..end {
+                self.set_char(x, row, ch, style);
+            }
+            return;
+        }
+        let clip = self.effective_clip().copied();
+        let mut encoded = [0; 4];
+        let symbol = compact_str::CompactString::new(ch.encode_utf8(&mut encoded));
+        if x < self.area.x || x >= self.area.right() {
+            return;
+        }
+        let mut lo = y.max(self.area.y);
+        let mut hi = end.min(self.area.bottom());
+        if let Some(clip) = clip {
+            if x < clip.x || x >= clip.right() {
+                return;
+            }
+            lo = lo.max(clip.y);
+            hi = hi.min(clip.bottom());
+        }
+        for row in lo..hi {
+            self.set_narrow_symbol(x, row, &symbol, style, clip);
+        }
+    }
+
+    /// The width-1, non-ASCII arm of [`Buffer::set_char`] for an in-area,
+    /// in-clip cell: overwrite a narrow cell in place, otherwise take the
+    /// general grapheme path.
+    #[inline]
+    fn set_narrow_symbol(
+        &mut self,
+        x: u32,
+        y: u32,
+        symbol: &compact_str::CompactString,
+        style: Style,
+        clip: Option<Rect>,
+    ) {
+        if let Some(idx) = self.narrow_cell_index(x, y, clip) {
+            self.touch_cols(y, x, x + 1);
+            let cell = &mut self.content[idx];
+            cell.symbol.clone_from(symbol);
+            cell.style = style;
+            cell.hyperlink = None;
+        } else {
+            self.set_grapheme_normalized(x, y, symbol.clone(), 1, style, None, clip);
+        }
+    }
+
+    /// Compute the diff between `self` (current) and `other` (previous).
+    ///
+    /// Returns `(x, y, cell)` tuples for every cell that changed. Useful for
+    /// custom backends or tests that need to inspect changed cells directly.
+    /// When areas, origins, or backing lengths differ, every representable cell
+    /// in `self` is returned as a bounded full redraw; callers are responsible
+    /// for clearing any previous-only area before applying those updates.
+    ///
+    /// # Allocation
+    ///
+    /// Allocates a new [`Vec`] on every call. For high-frequency use
+    /// (per-frame diffing in a render loop), prefer the internal
+    /// `flush_buffer_diff` path used by [`crate::run`], which streams updates
+    /// directly to the backend without an intermediate `Vec`. Calling
+    /// `diff()` on every frame in a 60 fps loop adds one heap allocation
+    /// (sized to the changed-cell count) per frame.
+    ///
+    /// # Benchmarks
+    ///
+    /// `benches/benchmarks.rs` exercises this path in `bench_buffer_diff`.
+    pub fn diff<'a>(&'a self, other: &'a Buffer) -> Vec<(u32, u32, &'a Cell)> {
+        let Some(expected) = usize::try_from(self.area.area_u64()).ok() else {
+            return Vec::new();
+        };
+        let len = self.content.len().min(expected);
+        if self.area.width == 0 || len == 0 {
+            return Vec::new();
+        }
+
+        let same_geometry = self.area == other.area
+            && self.content.len() == expected
+            && other.content.len() == expected;
+        let mut updates = Vec::new();
+        if same_layout(self, other) {
+            // Rows that are identical by the written-span invariant (or by a
+            // direct slice compare) contribute nothing; scan only the
+            // columns that differ.
+            let width = self.area.width as usize;
+            for row in 0..self.area.height as usize {
+                let Some((lo, hi)) = row_diff_range(self, other, row) else {
+                    continue;
+                };
+                let y = self.area.y.saturating_add(row as u32);
+                for col in lo..hi {
+                    let index = row * width + col;
+                    let cell = &self.content[index];
+                    if other.content[index] != *cell {
+                        updates.push((self.area.x.saturating_add(col as u32), y, cell));
+                    }
+                }
+            }
+            return updates;
+        }
+        for (index, cell) in self.content[..len].iter().enumerate() {
+            let changed = !same_geometry || other.content.get(index) != Some(cell);
+            if !changed {
+                continue;
+            }
+            let row = index / self.area.width as usize;
+            let col = index % self.area.width as usize;
+            let x = self.area.x.saturating_add(col as u32);
+            let y = self.area.y.saturating_add(row as u32);
+            updates.push((x, y, cell));
+        }
+        updates
+    }
+
+    /// Reset every cell to a blank space with default style, and clear the clip stack.
+    pub fn reset(&mut self) {
+        self.reset_to(None, true);
+    }
+
+    /// Reset every cell and apply a background color to all cells.
+    pub fn reset_with_bg(&mut self, bg: crate::style::Color) {
+        self.reset_to(Some(bg), true);
+    }
+
+    /// Shared body of [`Self::reset`], [`Self::reset_with_bg`] and resize.
+    ///
+    /// When the fill is unchanged and the cell layout is intact, only the
+    /// written spans are re-blanked: by the span invariant every other cell
+    /// already equals the fill (#485). A fill change, a resize
+    /// (`spans_trusted == false`) or a length mismatch refills everything.
+    fn reset_to(&mut self, bg: Option<crate::style::Color>, spans_trusted: bool) {
+        let width = self.area.width as usize;
+        let height = self.area.height as usize;
+        let layout_intact =
+            spans_trusted && self.content.len() == width * height && self.touched.len() == height;
+        #[cfg(debug_assertions)]
+        if layout_intact && let Some(violation) = self.fill_invariant_violation() {
+            panic!(
+                "Buffer written-span invariant broken: {violation}. Code that writes \
+                 `Buffer::content` directly must call `Buffer::mark_touched_rect`."
+            );
+        }
+        if layout_intact && bg == self.fill_bg {
+            let blank = self.fill_cell();
+            for (row, span) in self.touched.iter_mut().enumerate() {
+                if span.is_empty() {
+                    continue;
+                }
+                let base = row * width;
+                blank_cells(
+                    &mut self.content[base + span.lo as usize..base + span.hi as usize],
+                    &blank,
+                );
+                *span = RowSpan::EMPTY;
+            }
+        } else {
+            self.fill_bg = bg;
+            let blank = self.fill_cell();
+            blank_cells(&mut self.content, &blank);
+            self.touched.clear();
+            self.touched.resize(height, RowSpan::EMPTY);
+        }
+        self.clip_stack.clear();
+        self.raw_sequences.clear();
+        self.sprixels.clear();
+        self.kitty_placements.clear();
+        self.cursor_pos = None;
+        self.cursor_masked = false;
+        self.kitty_clip_info_stack.clear();
+        self.kitty_horizontal_clip_stack.clear();
+    }
+
+    /// Resize the buffer to fit a new area, resetting all cells.
+    ///
+    /// If the new area is larger, new cells are initialized to blank. All
+    /// existing content is discarded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cell storage for `area` cannot be allocated. Use
+    /// [`Buffer::try_resize`] to handle that case.
+    pub fn resize(&mut self, area: Rect) {
+        self.try_resize(area)
+            .unwrap_or_else(|error| panic!("Buffer::resize({area:?}) failed: {error}"));
+    }
+
+    /// Try to resize and reset the buffer after validating geometry and budget.
+    /// Capacity is retained across ordinary resizes, but a downsize below one
+    /// quarter of the high-water capacity requests a shrink to 2x headroom.
+    pub fn try_resize(&mut self, area: Rect) -> Result<(), BufferError> {
+        let (size, height) = checked_buffer_dimensions(area)?;
+        self.content
+            .try_reserve_exact(size.saturating_sub(self.content.len()))
+            .map_err(|_| BufferError::AllocationFailed)?;
+        self.touched
+            .try_reserve_exact(height.saturating_sub(self.touched.len()))
+            .map_err(|_| BufferError::AllocationFailed)?;
+
+        self.area = area;
+        self.content.resize(size, Cell::default());
+        // The cell vector was re-laid out: refill everything and size the
+        // written spans to the new height.
+        self.reset_to(None, false);
+        // A sustained downsize should not retain a pathological high-water
+        // allocation forever. Keep up to 2x headroom once capacity exceeds 4x
+        // the active length, avoiding churn around ordinary terminal resizes.
+        trim_excess_capacity(&mut self.content);
+        trim_excess_capacity(&mut self.touched);
+        Ok(())
+    }
+
+    /// Serialize the buffer into a stable, styled-snapshot format suitable for
+    /// snapshot testing (e.g. with `insta::assert_snapshot!`).
+    ///
+    /// # Format
+    ///
+    /// One line per buffer row, joined with `\n`. Within a row, runs of cells
+    /// that share an identical [`Style`] are grouped. The default style (no
+    /// foreground, no background, no modifiers) emits **unannotated** text —
+    /// no `[...]` markers. Any non-default run is wrapped:
+    ///
+    /// ```text
+    /// [fg=...,bg=...,mods]"text"[/]
+    /// ```
+    ///
+    /// Trailing whitespace per row is preserved in the styled segment but
+    /// trailing default-style spaces at the end of a row are emitted verbatim
+    /// (they are visually invisible in diffs). Empty cells render as a single
+    /// space. The terminating `[/]` marker only appears when a styled run is
+    /// in effect at the end of a row.
+    ///
+    /// # Color formatting
+    ///
+    /// Named palette colors use short lowercase codes:
+    /// `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`,
+    /// `white`, `dark_gray`, `light_red`, `light_green`, `light_yellow`,
+    /// `light_blue`, `light_magenta`, `light_cyan`, `light_white`. RGB colors
+    /// emit `#rrggbb`. Indexed palette colors emit `idx<N>` (decimal).
+    ///
+    /// # Modifier formatting
+    ///
+    /// Modifiers are emitted as comma-separated lowercase tokens in a fixed
+    /// canonical order: `bold`, `dim`, `italic`, `underline`, `reversed`,
+    /// `strikethrough`. Order is independent of the bit pattern, so two
+    /// equivalent `Modifiers` values always serialize identically.
+    ///
+    /// # Stability
+    ///
+    /// The output format is stable across patch and minor versions of SLT.
+    /// Names use a hand-rolled formatter (not `Debug`) so derives changing
+    /// upstream cannot accidentally break locked snapshots. A breaking change
+    /// to the format would be reserved for a major version bump.
+    ///
+    /// # Determinism
+    ///
+    /// Identical input buffers always produce byte-equal output. This is a
+    /// hard requirement — snapshot tests rely on it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use slt::{Buffer, Color, Rect, Style};
+    ///
+    /// let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
+    /// buf.set_string(0, 0, "ab", Style::new().fg(Color::Red).bold());
+    /// buf.set_string(2, 0, "cd", Style::new());
+    /// let snap = buf.snapshot_format();
+    /// assert!(snap.starts_with("[fg=red,bold]\"ab\"[/]cd"));
+    /// ```
+    pub fn snapshot_format(&self) -> String {
+        let mut out = String::new();
+        let width = self.area.width;
+        let height = self.area.height;
+        if width == 0 || height == 0 {
+            return out;
+        }
+
+        for y in self.area.y..self.area.bottom() {
+            if y > self.area.y {
+                out.push('\n');
+            }
+
+            // Walk the row, grouping consecutive cells by Style.
+            let mut current_style: Option<Style> = None;
+            let mut run_text = String::new();
+
+            for x in self.area.x..self.area.right() {
+                let cell = self.get(x, y);
+                let style = cell.style;
+                // Empty cell symbol → single space (e.g. trailing wide-char cell).
+                let sym: &str = if cell.symbol.is_empty() {
+                    " "
+                } else {
+                    cell.symbol.as_str()
+                };
+
+                match current_style {
+                    Some(s) if s == style => {
+                        run_text.push_str(sym);
+                    }
+                    _ => {
+                        if let Some(s) = current_style.take() {
+                            flush_run(&mut out, s, &run_text);
+                            run_text.clear();
+                        }
+                        current_style = Some(style);
+                        run_text.push_str(sym);
+                    }
+                }
+            }
+
+            if let Some(s) = current_style {
+                flush_run(&mut out, s, &run_text);
+            }
+        }
+
+        out
+    }
+}
+
+/// Flush a single style-run into the snapshot output.
+///
+/// Default style → unannotated raw text (no markers, escape only embedded `"`).
+/// Non-default style → `[fg=...,bg=...,mods]"text"[/]` form. Embedded `"` and
+/// `\` characters in cell symbols are escaped so the snapshot remains
+/// unambiguous.
+fn flush_run(out: &mut String, style: Style, text: &str) {
+    if style == Style::default() {
+        out.push_str(text);
+        return;
+    }
+    out.push('[');
+    let mut first = true;
+    if let Some(fg) = style.fg {
+        out.push_str("fg=");
+        write_color(out, fg);
+        first = false;
+    }
+    if let Some(bg) = style.bg {
+        if !first {
+            out.push(',');
+        }
+        out.push_str("bg=");
+        write_color(out, bg);
+        first = false;
+    }
+    let mods = style.modifiers;
+    // Canonical order: bold, dim, italic, underline, reversed, strikethrough.
+    let pairs: [(crate::style::Modifiers, &str); 6] = [
+        (crate::style::Modifiers::BOLD, "bold"),
+        (crate::style::Modifiers::DIM, "dim"),
+        (crate::style::Modifiers::ITALIC, "italic"),
+        (crate::style::Modifiers::UNDERLINE, "underline"),
+        (crate::style::Modifiers::REVERSED, "reversed"),
+        (crate::style::Modifiers::STRIKETHROUGH, "strikethrough"),
+    ];
+    for (bit, name) in pairs {
+        if mods.contains(bit) {
+            if !first {
+                out.push(',');
+            }
+            out.push_str(name);
+            first = false;
+        }
+    }
+    out.push(']');
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out.push_str("[/]");
+}
+
+/// Format a [`crate::style::Color`] using the stable snapshot vocabulary.
+///
+/// Hand-rolled instead of `Debug` so upstream derive changes can't silently
+/// break snapshot stability.
+fn write_color(out: &mut String, color: crate::style::Color) {
+    use crate::style::Color;
+    match color {
+        Color::Reset => out.push_str("reset"),
+        Color::Black => out.push_str("black"),
+        Color::Red => out.push_str("red"),
+        Color::Green => out.push_str("green"),
+        Color::Yellow => out.push_str("yellow"),
+        Color::Blue => out.push_str("blue"),
+        Color::Magenta => out.push_str("magenta"),
+        Color::Cyan => out.push_str("cyan"),
+        Color::White => out.push_str("white"),
+        Color::DarkGray => out.push_str("dark_gray"),
+        Color::LightRed => out.push_str("light_red"),
+        Color::LightGreen => out.push_str("light_green"),
+        Color::LightYellow => out.push_str("light_yellow"),
+        Color::LightBlue => out.push_str("light_blue"),
+        Color::LightMagenta => out.push_str("light_magenta"),
+        Color::LightCyan => out.push_str("light_cyan"),
+        Color::LightWhite => out.push_str("light_white"),
+        Color::Rgb(r, g, b) => {
+            use std::fmt::Write;
+            let _ = write!(out, "#{r:02x}{g:02x}{b:02x}");
+        }
+        Color::Indexed(idx) => {
+            use std::fmt::Write;
+            let _ = write!(out, "idx{idx}");
+        }
+    }
+}
+
+/// Maximum byte length for OSC 8 hyperlink URLs.
+///
+/// Longer than any legitimate URL and enough to prevent DoS via
+/// balloon-sized hyperlinks. Shared by [`is_valid_osc8_url`] and
+/// [`sanitize_osc8_url`] so both gates agree on acceptance.
+const MAX_OSC8_URL_BYTES: usize = 2048;
+
+/// Returns `true` if `url` is safe to emit as an OSC 8 hyperlink payload.
+///
+/// Equivalent to `sanitize_osc8_url(url).is_some()` but avoids the `String`
+/// allocation when callers only need a boolean validity check (e.g.,
+/// defense-in-depth validation of a public `Cell::hyperlink` field on the
+/// flush path).
+#[inline]
+pub(crate) fn is_valid_osc8_url(url: &str) -> bool {
+    if url.is_empty() || url.len() > MAX_OSC8_URL_BYTES {
+        return false;
+    }
+    // Reject all C0 controls (incl. BEL 0x07, ESC 0x1b), DEL 0x7f, and
+    // anything below 0x20. ESC enables the ST (ESC \) terminator trick;
+    // BEL is the legacy OSC terminator. Either would let an
+    // attacker-controlled URL prematurely close the OSC 8 sequence and
+    // inject arbitrary follow-up commands (e.g., OSC 52 clipboard writes).
+    url.bytes().all(|b| b >= 0x20 && b != 0x7f)
+}
+
+/// Validate an OSC 8 hyperlink URL, returning `Some(url)` if safe to emit.
+///
+/// Rejects URLs containing control bytes, the BEL terminator, or an
+/// embedded ST (`ESC \`). Those would let an attacker-controlled URL
+/// prematurely close the OSC 8 sequence and inject arbitrary follow-up
+/// commands (e.g., OSC 52 clipboard writes). Also caps length at
+/// [`MAX_OSC8_URL_BYTES`] (2048).
+///
+/// For boolean validation (no allocation), use [`is_valid_osc8_url`].
+pub(crate) fn sanitize_osc8_url(url: &str) -> Option<String> {
+    if is_valid_osc8_url(url) {
+        Some(url.to_string())
+    } else {
+        None
+    }
+}
+
+/// Whether `a` and `b` cover the same area with complete cell vectors and
+/// written spans, so per-row span comparisons between them are valid.
+#[inline]
+pub(crate) fn same_layout(a: &Buffer, b: &Buffer) -> bool {
+    let cells = a.area.area_u64();
+    a.area == b.area
+        && a.content.len() as u64 == cells
+        && b.content.len() as u64 == cells
+        && a.touched.len() == a.area.height as usize
+        && b.touched.len() == b.area.height as usize
+}
+
+/// Column offsets `[lo, hi)` (relative to `area.x`) of row `row` that
+/// contain every cell differing between `current` and `previous`, or `None`
+/// when the row is identical (#486).
+///
+/// Requires [`same_layout`]. When both buffers were reset to the same fill,
+/// only the union of their written spans can differ (outside it both hold
+/// the fill cell), so an untouched row costs O(1). Otherwise the whole row
+/// is compared. The returned range is trimmed to the first and last
+/// differing cell, so callers scan each changed row once.
+#[inline]
+pub(crate) fn row_diff_range(
+    current: &Buffer,
+    previous: &Buffer,
+    row: usize,
+) -> Option<(usize, usize)> {
+    let width = current.area.width as usize;
+    let (lo, hi) = if current.fill_bg == previous.fill_bg {
+        let span = current.touched[row].union(previous.touched[row]);
+        if span.is_empty() {
+            return None;
+        }
+        (span.lo as usize, (span.hi as usize).min(width))
+    } else {
+        (0, width)
+    };
+    let base = row * width;
+    let now = &current.content[base + lo..base + hi];
+    let before = &previous.content[base + lo..base + hi];
+    let first = now.iter().zip(before).position(|(a, b)| a != b)?;
+    let last = now
+        .iter()
+        .zip(before)
+        .rposition(|(a, b)| a != b)
+        .unwrap_or(first);
+    Some((lo + first, lo + last + 1))
+}
+
+/// Whether `bytes[i]` is a printable-ASCII byte that forms its own extended
+/// grapheme cluster, with a break before and after it.
+///
+/// Under UAX #29 two ASCII code points never join except CR LF, and no ASCII
+/// code point is Prepend, Extend, ZWJ, SpacingMark or a regional indicator.
+/// So a printable byte is standalone when its neighbors are ASCII (or the
+/// string ends): a non-ASCII predecessor could be Prepend (GB9b) and a
+/// non-ASCII successor could be Extend/ZWJ/SpacingMark (GB9, GB9a). A run
+/// break between two standalone bytes also resets the regional-indicator and
+/// emoji-ZWJ state (GB11-GB13), so a stretch between standalone bytes
+/// segments the same on its own as inside the whole string.
+#[inline]
+fn standalone_ascii(bytes: &[u8], i: usize) -> bool {
+    is_printable_ascii_byte(bytes[i])
+        && (i == 0 || bytes[i - 1].is_ascii())
+        && bytes.get(i + 1).is_none_or(u8::is_ascii)
+}
+
+/// Overwrite every cell of `cells` with `blank` (a space with no hyperlink).
+///
+/// Field-wise assignment: equivalent to `*cell = blank.clone()` but lets the
+/// inline one-byte symbol overwrite in place, which measures faster than
+/// `slice::fill` on the 64-byte `Cell`.
+#[inline]
+fn blank_cells(cells: &mut [Cell], blank: &Cell) {
+    debug_assert!(blank.hyperlink.is_none());
+    for cell in cells {
+        cell.symbol.clone_from(&blank.symbol);
+        cell.style = blank.style;
+        cell.hyperlink = None;
+    }
+}
+
+/// [`display_width`] of a symbol that is already normalized, measuring the
+/// one-byte and one-scalar forms without the string width walk.
+#[inline]
+fn normalized_symbol_width(symbol: &str) -> u32 {
+    if symbol.len() == 1 {
+        return 1;
+    }
+    let mut chars = symbol.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next()) {
+        return char_display_width(ch) as u32;
+    }
+    display_width(symbol) as u32
+}
+
+/// Display width of a stored cell symbol after defensive normalization.
+///
+/// Setter-written symbols are already normalized, so the common one-byte and
+/// one-scalar cases are measured directly. `Cell::symbol` is a public field,
+/// so anything longer is re-normalized before measuring.
+#[inline]
+fn stored_symbol_width(symbol: &str) -> u32 {
+    if symbol.len() == 1 {
+        return 1;
+    }
+    let mut chars = symbol.chars();
+    if let (Some(ch), None) = (chars.next(), chars.next()) {
+        return char_display_width(sanitize_cell_char(ch)) as u32;
+    }
+    display_width(&normalize_cell_symbol(symbol)) as u32
+}
+
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = a.right().min(b.right());
+    let bottom = a.bottom().min(b.bottom());
+    let width = right.saturating_sub(x);
+    let height = bottom.saturating_sub(y);
+    Rect::new(x, y, width, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cell::MAX_CELL_SYMBOL_BYTES;
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn clip_stack_intersects_nested_regions() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 5));
+        buf.push_clip(Rect::new(1, 1, 6, 3));
+        buf.push_clip(Rect::new(4, 0, 6, 4));
+
+        buf.set_char(3, 2, 'x', Style::new());
+        buf.set_char(4, 2, 'y', Style::new());
+
+        assert_eq!(buf.get(3, 2).symbol, " ");
+        assert_eq!(buf.get(4, 2).symbol, "y");
+    }
+
+    #[test]
+    fn set_string_advances_even_when_clipped() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.push_clip(Rect::new(2, 0, 6, 1));
+
+        buf.set_string(0, 0, "abcd", Style::new());
+
+        assert_eq!(buf.get(2, 0).symbol, "c");
+        assert_eq!(buf.get(3, 0).symbol, "d");
+    }
+
+    #[test]
+    fn pop_clip_restores_previous_clip() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.push_clip(Rect::new(0, 0, 2, 1));
+        buf.push_clip(Rect::new(4, 0, 2, 1));
+
+        buf.set_char(1, 0, 'a', Style::new());
+        buf.pop_clip();
+        buf.set_char(1, 0, 'b', Style::new());
+
+        assert_eq!(buf.get(1, 0).symbol, "b");
+    }
+
+    #[test]
+    fn reset_clears_clip_stack() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.push_clip(Rect::new(0, 0, 0, 0));
+        buf.reset();
+        buf.set_char(0, 0, 'z', Style::new());
+
+        assert_eq!(buf.get(0, 0).symbol, "z");
+    }
+
+    #[test]
+    fn set_string_replaces_control_chars_with_replacement() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        // ESC must never land in a cell — a flushed ESC would let the
+        // string escape its cell and execute as a real terminal command.
+        buf.set_string(0, 0, "a\x1bbc", Style::new());
+        assert_eq!(buf.get(0, 0).symbol, "a");
+        assert_eq!(buf.get(1, 0).symbol, "\u{FFFD}");
+        assert_eq!(buf.get(2, 0).symbol, "b");
+        assert_eq!(buf.get(3, 0).symbol, "c");
+    }
+
+    #[test]
+    fn zero_width_combining_does_not_append_control_bytes() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_char(0, 0, 'a', Style::new());
+        // BEL is zero-width per unicode_width; the pre-fix code would have
+        // pushed it onto cell(0,0).symbol. After sanitize_cell_char it is
+        // replaced with U+FFFD and then appended (width 1, still fits).
+        buf.set_string(1, 0, "\x07", Style::new());
+        let symbol = buf.get(1, 0).symbol.as_str();
+        assert!(!symbol.contains('\x07'), "BEL leaked into cell symbol");
+    }
+
+    #[test]
+    fn set_string_caps_combining_overflow() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_char(0, 0, 'a', Style::new());
+        // 200 copies of an ASCII-printable zero-width-ish char would bypass
+        // the byte cap. Use a legitimate zero-width combining character —
+        // U+0301 (combining acute accent) — and confirm the cap kicks in.
+        let combining: String = "\u{0301}".repeat(200);
+        buf.set_string(1, 0, &combining, Style::new());
+        assert!(
+            buf.get(0, 0).symbol.len() <= MAX_CELL_SYMBOL_BYTES,
+            "cell symbol exceeded MAX_CELL_SYMBOL_BYTES cap"
+        );
+    }
+
+    #[test]
+    fn sanitize_osc8_url_rejects_control_chars_and_esc() {
+        assert!(sanitize_osc8_url("https://example.com").is_some());
+        assert!(sanitize_osc8_url("https://example.com?q=1&r=2").is_some());
+        // BEL — terminates OSC, would let follow-up text be interpreted.
+        assert!(sanitize_osc8_url("https://example.com\x07attack").is_none());
+        // ESC — can open ST (ESC \) or another OSC.
+        assert!(sanitize_osc8_url("https://example.com\x1b]52;c;hi\x1b\\").is_none());
+        // Empty / oversize.
+        assert!(sanitize_osc8_url("").is_none());
+        assert!(sanitize_osc8_url(&"a".repeat(2049)).is_none());
+    }
+
+    #[test]
+    fn is_valid_osc8_url_matches_sanitize() {
+        // is_valid_osc8_url must agree with sanitize_osc8_url on every input.
+        // If the two ever drift, the OSC 8 flush path either rejects
+        // legitimate URLs (silent) or admits dangerous ones (security).
+        let oversize = "x".repeat(2049);
+        let cases: &[&str] = &[
+            "https://example.com",
+            "http://localhost:8080/path?q=1#frag",
+            "ftp://[::1]/file",
+            "",
+            &oversize,
+            "https://evil.com\x1b]52;c;inject\x1b\\",
+            "https://evil.com\x07bel",
+            "https://example.com\x7f",
+            "https://example.com\x00",
+        ];
+        for url in cases {
+            assert_eq!(
+                is_valid_osc8_url(url),
+                sanitize_osc8_url(url).is_some(),
+                "is_valid_osc8_url and sanitize_osc8_url disagree on {url:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_string_inner_parity_no_link() {
+        // set_string and set_string_linked with an invalid URL must produce
+        // identical buffer state (link rejected → None).
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf_a = Buffer::empty(area);
+        let mut buf_b = Buffer::empty(area);
+        let style = Style::new();
+
+        buf_a.set_string(0, 0, "Hello wide世界", style);
+        buf_b.set_string_linked(0, 0, "Hello wide世界", style, "");
+
+        for x in 0..20 {
+            let ca = buf_a.get(x, 0);
+            let cb = buf_b.get(x, 0);
+            assert_eq!(ca.symbol, cb.symbol, "symbol mismatch at x={x}");
+            assert_eq!(ca.style, cb.style, "style mismatch at x={x}");
+            assert_eq!(
+                cb.hyperlink, None,
+                "invalid URL must produce None hyperlink at x={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_string_linked_attaches_hyperlink_to_wide_char_pair() {
+        // Wide chars span two cells; both must carry the same hyperlink.
+        let area = Rect::new(0, 0, 4, 1);
+        let mut buf = Buffer::empty(area);
+        buf.set_string_linked(0, 0, "世", Style::new(), "https://example.com");
+        let leading = buf.get(0, 0);
+        let trailing = buf.get(1, 0);
+        assert_eq!(leading.symbol, "世");
+        assert!(trailing.symbol.is_empty(), "wide-char trailing must blank");
+        assert!(leading.hyperlink.is_some());
+        assert_eq!(leading.hyperlink, trailing.hyperlink);
+    }
+
+    #[test]
+    fn try_get_out_of_bounds_returns_none() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 2));
+        assert!(buf.try_get(0, 0).is_some());
+        assert!(buf.try_get(2, 0).is_none());
+        assert!(buf.try_get(0, 2).is_none());
+        assert!(buf.try_get_mut(5, 5).is_none());
+    }
+
+    #[test]
+    fn kitty_clip_stack_restores_outer_on_pop() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 4));
+        assert!(buf.current_kitty_clip().is_none());
+
+        let outer = KittyClipInfo {
+            top_clip_rows: 2,
+            original_height: 10,
+        };
+        let inner = KittyClipInfo {
+            top_clip_rows: 5,
+            original_height: 20,
+        };
+
+        buf.push_kitty_clip(outer);
+        assert_eq!(buf.current_kitty_clip(), Some(&outer));
+
+        // Nested region pushes its own frame.
+        buf.push_kitty_clip(inner);
+        assert_eq!(buf.current_kitty_clip(), Some(&inner));
+
+        // After inner pops, outer MUST still be active — the bug this
+        // refactor fixes is exactly that the outer was previously clobbered.
+        let popped_inner = buf.pop_kitty_clip();
+        assert_eq!(popped_inner, Some(inner));
+        assert_eq!(buf.current_kitty_clip(), Some(&outer));
+
+        let popped_outer = buf.pop_kitty_clip();
+        assert_eq!(popped_outer, Some(outer));
+        assert!(buf.current_kitty_clip().is_none());
+    }
+
+    #[test]
+    fn kitty_clip_stack_cleared_on_reset() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 2));
+        buf.push_kitty_clip(KittyClipInfo {
+            top_clip_rows: 1,
+            original_height: 2,
+        });
+        buf.push_kitty_clip(KittyClipInfo {
+            top_clip_rows: 3,
+            original_height: 4,
+        });
+        buf.reset();
+        assert!(buf.kitty_clip_info_stack.is_empty());
+        assert!(buf.current_kitty_clip().is_none());
+    }
+
+    #[test]
+    fn kitty_clip_pop_on_empty_stack_is_none() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 2));
+        assert!(buf.pop_kitty_clip().is_none());
+    }
+
+    #[test]
+    fn kitty_horizontal_clip_crops_source_pixels_to_visible_columns() {
+        let rgba = Arc::new(vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            255, 255, 255, 255, // white
+        ]);
+        let placement = KittyPlacement {
+            content_hash: hash_rgba(&rgba),
+            rgba,
+            src_width: 4,
+            src_height: 1,
+            x: 0,
+            y: 0,
+            cols: 2,
+            rows: 1,
+            crop_y: 0,
+            crop_h: 0,
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.push_kitty_horizontal_clip(KittyHorizontalClipInfo {
+            left_clip_cols: 1,
+            original_width: 4,
+        });
+        buf.kitty_place(placement);
+
+        let cropped = &buf.kitty_placements[0];
+        assert_eq!(cropped.src_width, 2);
+        assert_eq!(cropped.rgba.as_slice(), &[0, 255, 0, 255, 0, 0, 255, 255]);
+        assert!(buf.pop_kitty_horizontal_clip().is_some());
+    }
+
+    // ---- snapshot_format tests (#231) -------------------------------------
+
+    #[test]
+    fn snapshot_format_default_style_unannotated() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
+        buf.set_string(0, 0, "abc", Style::new());
+        // Two trailing default cells render as raw spaces.
+        assert_eq!(buf.snapshot_format(), "abc  ");
+    }
+
+    #[test]
+    fn snapshot_format_color_runs_grouped() {
+        use crate::style::Color;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "abc", Style::new().fg(Color::Red));
+        buf.set_string(3, 0, "def", Style::new().fg(Color::Blue));
+        let snap = buf.snapshot_format();
+        assert_eq!(snap, "[fg=red]\"abc\"[/][fg=blue]\"def\"[/]");
+    }
+
+    #[test]
+    fn snapshot_format_modifier_transitions() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "ab", Style::new().bold());
+        // gap with default style
+        buf.set_string(2, 0, "cd", Style::new());
+        buf.set_string(4, 0, "ef", Style::new().bold());
+        let snap = buf.snapshot_format();
+        assert_eq!(snap, "[bold]\"ab\"[/]cd[bold]\"ef\"[/]");
+    }
+
+    #[test]
+    fn snapshot_format_deterministic() {
+        use crate::style::Color;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 2));
+        buf.set_string(0, 0, "hello", Style::new().fg(Color::Cyan).bold());
+        buf.set_string(0, 1, "world", Style::new().bg(Color::Rgb(10, 20, 30)));
+        let a = buf.snapshot_format();
+        let b = buf.snapshot_format();
+        assert_eq!(a, b, "snapshot_format must be deterministic");
+        // Verify byte length equality as a stronger anti-flake guarantee.
+        assert_eq!(a.len(), b.len());
+    }
+
+    #[test]
+    fn snapshot_format_empty_buffer_is_spaces() {
+        let buf = Buffer::empty(Rect::new(0, 0, 4, 2));
+        // 4 default-style spaces per row, joined by '\n'.
+        assert_eq!(buf.snapshot_format(), "    \n    ");
+    }
+
+    #[test]
+    fn snapshot_format_zero_dim_returns_empty() {
+        let buf_a = Buffer::empty(Rect::new(0, 0, 0, 4));
+        let buf_b = Buffer::empty(Rect::new(0, 0, 4, 0));
+        assert_eq!(buf_a.snapshot_format(), "");
+        assert_eq!(buf_b.snapshot_format(), "");
+    }
+
+    #[test]
+    fn snapshot_format_rgb_uses_hex_codes() {
+        use crate::style::Color;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_string(0, 0, "x", Style::new().fg(Color::Rgb(0xff, 0x00, 0xab)));
+        let snap = buf.snapshot_format();
+        assert!(
+            snap.contains("fg=#ff00ab"),
+            "expected hex RGB code, got {snap:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_format_indexed_color() {
+        use crate::style::Color;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        buf.set_string(0, 0, "x", Style::new().fg(Color::Indexed(42)));
+        assert!(buf.snapshot_format().contains("fg=idx42"));
+    }
+
+    #[test]
+    fn snapshot_format_modifiers_canonical_order() {
+        // Insert in reverse order; output must still be canonical.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
+        let style = Style::new().strikethrough().italic().bold();
+        buf.set_string(0, 0, "x", style);
+        let snap = buf.snapshot_format();
+        // Order in output: bold, italic, strikethrough.
+        let bold_idx = snap.find("bold").expect("bold present");
+        let italic_idx = snap.find("italic").expect("italic present");
+        let strike_idx = snap.find("strikethrough").expect("strikethrough present");
+        assert!(bold_idx < italic_idx);
+        assert!(italic_idx < strike_idx);
+    }
+
+    #[test]
+    fn snapshot_format_escapes_quote_and_backslash() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string(0, 0, "a\"b\\", Style::new().bold());
+        let snap = buf.snapshot_format();
+        // Embedded quote → \" and backslash → \\
+        assert!(
+            snap.contains("\"a\\\"b\\\\\""),
+            "expected escapes, got {snap:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_format_multi_row_uses_newlines() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 3));
+        buf.set_string(0, 0, "aaa", Style::new());
+        buf.set_string(0, 1, "bbb", Style::new());
+        buf.set_string(0, 2, "ccc", Style::new());
+        assert_eq!(buf.snapshot_format(), "aaa\nbbb\nccc");
+    }
+
+    // ---- written-span row skip (#485/#486, replaces the #171 row hash) ----
+
+    #[test]
+    fn fresh_buffer_has_no_written_spans() {
+        let buf = Buffer::empty(Rect::new(0, 0, 4, 3));
+        assert_eq!(buf.touched.len(), 3);
+        assert!(buf.touched.iter().all(|span| span.is_empty()));
+        assert_eq!(buf.fill_invariant_violation(), None);
+    }
+
+    #[test]
+    fn writes_widen_only_their_row_span() {
+        let mut buf = Buffer::empty(Rect::new(2, 0, 8, 4));
+        buf.set_string(3, 1, "hello", Style::new());
+        buf.set_char(9, 2, 'X', Style::new());
+        assert!(buf.touched[0].is_empty());
+        assert_eq!(buf.touched[1], RowSpan { lo: 1, hi: 6 });
+        assert_eq!(buf.touched[2], RowSpan { lo: 7, hi: 8 });
+        assert!(buf.touched[3].is_empty());
+    }
+
+    #[test]
+    fn row_diff_range_skips_identical_rows_and_trims_changed_ones() {
+        use crate::style::Color;
+        let area = Rect::new(0, 0, 6, 4);
+        let mut a = Buffer::empty(area);
+        let mut b = Buffer::empty(area);
+        a.set_string(0, 0, "abcdef", Style::new());
+        b.set_string(0, 0, "abcdef", Style::new());
+        a.set_string(0, 1, "abXdef", Style::new());
+        b.set_string(0, 1, "abcdef", Style::new());
+        a.set_string(1, 2, "q", Style::new().fg(Color::Red));
+        b.set_string(1, 2, "q", Style::new());
+        assert!(same_layout(&a, &b));
+        assert_eq!(row_diff_range(&a, &b, 0), None, "identical touched row");
+        assert_eq!(row_diff_range(&a, &b, 1), Some((2, 3)));
+        assert_eq!(row_diff_range(&a, &b, 2), Some((1, 2)), "style-only change");
+        assert_eq!(row_diff_range(&a, &b, 3), None, "untouched in both");
+
+        // Different fills force a full-row compare.
+        b.reset_with_bg(Color::Blue);
+        assert_eq!(row_diff_range(&a, &b, 3), Some((0, 6)));
+        a.reset_with_bg(Color::Blue);
+        assert_eq!(row_diff_range(&a, &b, 3), None);
+    }
+
+    #[test]
+    fn row_diff_range_detects_hyperlink_and_continuation_changes() {
+        let area = Rect::new(0, 0, 6, 2);
+        let mut a = Buffer::empty(area);
+        let mut b = Buffer::empty(area);
+        a.set_string_linked(0, 0, "link", Style::new(), "https://example.com");
+        b.set_string(0, 0, "link", Style::new());
+        assert_eq!(row_diff_range(&a, &b, 0), Some((0, 4)));
+        a.set_string(0, 1, "世", Style::new());
+        b.set_string(0, 1, "世", Style::new());
+        b.get_mut(1, 1).set_char('x');
+        assert_eq!(row_diff_range(&a, &b, 1), Some((1, 2)));
+    }
+
+    #[test]
+    fn resize_keeps_span_array_in_sync() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
+        buf.set_string(0, 0, "abcd", Style::new());
+        buf.resize(Rect::new(0, 0, 4, 5));
+        assert_eq!(buf.touched.len(), 5);
+        assert!(buf.touched.iter().all(|span| span.is_empty()));
+        assert!(buf.content.iter().all(|cell| *cell == Cell::default()));
+        buf.resize(Rect::new(0, 0, 3, 2));
+        assert_eq!(buf.touched.len(), 2);
+        assert_eq!(buf.fill_invariant_violation(), None);
+    }
+
+    #[test]
+    fn checked_construction_rejects_budget_and_edge_overflow() {
+        let oversized = Rect::new(0, 0, MAX_BUFFER_CELLS as u32 + 1, 1);
+        assert!(matches!(
+            Buffer::try_empty(oversized),
+            Err(BufferError::CellBudgetExceeded {
+                requested,
+                maximum,
+            }) if requested == MAX_BUFFER_CELLS as u64 + 1 && maximum == MAX_BUFFER_CELLS
+        ));
+        assert!(matches!(
+            Buffer::try_empty(Rect::new(u32::MAX, 0, 1, 1)),
+            Err(BufferError::InvalidEdges)
+        ));
+        assert!(matches!(
+            Buffer::try_empty(Rect::new(0, 0, 0, u32::MAX)),
+            Err(BufferError::RowBudgetExceeded { .. })
+        ));
+        assert!(Buffer::validate_area(Rect::new(12, 34, 80, 24)).is_ok());
+    }
+
+    #[test]
+    fn failed_checked_resize_preserves_existing_geometry_and_content() {
+        let mut buf = Buffer::empty(Rect::new(7, 9, 4, 2));
+        buf.set_string(7, 9, "safe", Style::new());
+
+        let result = buf.try_resize(Rect::new(0, 0, MAX_BUFFER_CELLS as u32 + 1, 1));
+        assert!(matches!(
+            result,
+            Err(BufferError::CellBudgetExceeded { .. })
+        ));
+        assert_eq!(buf.area, Rect::new(7, 9, 4, 2));
+        assert_eq!(buf.get(7, 9).symbol, "s");
+    }
+
+    #[test]
+    fn nonzero_origin_string_writes_clip_on_all_four_edges() {
+        let mut buf = Buffer::empty(Rect::new(10, 20, 4, 2));
+        buf.set_string(8, 20, "abcd", Style::new());
+        buf.set_string(10, 19, "top", Style::new());
+        buf.set_string(10, 22, "bottom", Style::new());
+
+        assert_eq!(buf.get(10, 20).symbol, "c");
+        assert_eq!(buf.get(11, 20).symbol, "d");
+        assert_eq!(buf.get(10, 21).symbol, " ");
+    }
+
+    #[test]
+    fn diff_with_different_origins_and_sizes_is_a_bounded_full_redraw() {
+        let mut current = Buffer::empty(Rect::new(10, 20, 3, 2));
+        current.set_string(10, 20, "abc", Style::new());
+        let previous = Buffer::empty(Rect::new(0, 0, 1, 1));
+
+        let updates = current.diff(&previous);
+        assert_eq!(updates.len(), current.content.len());
+        assert_eq!((updates[0].0, updates[0].1), (10, 20));
+        assert_eq!((updates[5].0, updates[5].1), (12, 21));
+    }
+
+    #[test]
+    fn zwj_grapheme_is_atomic_and_marks_continuation_cells() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string(0, 0, "👩‍💻x", Style::new());
+
+        assert_eq!(buf.get(0, 0).symbol, "👩‍💻");
+        assert!(buf.get(1, 0).is_continuation());
+        assert_eq!(buf.get(2, 0).symbol, "x");
+    }
+
+    #[test]
+    fn wide_replacement_clears_continuation_and_stale_hyperlink() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string_linked(1, 0, "世", Style::new(), "https://example.com");
+        buf.set_char(1, 0, 'a', Style::new());
+
+        assert_eq!(buf.get(1, 0).symbol, "a");
+        assert_eq!(buf.get(2, 0).symbol, " ");
+        assert!(buf.get(1, 0).hyperlink.is_none());
+        assert!(buf.get(2, 0).hyperlink.is_none());
+    }
+
+    #[test]
+    fn wide_write_never_splits_at_area_or_clip_boundary() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_char(3, 0, 'x', Style::new());
+        buf.set_string(3, 0, "世", Style::new());
+        assert_eq!(buf.get(3, 0).symbol, "x");
+
+        buf.set_string(1, 0, "世", Style::new());
+        buf.push_clip(Rect::new(1, 0, 1, 1));
+        buf.set_char(1, 0, 'a', Style::new());
+        assert_eq!(buf.get(1, 0).symbol, "世");
+        assert!(buf.get(2, 0).is_continuation());
+    }
+
+    #[test]
+    fn fnv1a_hash_rgba_is_deterministic_and_content_sensitive() {
+        // `hash_rgba` (now FNV-1a) underpins Kitty image dedup: equal pixels
+        // must dedup (equal hash), differing pixels must not.
+        let a = [1u8, 2, 3, 4];
+        let b = [1u8, 2, 3, 4];
+        let c = [1u8, 2, 3, 5];
+        assert_eq!(hash_rgba(&a), hash_rgba(&b));
+        assert_ne!(hash_rgba(&a), hash_rgba(&c));
+        // Determinism within the run.
+        assert_eq!(hash_rgba(&a), hash_rgba(&a));
+    }
+
+    // ── Bidi (UAX #9) reordering ────────────────────────────────────────
+    //
+    // `line_visual` reads a buffer row left-to-right by column and trims
+    // trailing blanks — exactly the visual order a reader sees, which is the
+    // correct oracle for asserting reorder output.
+    #[cfg(feature = "bidi")]
+    fn line_visual(buf: &Buffer, y: u32) -> String {
+        let mut s = String::new();
+        for x in buf.area.x..buf.area.right() {
+            let sym = buf.get(x, y).symbol.as_str();
+            if sym.is_empty() {
+                continue; // wide-char trailing cell
+            }
+            s.push_str(sym);
+        }
+        s.trim_end().to_string()
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn needs_bidi_reorder_false_for_pure_ltr() {
+        // Pure-LTR strings take the zero-allocation fast path.
+        assert!(!needs_bidi_reorder("Hello, world 123"));
+        assert!(!needs_bidi_reorder(""));
+        assert!(!needs_bidi_reorder("café résumé"));
+        assert!(!needs_bidi_reorder("世界 CJK wide"));
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn needs_bidi_reorder_true_for_rtl_and_controls() {
+        assert!(needs_bidi_reorder("שלום")); // Hebrew
+        assert!(needs_bidi_reorder("شكرا")); // Arabic
+        assert!(needs_bidi_reorder("abc אבג def")); // mixed
+        assert!(needs_bidi_reorder("a\u{202E}bc")); // RLO control
+        assert!(needs_bidi_reorder("\u{200F}")); // RLM
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_ltr_unchanged_by_reorder_path() {
+        // Regression guard: LTR text must NOT be reordered.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "abcde", Style::new());
+        assert_eq!(buf.get(0, 0).symbol, "a");
+        assert_eq!(buf.get(1, 0).symbol, "b");
+        assert_eq!(buf.get(2, 0).symbol, "c");
+        assert_eq!(buf.get(3, 0).symbol, "d");
+        assert_eq!(buf.get(4, 0).symbol, "e");
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_pure_rtl_reverses_to_visual_order() {
+        // Hebrew "שלום" is logical ש,ל,ו,ם. In visual order the first
+        // logical char (ש) lands on the rightmost column and the last (ם)
+        // on the leftmost — i.e. the row reads "םולש" left-to-right.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string(0, 0, "\u{05E9}\u{05DC}\u{05D5}\u{05DD}", Style::new());
+        // column 0 == last logical char, last column == first logical char
+        assert_eq!(buf.get(0, 0).symbol, "\u{05DD}"); // ם
+        assert_eq!(buf.get(3, 0).symbol, "\u{05E9}"); // ש
+        assert_eq!(line_visual(&buf, 0), "\u{05DD}\u{05D5}\u{05DC}\u{05E9}");
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_mixed_ltr_rtl_run() {
+        // Per UAX #9 (unicode-bidi reference vectors): "abc אבג" → "abc גבא".
+        // The Latin segment keeps LTR order; the Hebrew segment reverses.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.set_string(0, 0, "abc \u{05D0}\u{05D1}\u{05D2}", Style::new());
+        assert_eq!(line_visual(&buf, 0), "abc \u{05D2}\u{05D1}\u{05D0}");
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_numbers_inside_rtl_stay_ltr() {
+        // "123 אבג" → "גבא 123": European numbers are weak LTR and cannot
+        // reorder a strong RTL run, so the digits stay "123" left-to-right
+        // while the Hebrew reverses (unicode-bidi reference vector).
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.set_string(0, 0, "123 \u{05D0}\u{05D1}\u{05D2}", Style::new());
+        assert_eq!(line_visual(&buf, 0), "\u{05D2}\u{05D1}\u{05D0} 123");
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_wide_char_with_rtl_blanks_trailing_cell() {
+        // A CJK wide glyph mixed with Hebrew: after reorder the wide char's
+        // trailing cell must still be blanked at the correct visual column.
+        // Logical "世 אב" → the wide 世 stays leftmost (LTR base), Hebrew
+        // reverses to "בא". Visual: 世 (cols 0-1), space (col 2), ב (3) א (4).
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "\u{4E16} \u{05D0}\u{05D1}", Style::new());
+        assert_eq!(buf.get(0, 0).symbol, "\u{4E16}"); // 世 leading
+        assert!(buf.get(1, 0).symbol.is_empty(), "wide trailing must blank");
+        assert_eq!(buf.get(3, 0).symbol, "\u{05D1}"); // ב
+        assert_eq!(buf.get(4, 0).symbol, "\u{05D0}"); // א
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_linked_hyperlink_survives_reorder() {
+        // Every non-blank emitted cell of an RTL link must carry the URL,
+        // regardless of its new visual column.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string_linked(
+            0,
+            0,
+            "\u{05E9}\u{05DC}\u{05D5}\u{05DD}",
+            Style::new(),
+            "https://example.com",
+        );
+        for x in 0..4 {
+            let cell = buf.get(x, 0);
+            assert!(
+                cell.hyperlink.is_some(),
+                "hyperlink missing at visual column {x}"
+            );
+        }
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn set_string_control_chars_filtered_in_rtl() {
+        // An ESC embedded in an RTL string must still be replaced with
+        // U+FFFD — the reorder path must not bypass sanitize_cell_char.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "\u{05D0}\x1b\u{05D1}", Style::new());
+        let mut found_replacement = false;
+        for x in 0..6 {
+            let sym = buf.get(x, 0).symbol.as_str();
+            assert!(!sym.contains('\x1b'), "ESC leaked into a cell");
+            if sym.contains('\u{FFFD}') {
+                found_replacement = true;
+            }
+        }
+        assert!(found_replacement, "ESC was not replaced with U+FFFD");
+    }
+
+    #[cfg(feature = "bidi")]
+    #[test]
+    fn reorder_line_visual_empty_is_noop() {
+        assert_eq!(reorder_line_visual(""), "");
+    }
+
+    #[test]
+    fn three_column_cluster_is_cleared_and_extended_as_one_unit() {
+        // "世" + U+0903 (spacing mark) is one cluster of display width 3.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.set_string(1, 0, "世\u{0903}", Style::new());
+        assert_eq!(UnicodeWidthStr::width(buf.get(1, 0).symbol.as_str()), 3);
+        assert!(buf.get(2, 0).is_continuation() && buf.get(3, 0).is_continuation());
+        // A zero-width suffix after the cluster extends its leading cell, not
+        // the middle continuation.
+        buf.set_string(4, 0, "\u{301}", Style::new());
+        assert!(buf.get(1, 0).symbol.ends_with('\u{301}'));
+        // A control-class format char (RLO) cannot join the cluster and must
+        // not turn the middle continuation into a leading cell.
+        buf.set_string(4, 0, "\u{202E}", Style::new());
+        assert!(buf.get(2, 0).is_continuation() && buf.get(3, 0).is_continuation());
+        // Overwriting the last continuation clears the whole cluster.
+        buf.set_char(3, 0, 'x', Style::new());
+        assert_eq!(buf.get(1, 0).symbol, " ");
+        assert_eq!(buf.get(2, 0).symbol, " ");
+        assert_eq!(buf.get(3, 0).symbol, "x");
+        assert_eq!(assert_no_orphan_continuations(&buf), Ok(()));
+    }
+
+    #[test]
+    fn fill_rect_clears_wide_glyphs_straddling_its_edges() {
+        use crate::style::Color;
+        let bg = Style::new().bg(Color::Rgb(20, 20, 30));
+        // 世 at columns 1-2 straddles the left edge (x = 2); 界 at 5-6
+        // straddles the right edge (right = 6).
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.set_string(1, 0, "世", Style::new());
+        buf.set_string(5, 0, "界", Style::new());
+        buf.fill_rect(Rect::new(2, 0, 4, 1), bg);
+        let symbols: Vec<&str> = (0..8).map(|x| buf.get(x, 0).symbol.as_str()).collect();
+        assert_eq!(symbols, [" "; 8]);
+        // Cells outside the rect that belonged to the cut glyphs are blanked
+        // with the default style; cells inside carry the fill style.
+        assert_eq!(*buf.get(1, 0), Cell::default());
+        assert_eq!(*buf.get(6, 0), Cell::default());
+        assert!((2..6).all(|x| buf.get(x, 0).style == bg));
+        assert_eq!(buf.fill_invariant_violation(), None);
+
+        // When the clip excludes the straddled leading cell, the glyph is
+        // left intact rather than split.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+        buf.set_string(1, 0, "世", Style::new());
+        buf.push_clip(Rect::new(2, 0, 6, 1));
+        buf.fill_rect(Rect::new(0, 0, 8, 1), bg);
+        assert_eq!(buf.get(1, 0).symbol, "世");
+        assert!(buf.get(2, 0).is_continuation());
+        assert_eq!(buf.get(0, 0).symbol, " ");
+        assert_eq!(buf.get(0, 0).style, Style::new(), "outside the clip");
+        assert!((3..8).all(|x| buf.get(x, 0).style == bg));
+    }
+
+    #[test]
+    fn crlf_grapheme_occupies_exactly_one_cell() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        buf.set_string(0, 0, "aXYb", Style::new());
+        buf.set_string(0, 0, "a\r\nb", Style::new());
+        assert_eq!(buf.get(0, 0).symbol, "a");
+        assert_eq!(buf.get(1, 0).symbol, "\u{FFFD}");
+        assert_eq!(buf.get(2, 0).symbol, "b");
+        assert_eq!(buf.get(3, 0).symbol, "b");
+        assert!((0..6).all(|x| !buf.get(x, 0).is_continuation()));
+    }
+
+    /// Every continuation cell must be covered by the display width of the
+    /// leading cell before it (no orphan continuation).
+    fn assert_no_orphan_continuations(buf: &Buffer) -> Result<(), String> {
+        for y in buf.area.y..buf.area.bottom() {
+            let mut covered_until = buf.area.x;
+            for x in buf.area.x..buf.area.right() {
+                let cell = buf.get(x, y);
+                if cell.is_continuation() {
+                    if x >= covered_until {
+                        return Err(format!("orphan continuation at ({x}, {y})"));
+                    }
+                } else {
+                    let width = UnicodeWidthStr::width(cell.symbol.as_str()).max(1) as u32;
+                    covered_until = x.saturating_add(width);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reference copy of the cell-write path before the single-normalization
+    /// rewrite (#484): every grapheme is segmented and normalized, then
+    /// re-normalized by `Cell::set_symbol`, and neighbors are measured via
+    /// `normalized_symbol()`. The differential proptest below requires the
+    /// optimized path to leave byte-identical cells.
+    mod cell_write_oracle {
+        use super::*;
+        use compact_str::CompactString;
+
+        pub(super) fn set_string(
+            buf: &mut Buffer,
+            mut x: u32,
+            y: u32,
+            s: &str,
+            style: Style,
+            link: Option<&CompactString>,
+        ) {
+            if y < buf.area.y || y >= buf.area.bottom() {
+                return;
+            }
+            #[cfg(feature = "bidi")]
+            let reordered;
+            #[cfg(feature = "bidi")]
+            let s: &str = if needs_bidi_reorder(s) {
+                reordered = reorder_line_visual(s);
+                &reordered
+            } else {
+                s
+            };
+            let clip = buf.effective_clip().copied();
+            for grapheme in s.graphemes(true) {
+                if x >= buf.area.right() {
+                    break;
+                }
+                let width = set_grapheme_visual_inner(buf, x, y, grapheme, style, link, clip);
+                x = x.saturating_add(width);
+            }
+        }
+
+        pub(super) fn set_string_linked(
+            buf: &mut Buffer,
+            x: u32,
+            y: u32,
+            s: &str,
+            style: Style,
+            url: &str,
+        ) {
+            let link = sanitize_osc8_url(url).map(CompactString::new);
+            set_string(buf, x, y, s, style, link.as_ref());
+        }
+
+        pub(super) fn set_grapheme_visual(
+            buf: &mut Buffer,
+            x: u32,
+            y: u32,
+            grapheme: &str,
+            style: Style,
+        ) -> u32 {
+            let clip = buf.effective_clip().copied();
+            set_grapheme_visual_inner(buf, x, y, grapheme, style, None, clip)
+        }
+
+        pub(super) fn set_char(buf: &mut Buffer, x: u32, y: u32, ch: char, style: Style) {
+            let mut encoded = [0; 4];
+            set_grapheme_visual(buf, x, y, ch.encode_utf8(&mut encoded), style);
+        }
+
+        fn set_grapheme_visual_inner(
+            buf: &mut Buffer,
+            x: u32,
+            y: u32,
+            grapheme: &str,
+            style: Style,
+            link: Option<&CompactString>,
+            clip: Option<Rect>,
+        ) -> u32 {
+            let symbol = normalize_cell_symbol(grapheme);
+            let width = crate::width::str_width(symbol.as_str()) as u32;
+            if width == 0 {
+                append_zero_width(buf, x, y, &symbol, clip);
+                return 0;
+            }
+            let Some(target_right) = x.checked_add(width) else {
+                return width;
+            };
+            if y < buf.area.y
+                || y >= buf.area.bottom()
+                || x < buf.area.x
+                || target_right > buf.area.right()
+            {
+                return width;
+            }
+            let (mut affected_left, mut affected_right) = (x, target_right);
+            for col in x..target_right {
+                let (old_left, old_right) = existing_grapheme_range(buf, col, y);
+                affected_left = affected_left.min(old_left);
+                affected_right = affected_right.max(old_right);
+            }
+            if affected_left < buf.area.x || affected_right > buf.area.right() {
+                return width;
+            }
+            let fully_in_clip = clip.is_none_or(|clip| {
+                y >= clip.y
+                    && y < clip.bottom()
+                    && affected_left >= clip.x
+                    && affected_right <= clip.right()
+            });
+            if !fully_in_clip {
+                return width;
+            }
+            for col in affected_left..affected_right {
+                let idx = buf.index_of(col, y);
+                buf.content[idx].reset();
+            }
+            let leading_idx = buf.index_of(x, y);
+            let leading = &mut buf.content[leading_idx];
+            leading.set_symbol(&symbol);
+            leading.set_style(style);
+            leading.hyperlink = link.cloned();
+            for col in x.saturating_add(1)..target_right {
+                let idx = buf.index_of(col, y);
+                buf.content[idx].set_continuation(style);
+                buf.content[idx].hyperlink = link.cloned();
+            }
+            width
+        }
+
+        fn existing_grapheme_range(buf: &Buffer, x: u32, y: u32) -> (u32, u32) {
+            // Shared fix: walk back over every continuation (3+ column clusters).
+            let mut left = x;
+            while buf.content[buf.index_of(left, y)].is_continuation() && left > buf.area.x {
+                left -= 1;
+            }
+            let symbol = buf.content[buf.index_of(left, y)].normalized_symbol();
+            let width = (crate::width::str_width(symbol.as_str()) as u32).max(1);
+            (left, left.saturating_add(width).min(buf.area.right()))
+        }
+
+        fn append_zero_width(buf: &mut Buffer, x: u32, y: u32, suffix: &str, clip: Option<Rect>) {
+            if suffix.is_empty()
+                || buf.area.is_empty()
+                || y < buf.area.y
+                || y >= buf.area.bottom()
+                || x <= buf.area.x
+                || x > buf.area.right()
+            {
+                return;
+            }
+            let mut leading_x = x - 1;
+            while buf.content[buf.index_of(leading_x, y)].is_continuation()
+                && leading_x > buf.area.x
+            {
+                leading_x -= 1;
+            }
+            let (_, right) = existing_grapheme_range(buf, leading_x, y);
+            if clip.is_some_and(|clip| !clip.contains(leading_x, y) || right > clip.right()) {
+                return;
+            }
+            let idx = buf.index_of(leading_x, y);
+            let mut combined = buf.content[idx].normalized_symbol();
+            combined.push_str(suffix);
+            let normalized = normalize_cell_symbol(&combined);
+            if normalized != buf.content[idx].symbol {
+                buf.content[idx].symbol = normalized;
+            }
+        }
+    }
+
+    mod cell_write_differential {
+        use super::*;
+        use crate::cell::test_strategies::{cell_text, fragment};
+        use crate::style::Color;
+        use proptest::prelude::*;
+
+        #[derive(Debug, Clone)]
+        enum Op {
+            Text {
+                x: u32,
+                y: u32,
+                text: String,
+                style: u8,
+                linked: bool,
+            },
+            Char {
+                x: u32,
+                y: u32,
+                ch: char,
+                style: u8,
+            },
+            Grapheme {
+                x: u32,
+                y: u32,
+                text: String,
+                style: u8,
+            },
+            PushClip {
+                x: u32,
+                y: u32,
+                w: u32,
+                h: u32,
+            },
+            PopClip,
+            /// Direct write to the public `Cell::symbol` field.
+            Mutate {
+                x: u32,
+                y: u32,
+                symbol: String,
+            },
+            /// Border edge runs (`set_char_row` / `set_char_column`).
+            CharRun {
+                x: u32,
+                y: u32,
+                count: u32,
+                ch: char,
+                style: u8,
+                vertical: bool,
+            },
+            /// Container background fill (#493).
+            Fill {
+                x: u32,
+                y: u32,
+                w: u32,
+                h: u32,
+                style: u8,
+            },
+        }
+
+        fn style_of(index: u8) -> Style {
+            match index % 4 {
+                0 => Style::new(),
+                1 => Style::new().fg(Color::Red),
+                2 => Style::new().bg(Color::Rgb(1, 2, 3)).bold(),
+                _ => Style::new().fg(Color::Indexed(7)).underline(),
+            }
+        }
+
+        fn op() -> impl Strategy<Value = Op> {
+            let x = 0u32..20;
+            let y = 0u32..6;
+            prop_oneof![
+                6 => (x.clone(), y.clone(), cell_text(), any::<u8>(), any::<bool>())
+                    .prop_map(|(x, y, text, style, linked)| Op::Text { x, y, text, style, linked }),
+                3 => (x.clone(), y.clone(), any::<char>(), any::<u8>())
+                    .prop_map(|(x, y, ch, style)| Op::Char { x, y, ch, style }),
+                3 => (x.clone(), y.clone(), prop_oneof![Just("世".to_string()), Just("a".to_string()), Just("\u{301}".to_string()), Just("\u{FE0F}".to_string())], any::<u8>())
+                    .prop_map(|(x, y, ch, style)| Op::Char { x, y, ch: ch.chars().next().unwrap_or('a'), style }),
+                2 => (x.clone(), y.clone(), fragment(), any::<u8>())
+                    .prop_map(|(x, y, text, style)| Op::Grapheme { x, y, text, style }),
+                1 => (x.clone(), y.clone(), 0u32..12, 0u32..5)
+                    .prop_map(|(x, y, w, h)| Op::PushClip { x, y, w, h }),
+                1 => Just(Op::PopClip),
+                2 => (x.clone(), y.clone(), 0u32..14, 0u32..5, any::<u8>())
+                    .prop_map(|(x, y, w, h, style)| Op::Fill { x, y, w, h, style }),
+                2 => (
+                    x.clone(),
+                    y.clone(),
+                    0u32..24,
+                    prop::sample::select(vec!['─', '│', '╭', '世', 'a', '\u{301}', '\u{1b}', '═']),
+                    any::<u8>(),
+                    any::<bool>(),
+                )
+                    .prop_map(|(x, y, count, ch, style, vertical)| Op::CharRun {
+                        x,
+                        y,
+                        count,
+                        ch,
+                        style,
+                        vertical,
+                    }),
+                1 => (x, y, prop_oneof![Just(String::new()), Just("ab".to_string()), Just("\u{1b}]52".to_string()), Just("世界".to_string()), fragment()])
+                    .prop_map(|(x, y, symbol)| Op::Mutate { x, y, symbol }),
+            ]
+        }
+
+        fn apply(buf: &mut Buffer, op: &Op, reference: bool) {
+            const URL: &str = "https://example.com/a-link-longer-than-inline";
+            match op {
+                Op::Text {
+                    x,
+                    y,
+                    text,
+                    style,
+                    linked,
+                } => match (reference, *linked) {
+                    (false, false) => buf.set_string(*x, *y, text, style_of(*style)),
+                    (false, true) => buf.set_string_linked(*x, *y, text, style_of(*style), URL),
+                    (true, false) => {
+                        cell_write_oracle::set_string(buf, *x, *y, text, style_of(*style), None)
+                    }
+                    (true, true) => cell_write_oracle::set_string_linked(
+                        buf,
+                        *x,
+                        *y,
+                        text,
+                        style_of(*style),
+                        URL,
+                    ),
+                },
+                Op::Char { x, y, ch, style } => {
+                    if reference {
+                        cell_write_oracle::set_char(buf, *x, *y, *ch, style_of(*style));
+                    } else {
+                        buf.set_char(*x, *y, *ch, style_of(*style));
+                    }
+                }
+                Op::Grapheme { x, y, text, style } => {
+                    let width = if reference {
+                        cell_write_oracle::set_grapheme_visual(buf, *x, *y, text, style_of(*style))
+                    } else {
+                        buf.set_grapheme_visual(*x, *y, text, style_of(*style), None)
+                    };
+                    let _ = width;
+                }
+                Op::CharRun {
+                    x,
+                    y,
+                    count,
+                    ch,
+                    style,
+                    vertical,
+                } => {
+                    let style = style_of(*style);
+                    match (reference, *vertical) {
+                        (false, false) => buf.set_char_row(*x, *y, *count, *ch, style),
+                        (false, true) => buf.set_char_column(*x, *y, *count, *ch, style),
+                        (true, vertical) => {
+                            for step in 0..*count {
+                                let (cx, cy) = if vertical {
+                                    (*x, y + step)
+                                } else {
+                                    (x + step, *y)
+                                };
+                                cell_write_oracle::set_char(buf, cx, cy, *ch, style);
+                            }
+                        }
+                    }
+                }
+                Op::PushClip { x, y, w, h } => buf.push_clip(Rect::new(*x, *y, *w, *h)),
+                Op::PopClip => buf.pop_clip(),
+                Op::Mutate { x, y, symbol } => {
+                    if let Some(cell) = buf.try_get_mut(*x, *y) {
+                        cell.symbol = compact_str::CompactString::new(symbol);
+                    }
+                }
+                Op::Fill { x, y, w, h, style } => {
+                    let rect = Rect::new(*x, *y, *w, *h);
+                    if reference {
+                        // The pre-#493 container background loop.
+                        for yy in rect.y..rect.bottom() {
+                            for xx in rect.x..rect.right() {
+                                cell_write_oracle::set_string(
+                                    buf,
+                                    xx,
+                                    yy,
+                                    " ",
+                                    style_of(*style),
+                                    None,
+                                );
+                            }
+                        }
+                    } else {
+                        buf.fill_rect(rect, style_of(*style));
+                    }
+                }
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(2048))]
+
+            #[test]
+            fn optimized_cell_writes_match_reference(
+                origin in prop_oneof![Just((0u32, 0u32)), Just((2u32, 1u32))],
+                width in 1u32..16,
+                height in 1u32..5,
+                ops in prop::collection::vec(op(), 1..24),
+            ) {
+                let area = Rect::new(origin.0, origin.1, width, height);
+                let mut optimized = Buffer::empty(area);
+                let mut reference = Buffer::empty(area);
+                for (step, op) in ops.iter().enumerate() {
+                    apply(&mut optimized, op, false);
+                    apply(&mut reference, op, true);
+                    prop_assert!(
+                        optimized.content == reference.content,
+                        "step {} {:?} diverged", step, op
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn grapheme_widths_match_reference() {
+            let area = Rect::new(0, 0, 8, 1);
+            for text in [
+                "世",
+                "a",
+                "\u{301}",
+                "👩\u{200D}💻",
+                "\r\n",
+                "\x1b",
+                "❤\u{FE0F}",
+            ] {
+                let mut optimized = Buffer::empty(area);
+                let mut reference = Buffer::empty(area);
+                let a = optimized.set_grapheme_visual(1, 0, text, Style::new(), None);
+                let b = cell_write_oracle::set_grapheme_visual(
+                    &mut reference,
+                    1,
+                    0,
+                    text,
+                    Style::new(),
+                );
+                assert_eq!(a, b, "{text:?}");
+                assert_eq!(optimized.content, reference.content, "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn reset_clears_cells_links_and_frame_state() {
+        use crate::style::Color;
+        let area = Rect::new(2, 1, 40, 3);
+        let mut buf = Buffer::empty(area);
+        let long = "a\u{301}\u{302}\u{303}\u{304}\u{305}\u{306}\u{307}\u{308}\u{309}\u{30A}\u{30B}\u{30C}\u{30D}";
+        assert!(long.len() > 24, "symbol must be heap-allocated");
+        buf.set_string_linked(
+            3,
+            1,
+            long,
+            Style::new().fg(Color::Red),
+            "https://example.com",
+        );
+        buf.set_string(4, 2, "世界 text", Style::new().bold());
+        assert!(buf.get(3, 1).symbol.len() > 24);
+        assert!(buf.get(3, 1).hyperlink.is_some());
+        buf.push_clip(Rect::new(2, 1, 4, 1));
+        buf.raw_sequence(2, 1, "raw".to_string());
+        buf.set_cursor_pos(3, 1, true);
+
+        for bg in [None, Some(Color::Rgb(9, 9, 9)), Some(Color::Blue), None] {
+            match bg {
+                Some(bg) => buf.reset_with_bg(bg),
+                None => buf.reset(),
+            }
+            let mut expected = Cell::default();
+            expected.style.bg = bg;
+            assert!(buf.content.iter().all(|cell| *cell == expected), "{bg:?}");
+            assert!(buf.touched.iter().all(|span| span.is_empty()));
+            assert!(buf.clip_stack.is_empty());
+            assert!(buf.raw_sequences.is_empty());
+            assert!(buf.sprixels.is_empty());
+            assert!(buf.kitty_placements.is_empty());
+            assert_eq!(buf.cursor_position(), None);
+            assert!(!buf.cursor_is_masked());
+            assert_eq!(buf.fill_invariant_violation(), None);
+            buf.set_string(10, 2, "again", Style::new().fg(Color::Green));
+        }
+    }
+
+    #[test]
+    fn cell_reset_assigns_the_default_cell() {
+        let mut cell = Cell::default();
+        cell.set_symbol("a\u{301}\u{302}\u{303}\u{304}\u{305}\u{306}\u{307}\u{308}\u{309}");
+        cell.hyperlink = Some(compact_str::CompactString::new(
+            "https://example.com/long-link",
+        ));
+        cell.style = Style::new().bold();
+        cell.reset();
+        assert_eq!(cell, Cell::default());
+    }
+
+    #[test]
+    fn mark_touched_rect_records_direct_content_writes() {
+        let mut buf = Buffer::empty(Rect::new(1, 1, 6, 3));
+        let idx = buf.index_of(3, 2);
+        buf.content[idx].symbol = compact_str::CompactString::new("Z");
+        assert!(buf.fill_invariant_violation().is_some());
+        buf.mark_touched_rect(Rect::new(3, 2, 1, 1));
+        assert_eq!(buf.fill_invariant_violation(), None);
+        // Out-of-area rects are clamped, never panic.
+        buf.mark_touched_rect(Rect::new(0, 0, 100, 100));
+        buf.mark_touched_rect(Rect::new(50, 50, 2, 2));
+        buf.reset();
+        assert_eq!(buf.get(3, 2).symbol, " ");
+    }
+
+    mod written_span_proptest {
+        use super::*;
+        use crate::cell::test_strategies::cell_text;
+        use crate::style::Color;
+        use proptest::prelude::*;
+
+        #[derive(Debug, Clone)]
+        enum Op {
+            Text(u32, u32, String),
+            Linked(u32, u32, String),
+            Char(u32, u32, char),
+            GetMut(u32, u32),
+            TryGetMut(u32, u32),
+            DirectWrite(u32, u32, u32, u32),
+            Fill(u32, u32, u32, u32),
+            DimAll,
+            DimAround(u32, u32, u32, u32),
+            PushClip(u32, u32, u32, u32),
+            PopClip,
+            Reset(u8),
+            Resize(u32, u32),
+        }
+
+        fn op() -> impl Strategy<Value = Op> {
+            let c = 0u32..24;
+            prop_oneof![
+                6 => (c.clone(), c.clone(), cell_text()).prop_map(|(x, y, t)| Op::Text(x, y, t)),
+                1 => (c.clone(), c.clone(), cell_text()).prop_map(|(x, y, t)| Op::Linked(x, y, t)),
+                3 => (c.clone(), c.clone(), any::<char>()).prop_map(|(x, y, ch)| Op::Char(x, y, ch)),
+                1 => (c.clone(), c.clone()).prop_map(|(x, y)| Op::GetMut(x, y)),
+                1 => (c.clone(), c.clone()).prop_map(|(x, y)| Op::TryGetMut(x, y)),
+                1 => (c.clone(), c.clone(), 0u32..8, 0u32..4)
+                    .prop_map(|(x, y, w, h)| Op::DirectWrite(x, y, w, h)),
+                2 => (c.clone(), c.clone(), 0u32..12, 0u32..6).prop_map(|(x, y, w, h)| Op::Fill(x, y, w, h)),
+                1 => Just(Op::DimAll),
+                1 => (c.clone(), c.clone(), 0u32..10, 0u32..6)
+                    .prop_map(|(x, y, w, h)| Op::DimAround(x, y, w, h)),
+                1 => (c.clone(), c.clone(), 0u32..12, 0u32..6)
+                    .prop_map(|(x, y, w, h)| Op::PushClip(x, y, w, h)),
+                1 => Just(Op::PopClip),
+                2 => any::<u8>().prop_map(Op::Reset),
+                1 => (1u32..20, 1u32..8).prop_map(|(w, h)| Op::Resize(w, h)),
+            ]
+        }
+
+        fn apply(buf: &mut Buffer, op: &Op) {
+            match op {
+                Op::Text(x, y, t) => buf.set_string(*x, *y, t, Style::new().fg(Color::Red)),
+                Op::Linked(x, y, t) => {
+                    buf.set_string_linked(*x, *y, t, Style::new(), "https://example.com")
+                }
+                Op::Char(x, y, ch) => buf.set_char(*x, *y, *ch, Style::new().bold()),
+                Op::GetMut(x, y) => {
+                    if buf.in_bounds(*x, *y) {
+                        buf.get_mut(*x, *y).set_char('g');
+                    }
+                }
+                Op::TryGetMut(x, y) => {
+                    if let Some(cell) = buf.try_get_mut(*x, *y) {
+                        cell.style = Style::new().italic();
+                    }
+                }
+                Op::DirectWrite(x, y, w, h) => {
+                    let rect = Rect::new(*x, *y, *w, *h);
+                    if let Some(visible) = buf.area.intersection(rect) {
+                        for yy in visible.y..visible.bottom() {
+                            for xx in visible.x..visible.right() {
+                                let idx = buf.index_of(xx, yy);
+                                buf.content[idx].symbol = compact_str::CompactString::new("D");
+                            }
+                        }
+                    }
+                    buf.mark_touched_rect(rect);
+                }
+                Op::Fill(x, y, w, h) => {
+                    buf.fill_rect(Rect::new(*x, *y, *w, *h), Style::new().bg(Color::Blue))
+                }
+                Op::DimAll => crate::layout::render_test_hooks::dim_entire(buf),
+                Op::DimAround(x, y, w, h) => {
+                    crate::layout::render_test_hooks::dim_around(buf, Rect::new(*x, *y, *w, *h))
+                }
+                Op::PushClip(x, y, w, h) => buf.push_clip(Rect::new(*x, *y, *w, *h)),
+                Op::PopClip => buf.pop_clip(),
+                Op::Reset(kind) => match kind % 3 {
+                    0 => buf.reset(),
+                    1 => buf.reset_with_bg(Color::Rgb(1, 2, 3)),
+                    _ => buf.reset_with_bg(Color::Indexed(*kind)),
+                },
+                Op::Resize(w, h) => buf.resize(Rect::new(buf.area.x, buf.area.y, *w, *h)),
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            #[test]
+            fn untouched_cells_always_equal_the_fill_cell(
+                origin in prop_oneof![Just((0u32, 0u32)), Just((3u32, 2u32))],
+                width in 1u32..20,
+                height in 1u32..8,
+                ops in prop::collection::vec(op(), 1..32),
+            ) {
+                let mut buf = Buffer::empty(Rect::new(origin.0, origin.1, width, height));
+                for (step, op) in ops.iter().enumerate() {
+                    apply(&mut buf, op);
+                    prop_assert_eq!(buf.fill_invariant_violation(), None, "step {} {:?}", step, op);
+                }
+                // A reset must leave exactly the fill cell everywhere.
+                buf.reset_with_bg(Color::Rgb(7, 7, 7));
+                let fill = buf.fill_cell();
+                prop_assert!(buf.content.iter().all(|cell| *cell == fill));
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "set_symbol_normalized requires a normalized symbol")]
+    fn set_symbol_normalized_rejects_unnormalized_input_in_debug() {
+        let mut cell = Cell::default();
+        cell.set_symbol_normalized(compact_str::CompactString::new("\x1b[31m"));
+    }
+
+    mod normalization_proptest {
+        use super::*;
+        use crate::cell::test_strategies::cell_text;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            #[test]
+            fn writes_never_leave_orphan_continuations(
+                writes in prop::collection::vec((0u32..12, 0u32..3, cell_text()), 1..8),
+            ) {
+                let mut buf = Buffer::empty(Rect::new(0, 0, 12, 3));
+                for (x, y, text) in &writes {
+                    buf.set_string(*x, *y, text, Style::new());
+                    if let Some(ch) = text.chars().next() {
+                        buf.set_char(x.saturating_add(1), *y, ch, Style::new());
+                    }
+                }
+                prop_assert_eq!(assert_no_orphan_continuations(&buf), Ok(()));
+                for cell in &buf.content {
+                    prop_assert_eq!(crate::cell::normalize_cell_symbol(&cell.symbol), cell.symbol.clone());
+                }
+            }
+        }
+    }
+
+    mod geometry_proptest {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            #[test]
+            fn origin_writes_and_mismatched_diffs_never_panic(
+                x in 0u32..200,
+                y in 0u32..200,
+                width in 0u32..32,
+                height in 0u32..16,
+                other_x in 0u32..200,
+                other_y in 0u32..200,
+                other_width in 0u32..32,
+                other_height in 0u32..16,
+                text in ".{0,48}",
+            ) {
+                let area = Rect::new(x, y, width, height);
+                let other_area = Rect::new(other_x, other_y, other_width, other_height);
+                let mut current = Buffer::try_empty(area).expect("small geometry is valid");
+                let previous = Buffer::try_empty(other_area).expect("small geometry is valid");
+
+                current.set_string(x.saturating_sub(3), y.saturating_sub(3), &text, Style::new());
+                let updates = current.diff(&previous);
+                prop_assert!(updates.len() <= current.content.len());
+                prop_assert!(updates.iter().all(|(cx, cy, _)| current.in_bounds(*cx, *cy)));
+            }
+        }
+    }
+
+    #[cfg(feature = "bidi")]
+    mod bidi_proptest {
+        use super::{needs_bidi_reorder, reorder_line_visual};
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// Fast-path no-op: arbitrary ASCII strings never need reordering.
+            #[test]
+            fn ascii_takes_fast_path_and_reorder_is_identity(s in "[ -~]{0,64}") {
+                prop_assert!(!needs_bidi_reorder(&s));
+                // Even if forced through the reorder, ASCII is a no-op permutation.
+                prop_assert_eq!(reorder_line_visual(&s), s);
+            }
+
+            /// Reorder is a pure permutation of scalar values: it never adds,
+            /// drops, or mutates a codepoint.
+            ///
+            /// Note: total *display width* is deliberately NOT asserted —
+            /// `unicode-width` 0.2 is contextual (e.g. Arabic lam+alef forms a
+            /// single-cell ligature while alef+lam does not), so reordering can
+            /// legitimately change the rendered cell count. The invariant that
+            /// actually holds is multiset equality of `char`s.
+            #[test]
+            fn reorder_is_codepoint_permutation(
+                s in "[a-z\\x{05D0}-\\x{05EA}\\x{0627}-\\x{064A}0-9 ]{0,48}"
+            ) {
+                let mut before: Vec<char> = s.chars().collect();
+                let mut after: Vec<char> = reorder_line_visual(&s).chars().collect();
+                before.sort_unstable();
+                after.sort_unstable();
+                prop_assert_eq!(before, after);
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "bidi"))]
+mod bidi_prefilter_tests {
+    use super::may_trigger_bidi;
+    use unicode_bidi::BidiClass::{AL, FSI, LRE, LRI, LRO, PDF, PDI, R, RLE, RLI, RLO};
+
+    #[test]
+    fn prefilter_never_skips_a_bidi_trigger() {
+        for ch in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            let triggers = matches!(
+                unicode_bidi::bidi_class(ch),
+                R | AL | RLE | RLO | RLI | LRE | LRO | LRI | FSI | PDI | PDF
+            );
+            assert!(
+                !triggers || may_trigger_bidi(ch),
+                "U+{:04X} has a bidi-triggering class but is prefiltered out",
+                ch as u32
+            );
+        }
+    }
+}
