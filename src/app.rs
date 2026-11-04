@@ -692,7 +692,7 @@ impl App {
             }
         }
         self.notice = if search {
-            "Searching native recent messages…".into()
+            "Searching names and native recent messages…".into()
         } else {
             "Refreshing native conversation metadata…".into()
         };
@@ -760,7 +760,14 @@ impl App {
         // Server matches may come from messages, not titles: do not erase them
         // by applying the loaded-title filter a second time.
         let search = self.server_search;
-        let expanded = self.workspace_expansion();
+        let mut expanded = self
+            .workspace_expansion()
+            .unwrap_or_else(|| self.expanded.clone());
+        if search {
+            // Each returned row is an explicit search match, including children
+            // whose parent also matched. Keep browsing expansion independent.
+            expanded.extend(self.threads.iter().map(Thread::key));
+        }
         let unread = self
             .threads
             .iter()
@@ -779,7 +786,7 @@ impl App {
             &self.lane,
             &self.kind,
             self.scope,
-            expanded.as_ref().unwrap_or(&self.expanded),
+            &expanded,
             &unread,
         );
         self.workspace_order();

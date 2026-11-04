@@ -135,6 +135,33 @@ impl Fixture {
     }
 }
 
+#[test]
+fn native_search_keeps_matching_children_visible_alongside_their_parent() {
+    let mut fixture = Fixture::new(0);
+    fixture.app.hosts[0].page.threads = vec![
+        domain::Thread::parse(0, json!({"id":"parent", "title":"Acceptance only", "projectId":"project-a", "status":"completed"})).unwrap(),
+        domain::Thread::parse(0, json!({"id":"child", "title":"Matching source", "projectId":"project-a", "status":"completed", "lineage":{"parentThreadId":"parent","relationshipToParent":"subagent"}})).unwrap(),
+    ];
+    fixture.app.lane = "All".into();
+    fixture.app.server_search = true;
+    fixture.app.filter = "Acceptance only".into();
+    fixture.app.rebuild();
+    let visible: Vec<_> = fixture
+        .app
+        .visible
+        .iter()
+        .map(|(i, _)| fixture.app.threads[*i].id.as_str())
+        .collect();
+    assert!(
+        visible.contains(&"parent") && visible.contains(&"child"),
+        "native matching source was hidden: {visible:?}"
+    );
+    assert!(
+        fixture.app.expanded.is_empty(),
+        "search must not alter persisted browsing expansion"
+    );
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         if let Some(active) = &self.app.active

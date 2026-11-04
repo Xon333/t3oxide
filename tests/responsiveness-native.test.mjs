@@ -234,3 +234,26 @@ test('server search uses one bounded native RPC, exact shell identity and explic
   await assert.rejects(server.list('needle',{serverSearch:true}),{code:'unsupported'});
   assert.equal(server.receipts.size,0);
 });
+
+test('server search retains shell title matches and matching children with source-qualified paging',async t=>{
+  const server=new T3({environmentId:'env-a'},()=>{});t.after(()=>server.close());server.descriptor=descriptor;
+  const row=(id,title,extra={})=>({id,title,projectId:'project-a',updatedAt:stamp,status:'completed',modelSelection:selected,...extra});
+  server.http=async()=>({projects:[{id:'project-a',title:'P'}],threads:[
+    row('child','Acceptance only',{lineage:{parentThreadId:'parent',relationshipToParent:'subagent'}}),
+    row('message','Different title',{lineage:{parentThreadId:'parent',relationshipToParent:'subagent'}}),
+    row('wrong-project','Unrelated'),row('unrelated','Unrelated')
+  ]});
+  const calls=[];
+  server.rpc={close(){},call(tag,args){calls.push({tag,args});return {promise:Promise.resolve({matches:[
+    {threadId:'message',projectId:'project-a'}, {threadId:'wrong-project',projectId:'project-b'}
+  ]})}}};
+  server.bounded=()=>{throw new Error('Search must not scan transcripts')};
+  const first=await server.list('Acceptance only',{serverSearch:true,limit:1});
+  assert.deepEqual(first.threads.map(t=>t.id),['child']);
+  assert.equal(first.nextCursor,1);assert.equal(first.more,true);
+  const second=await server.list('Acceptance only',{serverSearch:true,limit:1,cursor:first.nextCursor});
+  assert.deepEqual(second.threads.map(t=>t.id),['message']);
+  assert.equal(second.nextCursor,null);assert.equal(second.searchIncomplete,true);
+  assert.equal(first.searchScope,'shell names and native recent message search');
+  assert.equal(calls.length,2);assert.equal(server.receipts.size,0);
+});

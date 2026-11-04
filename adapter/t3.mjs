@@ -284,12 +284,18 @@ export class T3 {
         requireThat(!ids.has(match.threadId) || ids.get(match.threadId) === match.projectId, 'Conflicting native search identity.', 'incompatible');
         ids.set(match.threadId,match.projectId);
       }
-      const projected = threadList({...shell,threads:shell.threads.filter(t => ids.get(t.id) === t.projectId)},'',
-        {...options,providerIdentities:this.providerIdentities,activeOnly:true,lifecycle:'all',cursor:0,limit:50});
+      // Native recent-message search can omit names and delegated threads.
+      // Join message hits by both IDs and retain the shell's own name matches.
+      const projects = new Map(shell.projects.map(p => [p.id,p.title]));
+      const nameQuery = q.toLocaleLowerCase();
+      const matches = shell.threads.filter(t => ids.get(t.id) === t.projectId ||
+        `${t.title} ${projects.get(t.projectId) ?? ''}`.toLocaleLowerCase().includes(nameQuery));
+      const projected = threadList({...shell,threads:matches},'',
+        {...options,providerIdentities:this.providerIdentities,activeOnly:true,lifecycle:'all',includeChildren:true});
       // This native API returns a capped matches array and no exhaustive/next
       // marker. Never relabel a zero or full page as a complete global search.
       return {...projected,machineKind:this.machineKind(),query:q,serverSearch:true,
-        searchScope:'native recent message search',searchIncomplete:true};
+        searchScope:'shell names and native recent message search',searchIncomplete:true};
     }
     return {...threadList(shell, query, { ...options, providerIdentities:this.providerIdentities, activeOnly: true }),machineKind:this.machineKind()};
   }
