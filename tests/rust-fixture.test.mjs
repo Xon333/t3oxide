@@ -73,7 +73,7 @@ test('Rust fixture performs a first-thread launch from native project defaults',
 test('lost navigation pin ACK preserves exact tag command and journal; reads/restart never resend',async t=>{
   const {backend,config}=await fixture(t,{dropAckOnce:true,stream:false});
   const row=(await backend.list('',{lifecycle:'all',includeChildren:true})).threads.find(row=>row.id==='thread-review');
-  const action={id:'uncertain-pin',environmentId:'fixture-env',threadId:row.id,action:'pin',expectedRevision:row.inbox.nativeRevision};
+  const action={id:'uncertain-pin',environmentId:'fixture-env',threadId:row.id,action:'navigation-pin',expectedRevision:row.inbox.nativeRevision};
   await assert.rejects(backend.act('thread-action',action),{uncertain:true});
   assert.equal(JSON.parse(await readFile(config.fixture.stateFile,'utf8')).effects,1);
   backend.close();

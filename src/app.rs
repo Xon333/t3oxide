@@ -1748,7 +1748,10 @@ impl App {
                             );
                         }
                         if op == "thread-action"
-                            && matches!(fields["action"].as_str(), Some("pin" | "unpin"))
+                            && matches!(
+                                fields["action"].as_str(),
+                                Some("navigation-pin" | "navigation-unpin")
+                            )
                         {
                             ensure!(
                                 flag(&hello["features"], "navigationPins"),

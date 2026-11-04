@@ -296,14 +296,14 @@ export function threadActionCommand(a, p, shellThread) {
     'Native thread identity mismatch.', 'identity_mismatch');
   requireThat(a.expectedRevision === nativeRevision(shellThread), 'Thread changed; review the current item.', 'stale');
   requireThat(!p.thread.deletedAt && !p.thread.archivedAt, 'Thread is unavailable.', 'unavailable');
-  const actions = new Set(['settle','unsettle','snooze','unsnooze','pin','unpin']);
+  const actions = new Set(['settle','unsettle','snooze','unsnooze','pin','unpin','navigation-pin','navigation-unpin']);
   requireThat(actions.has(a.action), 'Unsupported native thread action.');
   if (['settle','snooze'].includes(a.action)) {
     requireThat(!p.runtimeRequests.some(r=>r.status==='pending'), 'Answer the formal T3 request before hiding this thread.', 'blocked');
     requireThat(!p.runs.some(r=>ACTIVE.has(r.status) || r.status==='queued'), 'Active or queued work cannot be marked reviewed or snoozed here.', 'blocked');
   }
-  if (['pin','unpin'].includes(a.action)) return {type:'thread.tag.set',
-    commandId:identifier(a.id),threadId:identifier(a.threadId),tag:NAVIGATION_PIN_TAG,tagged:a.action==='pin'};
+  if (['navigation-pin','navigation-unpin'].includes(a.action)) return {type:'thread.tag.set',
+    commandId:identifier(a.id),threadId:identifier(a.threadId),tag:NAVIGATION_PIN_TAG,tagged:a.action==='navigation-pin'};
   const payload = {type:'thread.'+a.action,commandId:identifier(a.id),threadId:identifier(a.threadId)};
   if (['unsettle','unsnooze'].includes(a.action)) payload.reason='user';
   if (a.action === 'snooze') {

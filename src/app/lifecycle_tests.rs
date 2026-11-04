@@ -1627,8 +1627,8 @@ fn stale_action_metadata_preserves_ack_and_disables_only_its_exact_source() {
         json!({"status":"fresh","environmentId":"native-1","threadId":"thread-review","row":before}),
     ] {
         fixture.app.mutation_done(MutationContext{profile:0,generation:fixture.app.generation,draft_version:None},
-            "authentic-ack","thread-action",&json!({"threadId":"thread-review","action":"pin"}),
-            json!({"sequence":42,"threadId":"thread-review","action":"pin","metadata":metadata})).unwrap();
+            "authentic-ack","thread-action",&json!({"threadId":"thread-review","action":"navigation-pin"}),
+            json!({"sequence":42,"threadId":"thread-review","action":"navigation-pin","metadata":metadata})).unwrap();
         assert!(fixture.app.notice.contains("accepted by T3"));
         assert!(fixture.app.notice.contains("stale"));
         assert!(flag(

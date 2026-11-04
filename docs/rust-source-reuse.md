@@ -19,6 +19,9 @@ capability bit. The adapter explicitly qualifies that exact release rather than
 inferring command support from optional stored tags or shelf pin capability.
 Other releases retain reads and report navigation Pin unavailable. This is
 source compatibility evidence, not independent installed-build provenance.
+The additive adapter actions are `navigation-pin` / `navigation-unpin`. Existing
+`pin` / `unpin` requests retain native shelf semantics and their advertised
+capability, including older clients and recovery records.
 The untrimmed shell request omits both `omitIdleSubagents` and
 `omitOlderSettled`; navigation membership is filtered before bounded pagination.
 Post-action metadata comes from one fresh authoritative shell and replaces

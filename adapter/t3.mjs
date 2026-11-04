@@ -756,8 +756,10 @@ export class T3 {
           if (op === 'launch-project') {
             receipt.payload=launchProjectCommand(a,await this.launchDefaults(a));
           } else {
-            if (op==='thread-action' && ['pin','unpin'].includes(a.action)) requireThat(navigationPinSupported(this.descriptor),
+            if (op==='thread-action' && ['navigation-pin','navigation-unpin'].includes(a.action)) requireThat(navigationPinSupported(this.descriptor),
               'Navigation Pin requires a verified thread.tag.set server contract; this release is unsupported. Reads and native shelf pins remain available in T3.', 'unsupported');
+            if (op==='thread-action' && ['pin','unpin'].includes(a.action)) requireThat(this.descriptor?.capabilities?.threadPinning===true,
+              'This server does not advertise native thread pinning.', 'unsupported');
             const p = targetThread(await this.bounded(identifier(a.threadId)), a.threadId);
             if (op === 'answer') validateQuestionAnswers(a, p);
             if (op === 'thread-action') {

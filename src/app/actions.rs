@@ -585,8 +585,8 @@ impl App {
         let action = match name {
             "reviewed" => "settle",
             "unreviewed" => "unsettle",
-            "pin" if t.pinned() => "unpin",
-            "pin" => "pin",
+            "pin" if t.pinned() => "navigation-unpin",
+            "pin" => "navigation-pin",
             other => other,
         };
         let mut fields = json!({"threadId":t.id,"action":action,"expectedRevision":revision});
@@ -605,11 +605,14 @@ impl App {
                 "Removes this conversation from Unreviewed and Inbox; keeps it in Settled and All. Active or queued work and pending requests must be resolved first. This is not archive or deletion."
             }
             "unsettle" => "Restores this conversation to the native inbox; does not start a run.",
-            "pin" | "unpin" => "Persistent navigation pin.",
+            "navigation-pin" | "navigation-unpin" => "Persistent navigation pin.",
             _ => "Explicit native disposition.",
         };
         self.menu(
-            format!("{action} conversation"),
+            format!(
+                "{} conversation",
+                action.strip_prefix("navigation-").unwrap_or(action)
+            ),
             format!(
                 "{} / {title} · {disposition} T3 revalidates the displayed native revision.",
                 self.environments[profile].label

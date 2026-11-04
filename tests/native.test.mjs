@@ -44,6 +44,8 @@ function backend({journal,existing=thread()}={}){
       const t=state.shell.threads.find(t=>t.id===payload.threadId);
       if(payload.type==='thread.settle'){t.settledOverride='settled';t.pinnedAt=null;t.pinOrderKey=null;}
       if(payload.type==='thread.unsettle')t.settledOverride='active';
+      if(payload.type==='thread.pin'){t.pinnedAt=stamp;t.pinOrderKey='native-order';t.settledOverride='active';t.snoozedUntil=null;}
+      if(payload.type==='thread.unpin'){t.pinnedAt=null;t.pinOrderKey=null;}
       if(payload.type==='thread.snooze')t.snoozedUntil=payload.snoozedUntil;
       if(payload.type==='thread.tag.set'){
         const tags=new Set(t.tags??[]);if(payload.tagged)tags.add(payload.tag);else tags.delete(payload.tag);t.tags=[...tags];
@@ -225,7 +227,7 @@ test('navigation marker changes qualify revision without updatedAt or shelf disp
   assert.equal(inboxMetadata(t).navigationPinned,false);
   assert.equal(inboxMetadata(tagged).navigationPinned,true);
   assert.equal(inboxMetadata(tagged).pinnedAt,stamp);
-  const action={id:'original-pin-operation',threadId:t.id,action:'pin',expectedRevision:nativeRevision(t)};
+  const action={id:'original-pin-operation',threadId:t.id,action:'navigation-pin',expectedRevision:nativeRevision(t)};
   assert.deepEqual(threadActionCommand(action,projection(t).projection,t),
     {type:'thread.tag.set',commandId:action.id,threadId:t.id,tag:NAVIGATION_PIN_TAG,tagged:true});
   assert.throws(()=>threadActionCommand(action,projection(tagged).projection,tagged),{code:'stale'});
@@ -236,7 +238,7 @@ test('navigation pin survives reads, run transitions, settle and restore; unpin 
   const act=async(action,id)=>server.act('thread-action',{id,environmentId:'env-a',threadId:'thread-a',action,
     expectedRevision:nativeRevision(state.shell.threads[0])});
   try{
-    const pinned=await act('pin','pin-intent');
+    const pinned=await act('navigation-pin','pin-intent');
     assert.equal(pinned.metadata.environmentId,'env-a');assert.equal(pinned.metadata.row.inbox.navigationPinned,true);
     assert.equal(pinned.metadata.row.inbox.pinnedAt,stamp);
     await server.bounded('thread-a');
@@ -249,7 +251,7 @@ test('navigation pin survives reads, run transitions, settle and restore; unpin 
     const restored=await act('unsettle','restore-once');
     assert.equal(restored.metadata.row.inbox.navigationPinned,true);assert.equal(restored.metadata.row.inbox.settled,false);
     t.pinnedAt=stamp;t.pinOrderKey='preserve-shelf';t.settledOverride='settled';
-    const unpinned=await act('unpin','remove-intent');
+    const unpinned=await act('navigation-unpin','remove-intent');
     assert.equal(unpinned.metadata.row.inbox.navigationPinned,false);assert.equal(t.pinnedAt,stamp);
     assert.equal(t.pinOrderKey,'preserve-shelf');assert.equal(t.settledOverride,'settled');
     assert.deepEqual(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').map(c=>c.payload.type),
@@ -262,7 +264,7 @@ test('marker-only external change rejects stale pin preflight, with no inferred 
   try{
     const expectedRevision=nativeRevision(state.shell.threads[0]);
     state.shell.threads[0].tags=[NAVIGATION_PIN_TAG];
-    await assert.rejects(server.act('thread-action',{id:'stale-marker',environmentId:'env-a',threadId:'thread-a',action:'pin',expectedRevision}),{code:'stale'});
+    await assert.rejects(server.act('thread-action',{id:'stale-marker',environmentId:'env-a',threadId:'thread-a',action:'navigation-pin',expectedRevision}),{code:'stale'});
     assert.equal(state.calls.length,0);
     const list=await server.list('',{lifecycle:'all',includeChildren:true});
     assert.equal(list.threads[0].inbox.navigationPinned,true);
@@ -272,13 +274,13 @@ test('marker-only external change rejects stale pin preflight, with no inferred 
 
 test('acknowledged action with failed post-read stays accepted and stale; same-ID lookup reads without redispatch',async()=>{
   const {server,state}=backend();
-  const action={id:'post-read-fails',environmentId:'env-a',threadId:'thread-a',action:'pin',expectedRevision:nativeRevision(state.shell.threads[0])};
+  const action={id:'post-read-fails',environmentId:'env-a',threadId:'thread-a',action:'navigation-pin',expectedRevision:nativeRevision(state.shell.threads[0])};
   const http=server.http;
   server.http=async path=>{if(state.calls.some(c=>c.tag==='orchestration.dispatchCommand'))throw new Fault('transport','post-read failed');return http(path)};
   try{
     for(let attempt=0;attempt<2;attempt++){
       const ack=await server.act('thread-action',action);
-      assert.equal(ack.sequence,42);assert.equal(ack.threadId,action.threadId);assert.equal(ack.action,'pin');
+      assert.equal(ack.sequence,42);assert.equal(ack.threadId,action.threadId);assert.equal(ack.action,'navigation-pin');
       assert.deepEqual(ack.metadata,{environmentId:'env-a',threadId:'thread-a',status:'stale'});
       assert.equal(ack.nativeRevision,undefined);
     }
@@ -301,7 +303,7 @@ test('verified tag support uses release contract, never optional tag presence or
       const http=server.http;
       server.http=async path=>path==='/.well-known/t3/environment'?server.descriptor:http(path);
       assert.equal((await server.probe()).features.navigationPins,supported);
-      const action={id:'explicit-pin',environmentId:'env-a',threadId:'thread-a',action:'pin',expectedRevision:nativeRevision(state.shell.threads[0])};
+      const action={id:'explicit-pin',environmentId:'env-a',threadId:'thread-a',action:'navigation-pin',expectedRevision:nativeRevision(state.shell.threads[0])};
       if(supported)assert.equal((await server.act('thread-action',action)).metadata.row.inbox.navigationPinned,true);
       else {server.bounded=async()=>{throw new Error('Unsupported Pin must fail before another native read')};await assert.rejects(server.act('thread-action',action),{code:'unsupported'});assert.equal(state.calls.length,0);}
     }finally{server.close()}
@@ -315,9 +317,29 @@ test('post-action and attached metadata find exact old target beyond pagination 
   try{
     const page=await server.list('',{lifecycle:'all',includeChildren:true,limit:200,includeThreadId:t.id});
     assert.equal(page.threads.some(row=>row.id===t.id),false);assert.equal(page.sourceThread.id,t.id);
-    const result=await server.act('thread-action',{id:'old-pin',environmentId:'env-a',threadId:t.id,action:'pin',expectedRevision:nativeRevision(t)});
+    const result=await server.act('thread-action',{id:'old-pin',environmentId:'env-a',threadId:t.id,action:'navigation-pin',expectedRevision:nativeRevision(t)});
     const fresh=result.metadata.row;
     assert.equal(fresh.id,t.id);assert.equal(fresh.title,'Old target');assert.equal(fresh.projectId,project.id);
     assert.equal(fresh.lineage.parentThreadId,'recent-0');assert.equal(fresh.inbox.navigationPinned,true);
+  }finally{server.close()}
+});
+
+
+test('older client Pin actions retain native shelf semantics alongside additive navigation actions',async()=>{
+  const {server,state}=backend({existing:{...thread(),tags:[NAVIGATION_PIN_TAG],settledOverride:'settled'}});
+  server.descriptor={...descriptor,serverVersion:'0.1.3',capabilities:{...descriptor.capabilities,threadPinning:true}};
+  const act=action=>server.act('thread-action',{id:'legacy-'+action,environmentId:'env-a',threadId:'thread-a',action,
+    expectedRevision:nativeRevision(state.shell.threads[0])});
+  try{
+    const pinned=await act('pin');
+    assert.equal(pinned.metadata.row.inbox.pinnedAt,stamp);
+    assert.equal(pinned.metadata.row.inbox.settled,false);
+    assert.equal(pinned.metadata.row.inbox.navigationPinned,true);
+    const unpinned=await act('unpin');
+    assert.equal(unpinned.metadata.row.inbox.pinnedAt,'');
+    assert.equal(unpinned.metadata.row.inbox.navigationPinned,true);
+    assert.deepEqual(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').map(c=>c.payload.type),['thread.pin','thread.unpin']);
+    await assert.rejects(act('navigation-pin'),{code:'unsupported'});
+    assert.equal(state.calls.filter(c=>c.tag==='orchestration.dispatchCommand').length,2);
   }finally{server.close()}
 });
