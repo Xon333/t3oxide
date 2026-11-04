@@ -4,7 +4,7 @@ Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a5878
 and relevant later preserved UX behavior into the isolated SLT client. The
 active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
 v0.26.0, with maintained vendored patch `ordered-activation-v2`. The checked
-implementation head is `508e16d`, with persistent navigation Pins and exact
+implementation at `dd11afc` includes persistent navigation Pins and exact
 post-action metadata, retaining the `c0cee63` shutdown-lock correction and
 `529d9ec` submission/compact controls, `5941463` geometry/modal/provenance and
 `b58644d` search fixes. No installed
@@ -14,8 +14,8 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 | --- | --- |
 | Formatting and whitespace | `cargo fmt --all --check`, standalone vendor fmt, `git diff --check` passed |
 | Clippy | `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo clippy --locked -p superlighttui --lib -- -D warnings` passed |
-| Rust tests | `cargo test --locked --all-targets`: **147 tests** passed across the library, forms, protocol and SLT activation suites |
-| Adapter/scripts | `scripts/check.sh`: **255 Node + 5 Python** passed, including syntax/compile checks |
+| Rust tests | `cargo test --locked --all-targets`: **148 tests** passed across the library, forms, protocol and SLT activation suites |
+| Adapter/scripts | `scripts/check.sh`: **257 Node + 5 Python** passed, including syntax/compile checks |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
 | Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **14 outcomes** passed |
@@ -24,8 +24,8 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
 The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
 a claim that a 1.92 toolchain was tested. The release is **8,933,104 bytes**;
-SHA-256 `4c5513f55d49f3b16b5b7e58e7f942045e7e73eb06cc3928a6f0a0c08e7b5ebc`
-at `508e16d`.
+SHA-256 `e2a6b6c087ac3a1820aa417e1c7da4fa4cd7cb3e7f59aee8a36ca0ea8eccf4f1`
+at `dd11afc`.
 No current performance or resource-saving comparison is claimed.
 
 The first hosted Ubuntu run failed two immediate state-reopen tests because a
@@ -146,6 +146,19 @@ before merging loaded rows. Durable receipts now contain only stable acceptance
 fields; fresh metadata decorates the response afterward. Focused regressions
 exercise both read-order races, all three merge-identity dimensions and two
 helpers acknowledging one operation with different authoritative metadata.
+
+The focused `ee6098e` M1 trial confirmed real marker persistence through
+settle/restore and restart, native shelf separation, explicit Unpin and exact
+absent-page targeting. It exposed Ctrl+T choosing Settle after settled Unpin
+removed the displayed source from Pins. The shortcut now reads the same retained
+active-source summary as mutation dispatch; its focused regression verifies
+Unsettle when the source is absent from loaded rows. Native retesting is pending.
+
+The journal also accepts a validated legacy decorated ACK with the same stable
+acceptance fields. It checks the original operation/payload binding and any
+optional source/action, preserves the existing receipt, and never redispatches a
+saved acceptance. Mixed-helper and conflicting sequence/source/action checks
+pass; older helpers themselves retain their historical behavior.
 
 Existing passing coverage retains source/revision-qualified acknowledgements,
 same-byte newer drafts, cancellation with fresh unsaved answers, graph
