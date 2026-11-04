@@ -2,6 +2,41 @@
 use slt::{EventBuilder, KeyCode, KeyModifiers, RunConfig, TestBackend, TextareaState};
 
 #[test]
+fn focus_shortcut_precedes_queued_typing_in_new_editor() {
+    let mut backend =
+        TestBackend::new(40, 8).with_run_config(RunConfig::default().activation_boundaries(true));
+    let mut draft = TextareaState::default();
+    let mut query = TextareaState::default();
+    let mut palette = false;
+    let mut draw = |ctx: &mut slt::Context| {
+        ctx.register_focusable_named(if palette { "palette" } else { "draft" });
+        ctx.textarea(if palette { &mut query } else { &mut draft }, 3);
+        if ctx.key_mod('p', KeyModifiers::CONTROL) {
+            palette = true;
+            ctx.focus_by_name("palette");
+            ctx.request_frame();
+        }
+    };
+    backend.render(&mut draw);
+    backend.run_with_events(
+        EventBuilder::new()
+            .key_with(KeyCode::Char('p'), KeyModifiers::CONTROL)
+            .paste("help")
+            .build(),
+        &mut draw,
+    );
+    for _ in 0..4 {
+        if !backend.has_pending_input() {
+            break;
+        }
+        backend.render(&mut draw);
+    }
+    assert!(!backend.has_pending_input());
+    assert_eq!(query.value(), "help");
+    assert_eq!(draft.value(), "");
+}
+
+#[test]
 fn opt_in_keeps_paste_submit_release_and_tail_in_order() {
     let mut backend = TestBackend::new(40, 8)
         .with_run_config(RunConfig::default().activation_boundaries(true).max_fps(60));

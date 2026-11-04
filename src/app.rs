@@ -991,6 +991,18 @@ impl App {
                         .map_err(|e| e.to_string())
                 }) {
                     Ok((mut page, (projects, projects_more))) => {
+                        let events: Vec<_> = page
+                            .threads
+                            .iter()
+                            .filter_map(|row| {
+                                row.activity_generation()
+                                    .map(|generation| (row.id.clone(), generation))
+                            })
+                            .collect();
+                        self.state.observe_thread_activity(
+                            &self.environments[profile].environment_id,
+                            &events,
+                        )?;
                         if let Some(projects) = projects {
                             host.projects = projects;
                         }

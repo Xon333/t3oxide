@@ -1,7 +1,7 @@
 t3oxide third-party attribution
 
 The active SLT runtime is a maintained vendored SuperLightTUI 0.26.0 (MIT),
-base d4537d74f4b42188e06cb224fbfe7684397897fb with ordered-activation-v1.
+base d4537d74f4b42188e06cb224fbfe7684397897fb with ordered-activation-v2.
 vendor/superlighttui/UPSTREAM.md identifies packaging and modified files;
 vendor/superlighttui/LICENSE retains the complete upstream MIT notice.
 

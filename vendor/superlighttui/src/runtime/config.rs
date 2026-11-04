@@ -103,7 +103,7 @@ pub(crate) fn resolve_mouse_mode(explicit: Option<MouseMode>, remote: bool) -> M
 #[non_exhaustive]
 #[must_use = "configure loop behavior before passing to run_with or run_inline_with"]
 pub struct RunConfig {
-    /// Isolate Enter presses, portable Ctrl+send keys and pointer activations.
+    /// Isolate Enter, Escape, function/Control/Super keys and pointer activations.
     ///
     /// Opt-in policy for apps that submit state before their editing widgets run.
     /// Preceding edits render first, the activation renders alone, and remaining

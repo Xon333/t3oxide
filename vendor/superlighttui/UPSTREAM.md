@@ -3,9 +3,9 @@
 MIT; full upstream notices are in LICENSE and LICENSE.crossterm.
 Base: https://github.com/subinium/SuperLightTUI/tree/d4537d74f4b42188e06cb224fbfe7684397897fb
 
-Patch `ordered-activation-v1` adds the opt-in RunConfig activation_boundaries
+Patch `ordered-activation-v2` adds the opt-in RunConfig activation_boundaries
 policy in src/runtime/config.rs, src/runtime/kernel.rs and src/runtime/frame_state.rs. It renders preceding
-edits before Enter Press, portable Ctrl+send presses or pointer activations,
+edits before Enter, Escape, function/Control/Super key presses or pointer activations,
 then renders the activation alone. One input-free frame settles modal/focus
 changes before the queued tail. The existing pending_input queue and request_frame
 idle wake carry remaining input; no reader, queue or scheduler is added. Default batching, releases, paste, Tab/BackTab and

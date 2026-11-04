@@ -134,6 +134,39 @@ impl State {
     pub fn snapshot(&self) -> Value {
         self.saved.lock().unwrap().clone()
     }
+    /// Retain observed substantive events across lifecycle-only metadata and restart.
+    pub fn observe_thread_activity(
+        &self,
+        environment: &str,
+        events: &[(String, String)],
+    ) -> Result<()> {
+        let changed = {
+            let saved = self.saved.lock().unwrap();
+            events.iter().any(|(thread, generation)| {
+                observed_generation(&saved, environment, thread) != Some(generation.as_str())
+            })
+        };
+        if !changed {
+            return Ok(());
+        }
+        self.update(|saved| {
+            let observed = saved["threadActivity"]
+                .as_array_mut()
+                .context("invalid thread activity")?;
+            for (thread, generation) in events {
+                observed.retain(|event| {
+                    event["environmentId"] != environment || event["threadId"] != *thread
+                });
+                observed.push(
+                    json!({"environmentId":environment,"threadId":thread,"generation":generation}),
+                );
+            }
+            if observed.len() > MAX_THREAD_READS {
+                observed.drain(..observed.len() - MAX_THREAD_READS);
+            }
+            Ok(())
+        })
+    }
     /// Reading qualifies one exact source event and never changes native state.
     pub fn is_thread_unread(
         &self,
@@ -142,6 +175,7 @@ impl State {
         generation: Option<&str>,
     ) -> bool {
         let saved = self.saved.lock().unwrap();
+        let generation = generation.or_else(|| observed_generation(&saved, environment, thread));
         !["threadReads", "completionReads"].iter().any(|field| {
             saved[*field].as_array().is_some_and(|reads| {
                 reads.iter().any(|read| {
@@ -164,7 +198,10 @@ impl State {
             valid_id(environment, 4096) && valid_id(thread, 4096),
             "read marker needs exact source identity"
         );
-        if !self.is_thread_unread(environment, thread, generation) {
+        let generation = generation.map(str::to_owned).or_else(|| {
+            observed_generation(&self.saved.lock().unwrap(), environment, thread).map(str::to_owned)
+        });
+        if !self.is_thread_unread(environment, thread, generation.as_deref()) {
             return Ok(());
         }
         self.update(|value| {
@@ -524,6 +561,11 @@ impl State {
     }
 }
 
+fn observed_generation<'a>(saved: &'a Value, environment: &str, thread: &str) -> Option<&'a str> {
+    saved["threadActivity"].as_array()?.iter().rev()
+        .find(|event| event["environmentId"] == environment && event["threadId"] == thread)?["generation"].as_str()
+}
+
 fn normalize(value: &mut Value) -> Result<()> {
     let root = value.as_object_mut().context("state must be an object")?;
     ensure!(
@@ -551,6 +593,9 @@ fn normalize(value: &mut Value) -> Result<()> {
     if root.get("threadReads").is_none_or(Value::is_null) {
         root.insert("threadReads".into(), json!([]));
     }
+    if root.get("threadActivity").is_none_or(Value::is_null) {
+        root.insert("threadActivity".into(), json!([]));
+    }
     Ok(())
 }
 
@@ -577,6 +622,29 @@ fn validate_record(environment: &str, record: &Value) -> Result<()> {
 }
 
 fn validate(value: &Value) -> Result<()> {
+    let observed = value["threadActivity"]
+        .as_array()
+        .context("invalid thread activity")?;
+    ensure!(
+        observed.len() <= MAX_THREAD_READS,
+        "thread activity limit exceeded"
+    );
+    let mut sources = HashSet::new();
+    for event in observed {
+        let environment = event["environmentId"].as_str().unwrap_or("");
+        let thread = event["threadId"].as_str().unwrap_or("");
+        let generation = event["generation"].as_str().unwrap_or("");
+        ensure!(
+            valid_id(environment, 4096)
+                && valid_id(thread, 4096)
+                && generation.len() == 64
+                && generation
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && sources.insert((environment, thread)),
+            "invalid thread activity identity"
+        );
+    }
     let thread_reads = value["threadReads"]
         .as_array()
         .context("invalid thread reads")?;
@@ -1428,6 +1496,39 @@ mod tests {
         assert!(reopened.snapshot().get("settled").is_none());
         drop(reopened);
         fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn lifecycle_only_updates_retain_unopened_event_until_exact_read_and_restart() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("state.json");
+        let state = State::open(&path).unwrap();
+        let first = "a".repeat(64);
+        let next = "b".repeat(64);
+        state
+            .observe_thread_activity("env", &[("thread".into(), first.clone())])
+            .unwrap();
+        state
+            .mark_thread_read("env", "thread", Some(&first))
+            .unwrap();
+        assert!(
+            !state.is_thread_unread("env", "thread", None),
+            "a running shell must not invent an event"
+        );
+        state
+            .observe_thread_activity("env", &[("thread".into(), next.clone())])
+            .unwrap();
+        assert!(
+            state.is_thread_unread("env", "thread", None),
+            "starting another run cannot clear unopened G1"
+        );
+        assert!(state.is_thread_unread("other-env", "thread", None));
+        drop(state);
+        let state = State::open(&path).unwrap();
+        assert!(state.is_thread_unread("env", "thread", None));
+        state.mark_thread_read("env", "thread", None).unwrap();
+        assert!(!state.is_thread_unread("env", "thread", Some(&next)));
+        assert_eq!(state.snapshot()["threadReads"][1]["generation"], next);
+        assert!(state.pending_records().is_empty());
     }
     #[test]
     fn ack_atomically_preserves_newer_same_byte_draft_and_newer_override() {

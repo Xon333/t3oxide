@@ -86,6 +86,24 @@ impl Fixture {
         self.open_thread(profile, "thread-a");
     }
 
+    fn draw_slt(&mut self, ctx: &mut ::slt::Context, surface: &mut crate::slt_ui::SurfaceState) {
+        self.app.populate_surface(surface);
+        let view = self.app.view();
+        let modal = self.app.modal();
+        let actions = crate::slt_ui::draw(
+            ctx,
+            &view,
+            &mut self.app.composer,
+            &mut self.app.modal_editor,
+            modal.as_ref(),
+            surface,
+        );
+        self.app.observe_slt_layout(surface);
+        for action in actions {
+            self.app.surface_action(action, surface).unwrap();
+        }
+    }
+
     fn open_thread(&mut self, profile: usize, thread: &str) {
         self.app.open(profile, thread.into()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1121,6 +1139,132 @@ fn source_inventory_keeps_empty_projects_and_rejects_malformed_replacement_atomi
             .error
             .contains("duplicate native project identity")
     );
+}
+
+#[test]
+fn active_question_keeps_snapshot_project_after_search_removes_its_row() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-question");
+    for host in &mut fixture.app.hosts {
+        host.page.threads.retain(|row| row.id == "thread-fork");
+    }
+    fixture.app.rebuild();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    let question = surface
+        .questions
+        .iter()
+        .find(|q| q.source.thread == "thread-question")
+        .unwrap();
+    assert_eq!(question.source.project_id, "project-a");
+    assert_eq!(question.source.project, "Fixture project");
+    assert_eq!(question.source.environment, "native-0");
+    assert_eq!(surface.source.as_ref().unwrap(), &question.source);
+    surface.attention_mode = true;
+    let mut backend = ::slt::TestBackend::new(110, 38);
+    for _ in 0..2 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.assert_contains("Fixture project");
+    backend.assert_not_contains("needs complete native source identities");
+}
+
+#[test]
+fn metadata_running_page_does_not_clear_observed_unopened_completion() {
+    let mut fixture = Fixture::new(0);
+    let first = "a".repeat(64);
+    let next = "b".repeat(64);
+    for (generation, status, expected_unread) in [
+        (Some(first.as_str()), "completed", false),
+        (Some(next.as_str()), "completed", true),
+        (None, "running", true),
+    ] {
+        let host_generation = fixture.app.hosts[0].generation;
+        fixture.app.handle(Background::Page {profile:0,generation:host_generation,append:false,result:Ok(json!({"threads":[{
+            "id":"thread-review","title":"Observed source","projectId":"project-a","status":status,
+            "inbox":{"activityGeneration":generation,"activityAt":"2026-11-04T12:00:00Z","working":status=="running"}
+        }],"more":false}))}).unwrap();
+        if generation == Some(first.as_str()) {
+            fixture
+                .app
+                .state
+                .mark_thread_read("native-0", "thread-review", generation)
+                .unwrap();
+        }
+        assert_eq!(
+            fixture.app.open_section(&fixture.app.threads[0]) == "Unread",
+            expected_unread
+        );
+    }
+    assert!(
+        fixture.app.threads[0].running(),
+        "read state must not hide native running membership"
+    );
+}
+
+#[test]
+fn returning_slt_focus_to_prompt_settles_displayed_source_without_editing() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    fixture.drain_pages();
+    let mut backend = ::slt::TestBackend::new(110, 38)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    for _ in 0..3 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Esc)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    fixture.app.selected = fixture
+        .app
+        .visible
+        .iter()
+        .position(|(i, _)| {
+            fixture.app.threads[*i].profile == 0 && fixture.app.threads[*i].id == "thread-fork"
+        })
+        .unwrap();
+    fixture.app.focus = Focus::Navigator;
+    backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    let (x, y) = backend.find_text("Prompt").unwrap();
+    backend.run_with_events(
+        ::slt::EventBuilder::new().click(x + 1, y + 2).build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    while backend.has_pending_input() {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_with(::slt::KeyCode::Char('t'), ::slt::KeyModifiers::CONTROL)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    for _ in 0..4 {
+        if !backend.has_pending_input() {
+            break;
+        }
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    let pending = fixture.app.state.pending("native-0", false).unwrap();
+    assert_eq!(pending["threadId"], "thread-review");
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-review");
+    assert_eq!(fixture.app.text(), "");
+    let event = fixture.next_mutation();
+    fixture.app.handle(event).unwrap();
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(
+        native["projections"]["thread-review"]["thread"]["settledOverride"],
+        "settled"
+    );
+    assert!(native["projections"]["thread-fork"]["thread"]["settledOverride"].is_null());
 }
 
 #[test]

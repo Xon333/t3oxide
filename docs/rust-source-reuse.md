@@ -4,7 +4,7 @@ The revised owner contract supersedes the historical Ratatui direction below. So
 
 | Role | Pin / licence / API | Reuse and boundary |
 | --- | --- | --- |
-| Main terminal runtime, focus, output | `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`, v0.26.0, MIT; `src/runtime/async_run.rs`, `src/context/runtime.rs`, `src/context/widgets/text_input/textarea.rs` | Maintained library package in `vendor/superlighttui`, patch `ordered-activation-v1`; full upstream MIT notice and base/modified-file identification retained. One `run_async_with` handle, wake-aware sender, deadline wakes and join. Opt-in activation boundaries reuse SLT's existing pending-input queue and `request_frame` wake. |
+| Main terminal runtime, focus, output | `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`, v0.26.0, MIT; `src/runtime/async_run.rs`, `src/context/runtime.rs`, `src/context/widgets/text_input/textarea.rs` | Maintained library package in `vendor/superlighttui`, patch `ordered-activation-v2`; full upstream MIT notice and base/modified-file identification retained. One `run_async_with` handle, wake-aware sender, deadline wakes and join. Opt-in activation boundaries reuse SLT's existing pending-input queue and `request_frame` wake. |
 | Stable forms | SLT state plus `inferadb/teapot@a7c4601f5f31dccb0556839c4df4f85e2459e46f`, MIT OR Apache-2.0; `src/components/select.rs` and `multi_select.rs` | Reuse value/label separation as an interaction model, without copying source or importing its Rust 1.92 alpha runtime. Native request IDs/revisions and durable answer drafts own identity. |
 | Native data and recovery | Maintained T3oxide Rust transport, projection and Node adapter from `58cb5f8`; current T3 contract evidence in `rust-contracts.md` | Retained exact operation journal, no automatic retry, native request revision preflight, source/revision/operation-qualified acknowledgement. Native respond has no revision CAS; adapter preflight is not server-side atomic CAS. |
 | Markdown and flowcharts | SLT same MIT pin; `dnvt/termiflow@cdd62fe1717aad26fe53ca1b0ad07454aa4f0e76`, 0.2.9, MIT; public parse/measure/layout/render APIs | `reports.rs` uses explicit Config, complete label widths, geometry/source/content memoization and warnings. It avoids home config loading. Ambient behavior/debug overrides cause source fallback; terminal dimensions enter cache identity. Flowcharts only; unsupported Mermaid retains unchanged source. |
@@ -17,7 +17,7 @@ SLT pin. A private textarea hook cannot order pointer/modal activations; a
 caller-owned frame loop would transfer terminal ownership. The narrow library
 patch instead renders preceding edits, activation alone, one input-free
 layout/focus frame, then queued input. Its default remains upstream batching.
-Enter Press, portable Ctrl+send and pointer activation boundaries share the
+Enter, Escape, function/Control/Super key and pointer activation boundaries share the
 existing queue; key releases, paste, Tab/BackTab and click-on-release retain
 their semantics. No second input reader, queue or scheduler is introduced.
 

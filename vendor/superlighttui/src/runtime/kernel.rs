@@ -180,9 +180,9 @@ pub(crate) fn run_frame_kernel(
     if config.activation_boundaries {
         let boundary = events.iter().position(|event| match event {
             Event::Key(key) if key.kind == event::KeyEventKind::Press => {
-                key.code == KeyCode::Enter
+                matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::F(_))
                     || key.modifiers.contains(event::KeyModifiers::CONTROL)
-                        && matches!(key.code, KeyCode::Char(']' | '\\' | '4' | '5'))
+                    || key.modifiers.contains(event::KeyModifiers::SUPER)
             }
             Event::Mouse(mouse) => {
                 matches!(mouse.kind, event::MouseKind::Down(_))

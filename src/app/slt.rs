@@ -229,13 +229,35 @@ impl App {
             .threads
             .iter()
             .find(|row| row.profile == profile && row.id == thread);
+        let project_id = row
+            .map(|row| row.project_id.clone())
+            .or_else(|| {
+                self.active
+                    .as_ref()
+                    .filter(|active| active.profile == profile && active.thread == thread)
+                    .and_then(|active| active.projection.snapshot())
+                    .filter(|snapshot| snapshot.thread_id() == thread)
+                    .map(|snapshot| string(&snapshot.metadata, "projectId"))
+                    .filter(|id| domain::valid_id(id))
+            })
+            .unwrap_or_default();
+        let project = row
+            .map(|row| row.project.clone())
+            .or_else(|| {
+                self.hosts[profile]
+                    .projects
+                    .iter()
+                    .find(|project| project["id"] == project_id)
+                    .map(|project| string(project, "title"))
+            })
+            .unwrap_or_else(|| project_id.clone());
         slt_ui::Source {
             profile,
             thread: thread.into(),
             environment: self.environments[profile].environment_id.clone(),
             environment_label: self.environments[profile].label.clone(),
-            project_id: row.map(|row| row.project_id.clone()).unwrap_or_default(),
-            project: row.map(|row| row.project.clone()).unwrap_or_default(),
+            project_id,
+            project,
         }
     }
 
@@ -263,6 +285,15 @@ impl App {
                         source.thread.clear();
                         source
                     });
+            }
+        }
+        if let Some(active) = &self.active {
+            let mut source = self.source(active.profile, &active.thread);
+            if !source.project_id.is_empty() {
+                source.thread.clear();
+                projects
+                    .entry((active.profile, source.project_id.clone()))
+                    .or_insert(source);
             }
         }
         projects.into_values().collect()
@@ -477,6 +508,9 @@ impl App {
     }
 
     pub(super) fn observe_slt_layout(&mut self, surface: &SurfaceState) {
+        if let Some(focus) = surface.focus {
+            self.focus = focus;
+        }
         if let Some(layout) = &surface.transcript_layout {
             self.renderer.update_transcript_layout(layout);
             self.hits.transcript.width = layout.width;
@@ -521,7 +555,11 @@ impl App {
         self.review_request(offer)
     }
 
-    fn surface_action(&mut self, action: Action, surface: &mut SurfaceState) -> Result<()> {
+    pub(super) fn surface_action(
+        &mut self,
+        action: Action,
+        surface: &mut SurfaceState,
+    ) -> Result<()> {
         match action {
             Action::Highlight(index) => {
                 self.focus = Focus::Navigator;

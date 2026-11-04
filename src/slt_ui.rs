@@ -88,6 +88,7 @@ pub struct SurfaceState {
     pub attention_mode: bool,
     pub internal_tabs: bool,
     pub show_context: bool,
+    pub(crate) focus: Option<ui::Focus>,
     pub selected_project: Option<String>,
     pub selected_question: Option<String>,
     pub graph_global: bool,
@@ -229,13 +230,16 @@ pub fn draw(
     } else {
         state.modal_stamp = None;
     }
-    global_actions(
-        ctx,
-        modal.is_some(),
-        view.lane == "Settled",
-        state,
-        &mut actions,
-    );
+    global_actions(ctx, modal.is_some(), state, &mut actions);
+    if modal.is_none() {
+        // Buttons and content outside navigation act on the displayed source.
+        // Preserve the invoking context while a modal owns SLT focus.
+        state.focus = Some(match ctx.focused_name() {
+            Some("navigator") => ui::Focus::Navigator,
+            Some(name) if name.starts_with("thread:") => ui::Focus::Navigator,
+            _ => ui::Focus::Composer,
+        });
+    }
     actions
 }
 
@@ -1184,7 +1188,6 @@ fn palette_keys(
 fn global_actions(
     ctx: &mut Context,
     modal: bool,
-    settled: bool,
     state: &mut SurfaceState,
     actions: &mut Vec<Action>,
 ) {
@@ -1205,9 +1208,7 @@ fn global_actions(
             KeyCode::Char('y') if control => Some(Action::Command("requests".into())),
             KeyCode::Char('i') if command => Some(Action::CopyId),
             KeyCode::Char('w') if command => Some(Action::CloseTab(state.active_key.clone())),
-            KeyCode::Char('t') if control => Some(Action::Command(
-                if settled { "unreviewed" } else { "reviewed" }.into(),
-            )),
+            KeyCode::Char('t') if control => Some(Action::Command("reviewed".into())),
             KeyCode::F(1) => Some(Action::Command("help".into())),
             KeyCode::F(2) if !modal => {
                 state.attention_mode = !state.attention_mode;

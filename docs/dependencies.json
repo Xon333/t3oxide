@@ -4116,10 +4116,10 @@
         }
       ],
       "vendoredPath": "vendor/superlighttui",
-      "patch": "ordered-activation-v1",
+      "patch": "ordered-activation-v2",
       "modifiedFiles": {
-        "src/runtime/config.rs": "2a1152e2451d85669c96b9b2a53aadc97edb3fca520fb6ac4681361f1ad4cfc3",
-        "src/runtime/kernel.rs": "748fbd1a5f94626ccd9b7bc8197cd3edef1dbda1b936d3c03b3d5258d5b9cbed",
+        "src/runtime/config.rs": "79db097cdec906477169cd84bae7ee76f7cce0395bae8f1de8385484416f3128",
+        "src/runtime/kernel.rs": "9e53df759e12b56b45d923098042a0a854c0147c45c902330c9b49834188e6b3",
         "src/runtime/frame_state.rs": "442d5cdd058f852cc4783fa4509b17c1e53dc1c13dac29ad3c78714c3c98c0d1"
       }
     },

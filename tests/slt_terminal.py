@@ -72,6 +72,12 @@ def commands_pointer_and_copy(binary, directory):
         terminal.wait("Ready for review")
         for label in ["Unread", "Running", "Pins", "Settled", "Project", "Env", "Ctrl+] send", "Send"]:
             terminal.wait(label)
+        terminal.send(b"\x10help\r")
+        terminal.wait("Input and focus")
+        saved = json.loads(paths["state"].read_text())
+        assert not saved.get("drafts", {}).get("fixture-env/thread-a", ""), "palette query must not enter the prompt draft"
+        assert not native_payloads(paths)
+        terminal.send(ESC)
         terminal.send(b"/help\r")
         terminal.wait("Input and focus")
         terminal.send(ESC)
@@ -124,6 +130,7 @@ def commands_pointer_and_copy(binary, directory):
     finally:
         terminal.close()
     return ["batched command Enter consumes without newline/send; compact controls and draft survive resize",
+            "batched Ctrl+P/help/Enter settles palette focus and executes Help without changing draft",
             "focused Control select-all/copy Press+Release emits exact clipboard text; unselected Ctrl+C cannot exit",
             "batched pointer Send separates preceding edits from next draft; modal text/save/tail stays ordered"]
 

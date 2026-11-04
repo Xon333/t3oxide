@@ -37276,7 +37276,7 @@ superlighttui 0.26.0
 License: MIT
 Source: https://github.com/subinium/SuperLightTUI/archive/d4537d74f4b42188e06cb224fbfe7684397897fb.tar.gz
 Vendored: vendor/superlighttui
-Patch: ordered-activation-v1 (see UPSTREAM.md)
+Patch: ordered-activation-v2 (see UPSTREAM.md)
 
 --- LICENSE ---
 MIT License
