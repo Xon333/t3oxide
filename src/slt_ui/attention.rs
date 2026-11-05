@@ -589,6 +589,16 @@ fn draw_canvas(
 ) {
     let accent = ctx.theme().primary;
     let title = match state.attention.selected.as_ref() {
+        Some(Selection::Question(_))
+            if state.retained_question.as_ref().is_some_and(|question| {
+                state
+                    .selected_project
+                    .as_ref()
+                    .is_some_and(|project| *project != question.source.project_key())
+            }) =>
+        {
+            "Form · Retained"
+        }
         Some(Selection::Question(_)) => "Form",
         Some(Selection::Content(_)) => selected_content(state)
             .map(|content| kind_label(&content.kind))
@@ -786,10 +796,11 @@ fn draw_question(
                 );
             }
         });
-    if state
-        .selected_project
-        .as_ref()
-        .is_some_and(|project| *project != question.source.project_key())
+    if !compact
+        && state
+            .selected_project
+            .as_ref()
+            .is_some_and(|project| *project != question.source.project_key())
     {
         ctx.text("Retained").dim();
     }
@@ -798,17 +809,20 @@ fn draw_question(
         if compact && let Some(delivery) = delivery {
             delivery_feedback(ctx, delivery, &state.spinner, actions);
         }
-        if (!compact || delivery.is_none() || delivery == Some("rejected"))
-            && primary_button(
+        if !compact || delivery.is_none() || delivery == Some("rejected") {
+            ctx.register_focusable_named("form-review");
+            if primary_button(
                 ctx,
                 if compact { "Open form" } else { "Answer" },
                 !answer_blocked,
             )
             .clicked
-        {
-            actions.push(Action::Answer(question.clone()));
+            {
+                actions.push(Action::Answer(question.clone()));
+            }
         }
-        if !compact && secondary_button(ctx, "Open in A").clicked {
+        ctx.register_focusable_named("form-source");
+        if secondary_button(ctx, "Open in A").clicked {
             actions.push(Action::OpenSource(question.source.clone()));
             state.attention_mode = false;
         }

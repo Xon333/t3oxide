@@ -1112,8 +1112,11 @@ fn draw_transcript(
     if height == 0 {
         return;
     }
+    let bordered = height >= 4;
+    let inset = u32::from(bordered) + u32::from(height >= 6);
+    let inner_width = width.saturating_sub(2 + 2 * u32::from(bordered));
     let geometry = reports::Geometry {
-        width: width.saturating_sub(4).max(1),
+        width: inner_width.max(1),
         height: height.saturating_sub(5).max(1),
     };
     let questions = format!("Questions {}", view.requests);
@@ -1138,6 +1141,13 @@ fn draw_transcript(
     if height == 1 {
         return;
     }
+    let group = format!("t3oxide.transcript:{}", state.active_key);
+    let measured = ctx.measured_layout_rect(&group);
+    let geometry_changed =
+        measured.is_some_and(|rect| rect.width != width || rect.height != height.saturating_sub(1));
+    if geometry_changed {
+        state.controller_scroll = None;
+    }
     if state.controller_scroll != Some((view.transcript_scroll, view.follow)) {
         state.transcript.offset = if view.follow {
             usize::MAX
@@ -1145,8 +1155,6 @@ fn draw_transcript(
             view.transcript_scroll
         };
     }
-    let group = format!("t3oxide.transcript:{}", state.active_key);
-    let measured = ctx.measured_layout_rect(&group);
     let items: Option<Vec<_>> = measured.and_then(|viewport| {
         view.messages
             .iter()
@@ -1154,7 +1162,7 @@ fn draw_transcript(
                 let rect = ctx.measured_layout_rect(&transcript_message_group(message))?;
                 Some((
                     message.key.clone(),
-                    rect.y.saturating_sub(viewport.y + 2) as usize,
+                    rect.y.saturating_sub(viewport.y + inset) as usize,
                     rect.height as usize,
                 ))
             })
@@ -1192,39 +1200,45 @@ fn draw_transcript(
                 viewport = viewport.scroll_offset(state.transcript.offset as u32);
                 jumped = true;
             }
-            viewport
+            let viewport = viewport
                 .grow(1)
-                .border(Border::Rounded)
                 .focus_within_border_fg(tailwind::VIOLET.c300)
-                .p(1)
-                .col(|ctx| {
-                    for message in &view.messages {
-                        ctx.group(&transcript_message_group(message)).col(|ctx| {
-                            ctx.text(&message.role).bold().fg(if message.role == "You" {
-                                tailwind::CYAN.c300
-                            } else {
-                                tailwind::VIOLET.c300
-                            });
-                            state.reports.draw(
-                                ctx,
-                                &message.key,
-                                &reports::content_revision(&message.text),
-                                &message.text,
-                                geometry,
-                            );
-                            if message.truncated {
-                                ctx.text("Excerpt").dim();
-                            }
-                            if message.streaming {
-                                ctx.spinner(&state.spinner);
-                            }
-                            ctx.text("");
+                .px(1)
+                .py(u32::from(height >= 6));
+            let viewport = if bordered {
+                viewport.border(Border::Rounded)
+            } else {
+                viewport
+            };
+            viewport.col(|ctx| {
+                for message in &view.messages {
+                    ctx.group(&transcript_message_group(message)).col(|ctx| {
+                        ctx.text(&message.role).bold().fg(if message.role == "You" {
+                            tailwind::CYAN.c300
+                        } else {
+                            tailwind::VIOLET.c300
                         });
-                    }
-                });
+                        state.reports.draw(
+                            ctx,
+                            &message.key,
+                            &reports::content_revision(&message.text),
+                            &message.text,
+                            geometry,
+                        );
+                        if message.truncated {
+                            ctx.text("Excerpt").dim();
+                        }
+                        if message.streaming {
+                            ctx.spinner(&state.spinner);
+                        }
+                        ctx.text("");
+                    });
+                }
+            });
         });
     if let (Some(items), Some(rect)) = (items, measured)
         && state.transcript.viewport_height() > 0
+        && !geometry_changed
     {
         let top = state.transcript.offset;
         let max = state.transcript.max_offset();
@@ -1242,7 +1256,8 @@ fn draw_transcript(
             content: state.transcript.content_height() as usize,
             visible: state.transcript.viewport_height() as usize,
             max,
-            width: u16::try_from(rect.width.saturating_sub(4)).unwrap_or(u16::MAX),
+            width: u16::try_from(rect.width.saturating_sub(2 + 2 * u32::from(bordered)))
+                .unwrap_or(u16::MAX),
         });
         if jumped {
             state.transcript_jump = None;

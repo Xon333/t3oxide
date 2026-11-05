@@ -5770,3 +5770,537 @@ fn r8_actual_tab_cycle_keeps_source_tab_owner_and_original_drafts() {
     assert_eq!(fixture.app.state.draft("native-0", "thread-review"), draft);
     assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
 }
+
+fn r9_input(
+    backend: &mut crate::slt_ui::tests::ResizableBackend,
+    fixture: &mut Fixture,
+    surface: &mut crate::slt_ui::SurfaceState,
+    events: Vec<::slt::Event>,
+) -> Option<String> {
+    backend.run_with_events(events, |ctx| fixture.draw_slt(ctx, surface));
+    let mut owner = None;
+    for _ in 0..8 {
+        backend.render(|ctx| {
+            fixture.draw_slt(ctx, surface);
+            owner = ctx.focused_name().map(str::to_owned);
+        });
+    }
+    owner
+}
+
+#[test]
+fn r9_compact_retained_form_keeps_review_and_source_actions_without_mutation() {
+    for context in [false, true] {
+        for keyboard in [false, true] {
+            let mut fixture = Fixture::new(0);
+            let config_path = &fixture.app.environments[0].host_config;
+            let mut config: Value =
+                serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+            config["fixture"]["persistInitialState"] = json!(true);
+            fs::write(config_path, config.to_string()).unwrap();
+            fixture.open(1);
+            fixture
+                .app
+                .replace_text("Retained acknowledged journal intent".into());
+            fixture.app.command("send").unwrap();
+            let event = fixture.next_mutation();
+            fixture.app.handle(event).unwrap();
+            let journal_root = fixture.directory.path().join("host-1/operations-v1");
+            let journal = r9_files(&journal_root);
+            assert!(!journal.is_empty());
+            fixture.load_pages();
+            fixture.open_thread(0, "thread-question");
+            let mut surface = crate::slt_ui::SurfaceState::new();
+            let mut backend =
+                crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            let draft = "Retained 日本語 café e\u{301} 👩\u{200d}💻  \ninterior caret  ";
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .paste(draft)
+                    .key_code(::slt::KeyCode::Left)
+                    .key_code(::slt::KeyCode::Left)
+                    .build(),
+            );
+            fixture.app.flush_draft().unwrap();
+            let caret = fixture.app.composer.cursor();
+            let source = fixture.app.source(0, "thread-question");
+            let pending = json!({"id":"r9-original-uncertain", "environmentId":"native-1", "threadId":"thread-a", "op":"send", "message":"exact original intent"});
+            fixture
+                .app
+                .state
+                .save_pending("native-1", false, pending.clone())
+                .unwrap();
+            let recovery = fixture.app.state.snapshot();
+            let native = fixture
+                .native_states
+                .iter()
+                .map(|p| {
+                    (
+                        fs::read(p).ok(),
+                        fs::metadata(p).ok().map(|m| m.permissions().mode()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let question = surface
+                .questions
+                .iter()
+                .find(|item| item.source.thread == "thread-question")
+                .unwrap()
+                .clone();
+            surface.selected_question = Some(question.key.clone());
+            surface.retained_question = Some(question);
+            surface.attention_mode = true;
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            let original = surface.retained_question.as_ref().unwrap().request.clone();
+            surface.selected_project = Some("native-0\0project-empty".into());
+            surface.show_context = context;
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().resize(40, 12).build(),
+            );
+            backend.assert_contains("What should happen next?");
+            backend.assert_contains("Retained");
+            backend.assert_contains("Fixture project");
+            let (x, y) = backend.find_text("Open form").unwrap_or_else(|| {
+                panic!(
+                    "compact retained review action missing, context={context}:\n{}",
+                    backend.text()
+                )
+            });
+            backend.assert_contains("Open in A");
+            if keyboard {
+                let mut owners = Vec::new();
+                for _ in 0..30 {
+                    let owner = r9_input(
+                        &mut backend,
+                        &mut fixture,
+                        &mut surface,
+                        ::slt::EventBuilder::new()
+                            .key_code(::slt::KeyCode::Tab)
+                            .build(),
+                    );
+                    owners.push(owner);
+                    if owners.last().unwrap().as_deref() == Some("form-review") {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    owners.last().unwrap().as_deref(),
+                    Some("form-review"),
+                    "{owners:?}"
+                );
+                r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new()
+                        .key_code(::slt::KeyCode::Enter)
+                        .build(),
+                );
+            } else {
+                r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new().click(x, y).build(),
+                );
+            }
+            assert!(
+                fixture.app.request_edit.is_some(),
+                "Open form enters native review"
+            );
+            assert_eq!(fixture.app.request_edit.as_ref().unwrap().request, original);
+            assert_eq!(fixture.app.text(), draft);
+            assert_eq!(fixture.app.composer.cursor(), caret);
+            assert_eq!(fixture.app.source(0, "thread-question"), source);
+            assert_eq!(fixture.app.state.snapshot()["pending"], recovery["pending"]);
+            assert_eq!(
+                fixture.app.state.snapshot()["pendingStops"],
+                recovery["pendingStops"]
+            );
+            assert_eq!(fixture.app.state.pending("native-1", false), Some(pending));
+            assert_eq!(
+                fixture
+                    .native_states
+                    .iter()
+                    .map(|p| (
+                        fs::read(p).ok(),
+                        fs::metadata(p).ok().map(|m| m.permissions().mode())
+                    ))
+                    .collect::<Vec<_>>(),
+                native
+            );
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Esc)
+                    .build(),
+            );
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().resize(86, 31).build(),
+            );
+            backend.assert_contains("Answer");
+            backend.assert_contains("Open in A");
+            assert_eq!(
+                surface.retained_question.as_ref().unwrap().request,
+                original
+            );
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().resize(40, 12).build(),
+            );
+            let (x, y) = backend.find_text("Open in A").unwrap();
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().click(x, y).build(),
+            );
+            assert!(!surface.attention_mode);
+            assert_eq!(fixture.app.source(0, "thread-question"), source);
+            assert_eq!(fixture.app.text(), draft);
+            assert_eq!(fixture.app.composer.cursor(), caret);
+            assert_eq!(r9_files(&journal_root), journal);
+        }
+    }
+}
+
+#[test]
+fn r9_small_a_keeps_transcript_body_with_unicode_interior_caret() {
+    for context in [false, true] {
+        let mut fixture = Fixture::new(0);
+        fixture.open(0);
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        surface.show_context = context;
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        let draft = "日本語 café e\u{301} 👩\u{200d}💻 retained draft  \nsecond interior line  ";
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .paste(draft)
+                .key_code(::slt::KeyCode::Left)
+                .key_code(::slt::KeyCode::Left)
+                .build(),
+        );
+        fixture.app.flush_draft().unwrap();
+        let caret = fixture.app.composer.cursor();
+        let source = fixture.app.source(0, "thread-a");
+        let follow = fixture.app.follow;
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().resize(40, 12).build(),
+        );
+        assert!(
+            surface
+                .transcript_layout
+                .as_ref()
+                .is_some_and(|layout| layout.visible > 0),
+            "useful transcript viewport required, context={context}:\n{}",
+            backend.text()
+        );
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.source(0, "thread-a"), source);
+        assert_eq!(
+            fixture.app.follow,
+            follow,
+            "context={context}, layout={:?}\n{}",
+            surface.transcript_layout,
+            backend.text()
+        );
+        for toggled in [!context, context] {
+            surface.show_context = toggled;
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            assert!(
+                surface
+                    .transcript_layout
+                    .as_ref()
+                    .is_some_and(|layout| layout.visible > 0)
+            );
+            assert_eq!(fixture.app.follow, follow, "context toggle retains follow");
+            assert_eq!(fixture.app.text(), draft);
+            assert_eq!(fixture.app.composer.cursor(), caret);
+        }
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert!(fixture.native_states.iter().all(|p| !p.exists()));
+    }
+}
+
+#[test]
+fn r9_actual_divider_drag_retains_default_and_manual_width_across_resize() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(0);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend =
+        crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    let mut nav = None;
+    backend.render(|ctx| {
+        fixture.draw_slt(ctx, &mut surface);
+        nav = ctx.measured_layout_rect("t3oxide.navigator");
+    });
+    let rect = nav.unwrap();
+    assert_eq!(rect.width, 30);
+    // The hit belongs to the rendered edge, whose origin includes the container offset.
+    let handle = rect.right();
+    let target = rect.x + 42;
+    for events in [
+        ::slt::EventBuilder::new().click(handle, rect.y + 5).build(),
+        ::slt::EventBuilder::new().drag(target, rect.y + 5).build(),
+        ::slt::EventBuilder::new()
+            .mouse_up(target, rect.y + 5)
+            .build(),
+    ] {
+        r9_input(&mut backend, &mut fixture, &mut surface, events);
+    }
+    for width in [140, 86, 70, 40, 140] {
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().resize(width, 38).build(),
+        );
+        backend.render(|ctx| {
+            fixture.draw_slt(ctx, &mut surface);
+            nav = ctx.measured_layout_rect("t3oxide.navigator");
+        });
+        if width >= 86 {
+            assert_eq!(nav.unwrap().width, 42, "manual preference at width {width}");
+        }
+    }
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert!(fixture.native_states.iter().all(|p| !p.exists()));
+}
+
+#[test]
+fn r9_complete_graph_focus_cycle_uses_original_project_identity() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    for host in &mut fixture.app.hosts {
+        for project in &mut host.projects {
+            if project["id"] == "project-a" {
+                project["title"] = json!("Atlas");
+            }
+        }
+    }
+    fixture.open_thread(0, "thread-question");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend =
+        crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    assert_eq!(
+        surface
+            .projects
+            .iter()
+            .filter(|p| p.project == "Atlas")
+            .count(),
+        2
+    );
+    surface.attention_mode = true;
+    surface.selected_project = Some("native-0\0project-a".into());
+    surface.graph_global = false;
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    let original_source = fixture.app.source(0, "thread-question");
+    let retained = surface.retained_question.clone();
+    let (x, y) = backend.find_text("All projects").unwrap();
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().click(x, y).build(),
+    );
+    assert!(surface.graph_global);
+    let mut owners = Vec::new();
+    for _ in 0..30 {
+        let owner = r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Tab)
+                .build(),
+        );
+        owners.push(owner.clone());
+        if owner.as_deref() == Some("project-navigation") {
+            break;
+        }
+    }
+    assert_eq!(
+        owners.last().unwrap().as_deref(),
+        Some("project-navigation"),
+        "{owners:?}"
+    );
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Down)
+            .build(),
+    );
+    assert_eq!(
+        surface.selected_project.as_deref(),
+        Some("native-0\0project-a")
+    );
+    assert_eq!(fixture.app.source(0, "thread-question"), original_source);
+    backend.assert_contains("Empty project");
+    let selected_paint = backend.text();
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Tab)
+            .build(),
+    );
+    let owner = r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::BackTab)
+            .build(),
+    );
+    assert_eq!(owner.as_deref(), Some("project-navigation"));
+    assert_eq!(
+        backend.text(),
+        selected_paint,
+        "Tab away/back keeps graph viewport and selection paint"
+    );
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+    );
+    assert_eq!(
+        surface.selected_project.as_deref(),
+        Some("native-0\0project-empty")
+    );
+    assert!(!surface.graph_global);
+    assert_eq!(
+        surface.retained_question.as_ref().map(|q| &q.request),
+        retained.as_ref().map(|q| &q.request)
+    );
+    assert_eq!(fixture.app.source(0, "thread-question"), original_source);
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert!(fixture.native_states.iter().all(|p| !p.exists()));
+}
+
+fn r9_files(root: &Path) -> std::collections::BTreeMap<PathBuf, (Vec<u8>, u32)> {
+    let mut files = std::collections::BTreeMap::new();
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        let name = PathBuf::from(path.file_name().unwrap());
+        if path.is_dir() {
+            for (child, value) in r9_files(&path) {
+                files.insert(name.join(child), value);
+            }
+        } else {
+            files.insert(
+                name,
+                (
+                    fs::read(&path).unwrap(),
+                    fs::metadata(&path).unwrap().permissions().mode(),
+                ),
+            );
+        }
+    }
+    files
+}
+
+#[test]
+fn r9_compact_retained_form_fails_closed_after_source_or_delivery_changes() {
+    for condition in [
+        "changed",
+        "unavailable",
+        "submitting",
+        "uncertain",
+        "acknowledged",
+    ] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open_thread(0, "thread-question");
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture.app.populate_surface(&mut surface);
+        let question = surface
+            .questions
+            .iter()
+            .find(|q| q.source.thread == "thread-question")
+            .unwrap()
+            .clone();
+        surface.selected_question = Some(question.key.clone());
+        surface.retained_question = Some(question.clone());
+        surface.attention_mode = true;
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(40, 12).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        let (x, y) = backend.find_text("Open form").unwrap();
+        if condition == "changed" || condition == "unavailable" {
+            let active = fixture.app.active.as_ref().unwrap();
+            let generation = active.generation;
+            let mut page = active.projection.snapshot().unwrap().as_wire_value();
+            page["revision"] = json!(page["revision"].as_u64().unwrap() + 1);
+            let mut replacement = question.request.clone();
+            replacement["revision"] = json!("b".repeat(64));
+            page["requests"] = if condition == "changed" {
+                json!([replacement])
+            } else {
+                json!([])
+            };
+            fixture
+                .app
+                .handle(Background::Packet {
+                    generation,
+                    packet: Packet::event("native-0", "view", page),
+                })
+                .unwrap();
+        } else {
+            let phase = match condition {
+                "submitting" => AnswerPhase::Submitting,
+                "uncertain" => AnswerPhase::Uncertain,
+                _ => AnswerPhase::Acknowledged,
+            };
+            fixture.app.remember_answer_delivery(0, "original-answer-operation", &json!({"threadId":"thread-question", "requestId":question.request["id"], "revision":question.request["revision"]}), phase);
+        }
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().click(x, y).build(),
+        );
+        assert!(
+            fixture.app.request_edit.is_none(),
+            "{condition} admitted an obsolete form"
+        );
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert!(fixture.native_states.iter().all(|p| !p.exists()));
+        assert_eq!(
+            surface.retained_question.as_ref().unwrap().request,
+            question.request
+        );
+    }
+}
