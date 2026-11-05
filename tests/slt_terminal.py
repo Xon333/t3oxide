@@ -72,6 +72,13 @@ def commands_pointer_and_copy(binary, directory):
         terminal.wait("Ready for review")
         for label in ["Unread", "Running", "Pins", "Settled", "Project", "Env", "Ctrl+] send", "Send"]:
             terminal.wait(label)
+        click(terminal, "Env")
+        terminal.wait("Environment scope")
+        terminal.wait("All environments")
+        terminal.wait("Fixture host")
+        assert "Unknown action" not in terminal.text
+        assert not native_payloads(paths), "environment browsing cannot dispatch a mutation"
+        terminal.send(ESC)
         terminal.send(b"\x10help\r")
         terminal.wait("Input and focus")
         saved = json.loads(paths["state"].read_text())
@@ -129,7 +136,8 @@ def commands_pointer_and_copy(binary, directory):
         assert terminal.close() == 0
     finally:
         terminal.close()
-    return ["batched command Enter consumes without newline/send; compact controls and draft survive resize",
+    return ["sidebar Env opens the supported environment scope without dispatching a mutation",
+            "batched command Enter consumes without newline/send; compact controls and draft survive resize",
             "batched Ctrl+P/help/Enter settles palette focus and executes Help without changing draft",
             "focused Control select-all/copy Press+Release emits exact clipboard text; unselected Ctrl+C cannot exit",
             "batched pointer Send separates preceding edits from next draft; modal text/save/tail stays ordered"]

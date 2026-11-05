@@ -367,7 +367,7 @@ fn draw_navigator(
                 actions.push(Action::Command("project".into()));
             }
             if ctx.button("Env").clicked {
-                actions.push(Action::Command("environments".into()));
+                actions.push(Action::Command("env".into()));
             }
         });
         let keys: Vec<_> = view.rows.iter().map(|row| row.key.clone()).collect();
@@ -1459,9 +1459,11 @@ mod tests {
             backend.run_with_events(slt::EventBuilder::new().click(x, y).build(), |ctx| {
                 actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
             });
-            assert!(actions.iter().any(
-                |action| matches!(action, Action::Command(command) if command == "environments")
-            ));
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| matches!(action, Action::Command(command) if command == "env"))
+            );
             backend.run_with_events(
                 slt::EventBuilder::new().resize(width, height).build(),
                 |ctx| {
