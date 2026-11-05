@@ -363,6 +363,7 @@ impl App {
                 self.workspace_dispatch(WorkspaceAction::Scope(None))?;
                 self.scope = Some(profile);
                 self.rebuild();
+                self.notice = format!("Browsing {}", self.workspace_scope_label());
                 self.text_dialog(
                     "Search conversations",
                     "",

@@ -140,6 +140,7 @@ impl App {
                 self.workspace_dispatch(workspace::WorkspaceAction::Scope(None))?;
                 self.scope = profile;
                 self.set_lane(self.lane.clone())?;
+                self.notice = format!("Browsing {}", self.workspace_scope_label());
             }
             Intent::Type(kind) => {
                 self.kind = kind;
