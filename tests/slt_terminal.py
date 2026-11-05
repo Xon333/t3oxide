@@ -793,7 +793,7 @@ def compact_model_interactions(binary, directory):
         try:
             terminal = Terminal(binary, paths["config"], paths["state"],
                                 columns=70, rows=22, environment=PTY_ENV)
-            terminal.wait("Ready for review")
+            terminal.wait("cargo test completed.")
             focus_prompt(terminal)
             send("interior-caret", UP * 3 + b"\x1b[H" + DOWN + END + b"\x1b[D" * 2)
             send("bookmark-help", b"\x1bOP")
@@ -945,7 +945,7 @@ def compact_model_interactions(binary, directory):
             child = 1
             terminal = Terminal(binary, paths["config"], paths["state"],
                                 columns=70, rows=22, environment=PTY_ENV)
-            terminal.wait("Ready for review")
+            terminal.wait("cargo test completed.")
             draft_is(terminal, paths, draft)
             terminal.pump(0.2)
             restarted = snapshot("restarted")
