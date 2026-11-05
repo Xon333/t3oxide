@@ -2,6 +2,28 @@
 
 ## Active correction pass — 2026-11-05
 
+The latest R8 source checkpoint passed **267 Rust tests** (252 library and 15
+integration), workspace/vendor formatting, both Clippy checks and
+`git diff --check`. Rust/Cargo **1.92.0** compiled all locked targets/features;
+that check did not execute tests. Four production regressions failed before the
+corrections and pass afterward: compact Context navigation, short-form action
+placement, complete acknowledgement diagrams in the outer report scroll, and
+source-tab focus retention. Actual forward/reverse Tab traversal and A/B return
+preserve the Unicode interior caret, original uncertain operation, native bytes
+and journal guards. The six-file correction also bounds the graph preview,
+exposes compact navigation through existing controls, distinguishes active tabs
+from keyboard focus and clarifies Model focus/Apply paint. All 195 strict Python
+assertions and the 12 runtime inputs remain unchanged.
+
+The prior R7 binary passed one full29 run, including the mandatory context gate
+and 33 normal primary exits. Its later acceptance remained **NOT_ACCEPTED**:
+the blind visual target was unmet, populated graph navigation had compact/focus
+limits, and a physical near-concurrent Enter pair produced an extra fixture
+setting operation with delivery ordering unproved. No source defect is attributed
+to that pair. These results qualify R7; the changed R8 source still needs a new
+immutable binary, functional/native/graph checks and fresh visual acceptance.
+No correction-pass merge, deployment or M4 switch has occurred.
+
 The compact Model integration source passed **254 Rust tests**, workspace/vendor
 formatting, both Clippy checks and `git diff --check`. Rust/Cargo **1.92.0**
 compiled all targets with all features; that check did not execute tests. The

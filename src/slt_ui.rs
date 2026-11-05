@@ -124,6 +124,10 @@ pub struct SurfaceState {
     applied_layout: Option<ui::LayoutMode>,
     viewport: Option<(u32, u32)>,
     focused_control: Option<String>,
+    last_attention_mode: bool,
+    conversation_focus: Option<String>,
+    attention_focus: Option<String>,
+    context_expanded: bool,
     attention: attention::State,
     dialog: dialogs::State,
     overlay_open: bool,
@@ -188,8 +192,10 @@ pub fn draw(
         }))
     .then(|| state.focused_control.clone())
     .flatten();
+    let retain_tab_focus = state.composer_key != state.active_key
+        && state.focused_control.as_deref() == Some("conversation-tabs");
     state.transcript_layout = None;
-    state.overlay_open = modal.is_some();
+    state.overlay_open = modal.is_some() || state.context_expanded;
     if state.composer_key != state.active_key {
         if !state.composer_key.is_empty() {
             state.tab_editors.insert(
@@ -206,7 +212,9 @@ pub fn draw(
         state.controller_scroll = None;
         state.command_escape = None;
         state.command_open = false;
-        ctx.focus_by_name("composer");
+        if ctx.focused_name() != Some("conversation-tabs") {
+            ctx.focus_by_name("composer");
+        }
         ctx.request_frame();
     }
     sync_editor(&mut state.composer, composer);
@@ -238,14 +246,17 @@ pub fn draw(
     }
     ctx.set_theme(surface_theme(&view.theme));
     state.browsing_scope = browsing_scope(view, state);
-    ctx.disabled(modal.is_some(), |ctx| {
+    ctx.disabled(modal.is_some() || state.context_expanded, |ctx| {
         ctx.container().w(width).h(height).col(|ctx| {
             draw_header(ctx, view, state, &mut actions);
             let footer_height = 1 + u32::from(!view.notice.is_empty());
             let body_height = height.saturating_sub(1 + footer_height).max(1);
             let context_side = state.show_context && width >= 112;
             let context_bottom = state.show_context && !context_side;
-            let context_height = if context_bottom {
+            let compact_context = context_bottom && height < 18;
+            let context_height = if compact_context {
+                1
+            } else if context_bottom {
                 (body_height / 3)
                     .clamp(4, 9)
                     .min(body_height.saturating_sub(6))
@@ -285,7 +296,23 @@ pub fn draw(
                 }
             });
             if context_bottom && context_height > 0 {
-                draw_context(ctx, view, state, width, context_height, &mut actions);
+                if compact_context {
+                    ctx.container().h(1).row(|ctx| {
+                        ctx.register_focusable_named("context-disclosure");
+                        if secondary_button(ctx, "Context ▾").clicked {
+                            state.context_expanded = true;
+                            ctx.request_frame();
+                        }
+                        if let Some(source) =
+                            attention::selected_source(state).or(state.source.as_ref())
+                        {
+                            ctx.text(format!("{} · {}", source.environment_label, source.project))
+                                .truncate();
+                        }
+                    });
+                } else {
+                    draw_context(ctx, view, state, width, context_height, &mut actions);
+                }
             }
             ctx.row(|ctx| {
                 ctx.text(&view.status).dim().truncate().grow(1);
@@ -302,6 +329,23 @@ pub fn draw(
             }
         });
     });
+    if state.context_expanded && modal.is_none() {
+        ctx.modal(|ctx| {
+            draw_context(
+                ctx,
+                view,
+                state,
+                width.saturating_sub(2).max(1),
+                height.saturating_sub(3).max(1),
+                &mut actions,
+            );
+            if secondary_button(ctx, "Close").clicked || ctx.consume_key_code(KeyCode::Esc) {
+                state.context_expanded = false;
+                ctx.focus_by_name("context-disclosure");
+                ctx.request_frame();
+            }
+        });
+    }
     if let Some(modal) = modal {
         dialogs::draw(ctx, modal, modal_editor, state, &mut actions);
     } else {
@@ -309,6 +353,20 @@ pub fn draw(
     }
     global_actions(ctx, modal.is_some(), state, &mut actions);
     if modal.is_none() {
+        if retain_tab_focus {
+            ctx.focus_by_name("conversation-tabs");
+            ctx.request_frame();
+        }
+        if state.last_attention_mode != state.attention_mode {
+            let target = if state.attention_mode {
+                state.attention_focus.as_deref().unwrap_or("attention-list")
+            } else {
+                state.conversation_focus.as_deref().unwrap_or("composer")
+            };
+            ctx.focus_by_name(target);
+            state.last_attention_mode = state.attention_mode;
+            ctx.request_frame();
+        }
         if let Some(name) = restore_focus {
             // Responsive panes can add named controls before the old focus slot.
             // Re-resolve that name through SLT after the new layout is registered.
@@ -327,6 +385,23 @@ pub fn draw(
             ctx.request_frame();
         } else {
             state.focused_control = ctx.focused_name().map(str::to_owned);
+        }
+        if let Some(name) = state.focused_control.as_deref() {
+            if matches!(
+                name,
+                "composer" | "navigator" | "transcript" | "conversation-tabs"
+            ) {
+                state.conversation_focus = Some(name.to_owned());
+            } else if matches!(
+                name,
+                "attention-list"
+                    | "attention-tabs"
+                    | "project-navigation"
+                    | "attention-content"
+                    | "attention-navigation"
+            ) {
+                state.attention_focus = Some(name.to_owned());
+            }
         }
         // Buttons and content outside navigation act on the displayed source.
         // Preserve the invoking context while a modal owns SLT focus.
@@ -518,20 +593,23 @@ fn quiet_tabs(ctx: &mut Context, tabs: &mut TabsState) -> Response {
                 ctx.text("│").fg(theme.border);
             }
             let hit = ctx.interaction();
-            ctx.text(format!(" {label} "))
-                .fg(if index == tabs.selected {
-                    theme.text
-                } else {
-                    theme.surface_text
-                })
-                .bg(if index == tabs.selected {
-                    theme.surface_hover
-                } else {
-                    theme.surface
-                })
-                .with_if(focused && index == tabs.selected, |text| {
-                    text.underline().fg(theme.primary);
-                });
+            ctx.text(format!(
+                " {}{label} ",
+                if index == tabs.selected { "• " } else { "" }
+            ))
+            .fg(if index == tabs.selected {
+                theme.text
+            } else {
+                theme.surface_text
+            })
+            .bg(if index == tabs.selected {
+                theme.surface_hover
+            } else {
+                theme.surface
+            })
+            .with_if(focused && index == tabs.selected, |text| {
+                text.underline().fg(theme.primary);
+            });
             if hit.clicked {
                 tabs.selected = index;
                 response.clicked = true;
@@ -1657,6 +1735,7 @@ pub(crate) mod tests {
             backend.render(&mut callback);
         }
         backend.assert_not_contains("[ First thread ]");
+        backend.assert_contains("• First thread");
         let (x, y) = backend.find_text("First thread").unwrap();
         let initial = backend.buffer().get(x, y).style;
         assert!(!initial.modifiers.contains(slt::Modifiers::BOLD));
@@ -1670,6 +1749,7 @@ pub(crate) mod tests {
         assert_eq!(focus.as_deref(), Some("tabs"));
         assert!(activations.is_empty());
         assert_eq!(tabs.selected, 0);
+        backend.assert_contains("• First thread");
     }
 
     #[test]

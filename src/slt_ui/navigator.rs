@@ -93,7 +93,14 @@ pub(super) fn draw(
             }
             let focused = ctx.register_focusable_named("navigator");
             let _ = ctx.register_focusable();
-            let extra_selected_row = u32::from(shared_scope.is_none() && height >= 10);
+            let long_selected = height >= 14
+                && view.rows.get(state.selected).is_some_and(|row| {
+                    row.key == presentation.attached_key
+                        && unicode_width::UnicodeWidthStr::width(row.title.as_str())
+                            > width.saturating_sub(6) as usize * 2
+                });
+            let extra_selected_row =
+                u32::from(shared_scope.is_none() && height >= 10) + u32::from(long_selected);
             let capacity = (height
                 .saturating_sub(5 + u32::from(shared_scope.is_some()) + extra_selected_row)
                 / 2)
@@ -148,7 +155,9 @@ pub(super) fn draw(
                         && (selected
                             || index == state.top
                             || view.rows[index - 1].subtitle != row.subtitle);
-                    let title_rows = if !show_scope || selected && extra_selected_row > 0 {
+                    let title_rows = if selected && long_selected {
+                        3
+                    } else if !show_scope || selected && extra_selected_row > 0 {
                         2
                     } else {
                         1

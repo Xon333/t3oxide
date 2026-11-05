@@ -557,7 +557,11 @@ fn draw_model(
                                 .fg(theme.primary);
                                 ctx.text(&field.label)
                                     .w(10.min(inner / 2))
-                                    .fg(theme.surface_text)
+                                    .fg(if focused && !picker.expanded {
+                                        theme.primary
+                                    } else {
+                                        theme.surface_text
+                                    })
                                     .truncate();
                                 ctx.text(format!(
                                     "{}{} ▾",
@@ -652,21 +656,32 @@ fn draw_model(
                     ctx.disabled(
                         picker.expanded || expanded_before || changed || dispatched,
                         |ctx| {
-                            ctx.container().w(inner).h(1).row(|ctx| {
-                                for (index, label, name) in &controls {
-                                    ctx.register_focusable_named(name);
-                                    let hit = secondary_button(ctx, label);
-                                    if hit.clicked && !dispatched {
-                                        actions.push(Action::ModalChoice(*index));
+                            ctx.container()
+                                .w(inner)
+                                .wrap()
+                                .gap(1)
+                                .row_gap(0)
+                                .row(|ctx| {
+                                    for (index, label, name) in &controls {
+                                        ctx.register_focusable_named(name);
+                                        let hit = if modal.items.get(*index).is_some_and(|item| {
+                                            item.role == ui::ModalItemRole::ModelApply
+                                        }) {
+                                            primary_button(ctx, label, true)
+                                        } else {
+                                            secondary_button(ctx, label)
+                                        };
+                                        if hit.clicked && !dispatched {
+                                            actions.push(Action::ModalChoice(*index));
+                                            dispatched = true;
+                                        }
+                                    }
+                                    ctx.register_focusable_named("model-close");
+                                    if secondary_button(ctx, "×").clicked && !dispatched {
+                                        actions.push(Action::CloseModal);
                                         dispatched = true;
                                     }
-                                }
-                                ctx.register_focusable_named("model-close");
-                                if secondary_button(ctx, "×").clicked && !dispatched {
-                                    actions.push(Action::CloseModal);
-                                    dispatched = true;
-                                }
-                            });
+                                });
                         },
                     );
                 });

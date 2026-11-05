@@ -5305,3 +5305,282 @@ fn context_worker_retired_native_question_cannot_reopen_its_closed_read_view() {
         assert!(fixture.native_states.iter().all(|path| !path.exists()));
     }
 }
+
+#[test]
+fn r8_actual_tab_cycle_keeps_source_tab_owner_and_original_drafts() {
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["persistInitialState"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.load_pages();
+    fixture.open(0);
+    fixture.open_thread(0, "thread-question");
+    fixture.open_thread(0, "thread-review");
+    let draft = "Interior 日本語 café  \nold tail  \n";
+    fixture.app.composer = ui::editor(draft, &fixture.app.theme, "");
+    fixture.app.flush_draft().unwrap();
+    let pending = json!({"id":"r8-original-operation","environmentId":"native-0","threadId":"thread-a","op":"send","message":"Original uncertain intent"});
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    let native_before = fs::read(&fixture.native_states[0]).unwrap();
+    let stops_before = fixture.app.state.snapshot()["pendingStops"].clone();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    surface.show_context = true;
+    let mut backend = ::slt::TestBackend::new(140, 38)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    assert_eq!(
+        model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new()).as_deref(),
+        Some("composer")
+    );
+    let mut owners = Vec::new();
+    for _ in 0..30 {
+        let owner = model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Tab)
+                .build(),
+        );
+        owners.push(owner.clone());
+        if owner.as_deref() == Some("composer") {
+            break;
+        }
+    }
+    for expected in [
+        "toolbar",
+        "conversation-tabs",
+        "navigator",
+        "transcript",
+        "context",
+    ] {
+        assert!(
+            owners
+                .iter()
+                .any(|owner| owner.as_deref() == Some(expected)),
+            "missing {expected}: {owners:?}"
+        );
+    }
+    assert_eq!(owners.last().unwrap().as_deref(), Some("composer"));
+    let mut a_reverse = Vec::new();
+    for _ in 0..30 {
+        let owner = model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::BackTab)
+                .build(),
+        );
+        a_reverse.push(owner.clone());
+        if owner.as_deref() == Some("composer") {
+            break;
+        }
+    }
+    let mut a_forward: Vec<_> = owners.iter().filter_map(|owner| owner.as_deref()).collect();
+    let mut a_back: Vec<_> = a_reverse
+        .iter()
+        .filter_map(|owner| owner.as_deref())
+        .collect();
+    a_forward.sort();
+    a_back.sort();
+    assert_eq!(a_forward, a_back);
+    let mut unique = a_forward.clone();
+    unique.dedup();
+    assert_eq!(a_forward, unique, "one stop per named composite");
+    for _ in 0..30 {
+        if model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::BackTab)
+                .build(),
+        )
+        .as_deref()
+            == Some("conversation-tabs")
+        {
+            break;
+        }
+    }
+    let owner = model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Left)
+            .build(),
+    );
+    assert_eq!(
+        owner.as_deref(),
+        Some("conversation-tabs"),
+        "source activation must retain the tab composite"
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Right)
+            .build(),
+    );
+    for _ in 0..30 {
+        if model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Tab)
+                .build(),
+        )
+        .as_deref()
+            == Some("composer")
+        {
+            break;
+        }
+    }
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Up)
+            .key_code(::slt::KeyCode::End)
+            .key_code(::slt::KeyCode::Left)
+            .key_code(::slt::KeyCode::Left)
+            .build(),
+    );
+    for _ in 0..30 {
+        if model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Tab)
+                .build(),
+        )
+        .as_deref()
+            == Some("toolbar")
+        {
+            break;
+        }
+    }
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Right)
+            .key_code(::slt::KeyCode::Right)
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+    );
+    assert!(surface.attention_mode);
+    let mut b_owners = Vec::new();
+    for _ in 0..30 {
+        let owner = model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Tab)
+                .build(),
+        );
+        b_owners.push(owner.clone());
+        if owner.as_deref() == Some("attention-list") {
+            break;
+        }
+    }
+    for expected in [
+        "project-navigation",
+        "attention-content",
+        "attention-tabs",
+        "toolbar",
+        "context",
+    ] {
+        assert!(
+            b_owners
+                .iter()
+                .any(|owner| owner.as_deref() == Some(expected)),
+            "missing {expected}: {b_owners:?}"
+        );
+    }
+    let mut reverse = Vec::new();
+    for _ in 0..30 {
+        let owner = model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::BackTab)
+                .build(),
+        );
+        reverse.push(owner.clone());
+        if owner.as_deref() == Some("attention-list") {
+            break;
+        }
+    }
+    let mut forward_names: Vec<_> = b_owners
+        .iter()
+        .filter_map(|owner| owner.as_deref())
+        .collect();
+    let mut reverse_names: Vec<_> = reverse
+        .iter()
+        .filter_map(|owner| owner.as_deref())
+        .collect();
+    forward_names.sort();
+    reverse_names.sort();
+    assert_eq!(forward_names, reverse_names);
+    for _ in 0..30 {
+        if model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Tab)
+                .build(),
+        )
+        .as_deref()
+            == Some("toolbar")
+        {
+            break;
+        }
+    }
+    let returned = model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Left)
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+    );
+    assert!(!surface.attention_mode);
+    assert_eq!(returned.as_deref(), Some("composer"));
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().key('X').build(),
+    );
+    assert_eq!(
+        fixture.app.text(),
+        draft.replace("old tail  \n", "old tailX  \n")
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Backspace)
+            .build(),
+    );
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    assert_eq!(fixture.app.state.snapshot()["pendingStops"], stops_before);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-review"), draft);
+    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+}

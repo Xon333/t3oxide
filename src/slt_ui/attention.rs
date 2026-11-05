@@ -1,7 +1,7 @@
 //! Project navigation, source-qualified questions and independently selected content.
 
 use super::{
-    Action, AttentionItem, ContentItem, Source, SurfaceState, elide, identity_color,
+    Action, AttentionItem, ContentItem, Source, SurfaceState, action_bar, elide, identity_color,
     primary_button, quiet_tabs, secondary_button,
 };
 use crate::{domain, project_graph, reports, ui};
@@ -31,6 +31,8 @@ pub(super) struct State {
     displayed: Option<(String, String)>,
     graph: project_graph::ProjectGraph,
     project_selections: BTreeMap<String, Selection>,
+    navigation_open: Option<bool>,
+    navigation_cursor: usize,
 }
 
 pub(super) fn selected_source(state: &SurfaceState) -> Option<&Source> {
@@ -78,15 +80,123 @@ pub(super) fn draw(
     initialize_selection(state);
     let width = width.max(1);
     let height = height.max(1);
-    if width >= 64 {
+    if height < 12 {
+        let in_scope = |source: &Source| {
+            state
+                .selected_project
+                .as_ref()
+                .is_none_or(|project| *project == source.project_key())
+        };
+        let forms = state
+            .questions
+            .iter()
+            .filter(|item| in_scope(&item.source))
+            .count();
+        let library = state
+            .contents
+            .iter()
+            .filter(|item| in_scope(&item.source))
+            .count();
+        let strip = if width < 52 { 2 } else { 1 };
+        ctx.container().w(width).h(height).col(|ctx| {
+            ctx.container().h(strip).col(|ctx| {
+                let items = [
+                    (
+                        format!("Forms {forms}"),
+                        state.attention.tabs.selected == 0,
+                        true,
+                    ),
+                    (
+                        format!("Library {library}"),
+                        state.attention.tabs.selected == 1,
+                        true,
+                    ),
+                    (
+                        if state.graph_global {
+                            "Projects · All"
+                        } else {
+                            "Projects"
+                        }
+                        .into(),
+                        false,
+                        true,
+                    ),
+                    (
+                        "All projects".into(),
+                        state.graph_global,
+                        !state.graph_global,
+                    ),
+                ];
+                let refs: Vec<_> = items
+                    .iter()
+                    .map(|(label, selected, enabled)| (label.as_str(), *selected, *enabled))
+                    .collect();
+                match action_bar(
+                    ctx,
+                    "attention-navigation",
+                    &mut state.attention.navigation_cursor,
+                    &refs,
+                ) {
+                    Some(index @ 0..=1) => {
+                        state.attention.tabs.selected = index;
+                        state.attention.rows.clear();
+                        let selected =
+                            if index == 1 {
+                                state
+                                    .contents
+                                    .iter()
+                                    .find(|item| {
+                                        state.selected_project.as_ref().is_none_or(|project| {
+                                            *project == item.source.project_key()
+                                        })
+                                    })
+                                    .map(|item| Selection::Content(item.key.clone()))
+                            } else {
+                                state
+                                    .questions
+                                    .iter()
+                                    .find(|item| {
+                                        state.selected_project.as_ref().is_none_or(|project| {
+                                            *project == item.source.project_key()
+                                        })
+                                    })
+                                    .map(|item| Selection::Question(item.key.clone()))
+                            };
+                        if let Some(selected) = selected {
+                            select(state, selected, false, actions);
+                        }
+                        state.attention.navigation_open = Some(false);
+                    }
+                    Some(2) => state.attention.navigation_open = Some(true),
+                    Some(3) => state.graph_global = true,
+                    _ => {}
+                }
+            });
+            draw_canvas(ctx, state, width, height.saturating_sub(strip), actions);
+        });
+        if let Some(graph) = state.attention.navigation_open {
+            ctx.modal(|ctx| {
+                let panel_width = ctx.width().saturating_sub(2).max(1);
+                let panel_height = ctx.height().saturating_sub(3).max(6);
+                if graph {
+                    draw_graph(ctx, state, panel_width, panel_height, true, actions);
+                } else {
+                    draw_library(ctx, state, panel_width, panel_height, actions);
+                }
+                if secondary_button(ctx, "Close").clicked || ctx.consume_key_code(KeyCode::Esc) {
+                    state.attention.navigation_open = None;
+                    ctx.focus_by_name("attention-navigation");
+                    ctx.request_frame();
+                }
+            });
+        }
+    } else if width >= 64 {
         let navigation_width = (width / 3).clamp(30, 48);
         ctx.container().w(width).h(height).gap(1).row(|ctx| {
             ctx.container().w(navigation_width).h(height).col(|ctx| {
-                // Terminal cells are roughly twice as tall as they are wide.
-                // Give the graph a readable square while retaining a list window.
-                let graph_height = (navigation_width / 2 + 2)
-                    .min(height.saturating_sub(7))
-                    .max(5.min(height / 2));
+                // Keep a complete selected node and return control, without
+                // reserving a square canvas for a sparse navigation preview.
+                let graph_height = (height / 3).clamp(6, 10).min(height.saturating_sub(5));
                 draw_library(
                     ctx,
                     state,
@@ -523,6 +633,13 @@ fn draw_canvas(
                         if !has_authored_title(&content) {
                             ctx.text(&content.title).bold().w(inner_width).wrap();
                         }
+                        if state
+                            .selected_project
+                            .as_ref()
+                            .is_some_and(|project| *project != content.source.project_key())
+                        {
+                            ctx.text("Retained").dim();
+                        }
                         source_tags(ctx, &content.source, inner_width);
                         ctx.row(|ctx| {
                             ctx.spacer();
@@ -614,11 +731,10 @@ fn draw_question(
     });
     let answer_blocked =
         !unchanged || matches!(delivery, Some("submitting" | "uncertain" | "acknowledged"));
-    let compact = height < 6;
+    let compact = height < 6 || width < 40;
     if !compact || question.summary.is_empty() {
         ctx.text(&question.title).bold().w(width).truncate();
     }
-    source_tags(ctx, &question.source, width);
     if !compact && let Some(delivery) = delivery {
         ctx.row(|ctx| delivery_feedback(ctx, delivery, &state.spinner, actions));
     }
@@ -645,7 +761,7 @@ fn draw_question(
         .max(1);
     content_keys(ctx, &mut state.attention.content_scroll, content_rows);
     ctx.scrollable(&mut state.attention.content_scroll)
-        .h(content_rows)
+        .max_h(content_rows)
         .w(width)
         .col(|ctx| {
             if !question.summary.is_empty() && (compact || question.summary != question.title) {
@@ -670,6 +786,14 @@ fn draw_question(
                 );
             }
         });
+    if state
+        .selected_project
+        .as_ref()
+        .is_some_and(|project| *project != question.source.project_key())
+    {
+        ctx.text("Retained").dim();
+    }
+    source_tags(ctx, &question.source, width);
     ctx.container().gap(1).row(|ctx| {
         if compact && let Some(delivery) = delivery {
             delivery_feedback(ctx, delivery, &state.spinner, actions);
@@ -761,146 +885,159 @@ fn draw_graph(
         project_label.unwrap_or("Projects")
     };
     let show_return = !state.graph_global;
-    ctx.group("t3oxide.projects")
+    let region = ctx
+        .group("t3oxide.projects")
         .w(width)
         .h(height)
-        .border(Border::Rounded)
-        .focus_within_border_fg(accent)
-        .title(elide(title, width.saturating_sub(4) as usize))
-        .col(|ctx| {
-            if show_return {
-                ctx.container().h(1).row(|ctx| {
-                    if secondary_button(ctx, "All projects").clicked {
-                        state.graph_global = true;
-                    }
-                });
-            }
-            let mut nodes = Vec::new();
-            let mut edges = Vec::new();
-            for (key, source) in &sources {
-                if !state.graph_global && state.selected_project.as_ref() != Some(key) {
-                    continue;
+        .focus_within_border_fg(accent);
+    let region = if compact {
+        region
+            .border(Border::Rounded)
+            .title(elide(title, width.saturating_sub(4) as usize))
+    } else {
+        region
+    };
+    region.col(|ctx| {
+        if !compact && !show_return {
+            ctx.text(title).fg(accent);
+        }
+        if show_return {
+            ctx.container().h(1).row(|ctx| {
+                if secondary_button(ctx, "All projects").clicked {
+                    state.graph_global = true;
                 }
-                let id = project_node(source);
-                nodes.push(project_graph::Node {
-                    id: id.clone(),
-                    label: source.project.clone(),
-                    color: identity_color(key),
-                });
-                if !state.graph_global {
-                    for question in state
-                        .questions
-                        .iter()
-                        .filter(|question| question.source.project_key() == *key)
-                    {
-                        let question_id = question_node(question);
-                        nodes.push(project_graph::Node {
-                            id: question_id.clone(),
-                            label: question.title.clone(),
-                            color: tailwind::PURPLE.c300,
-                        });
-                        edges.push(project_graph::Edge {
-                            from: id.clone(),
-                            to: question_id,
-                        });
-                    }
-                    for content in state.contents.iter().filter(|content| {
-                        content.source.project_key() == *key
-                            && Some(&content.key) != duplicate_content.as_ref()
-                    }) {
-                        let content_id = content_node(content);
-                        nodes.push(project_graph::Node {
-                            id: content_id.clone(),
-                            label: content.title.clone(),
-                            color: identity_color(key),
-                        });
-                        edges.push(project_graph::Edge {
-                            from: id.clone(),
-                            to: content_id,
-                        });
-                    }
+            });
+        }
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for (key, source) in &sources {
+            if !state.graph_global && state.selected_project.as_ref() != Some(key) {
+                continue;
+            }
+            let id = project_node(source);
+            nodes.push(project_graph::Node {
+                id: id.clone(),
+                label: source.project.clone(),
+                color: identity_color(key),
+            });
+            if !state.graph_global {
+                for question in state
+                    .questions
+                    .iter()
+                    .filter(|question| question.source.project_key() == *key)
+                {
+                    let question_id = question_node(question);
+                    nodes.push(project_graph::Node {
+                        id: question_id.clone(),
+                        label: question.title.clone(),
+                        color: tailwind::PURPLE.c300,
+                    });
+                    edges.push(project_graph::Edge {
+                        from: id.clone(),
+                        to: question_id,
+                    });
+                }
+                for content in state.contents.iter().filter(|content| {
+                    content.source.project_key() == *key
+                        && Some(&content.key) != duplicate_content.as_ref()
+                }) {
+                    let content_id = content_node(content);
+                    nodes.push(project_graph::Node {
+                        id: content_id.clone(),
+                        label: content.title.clone(),
+                        color: identity_color(key),
+                    });
+                    edges.push(project_graph::Edge {
+                        from: id.clone(),
+                        to: content_id,
+                    });
                 }
             }
-            let selected = if state.graph_global {
-                state
-                    .selected_project
-                    .as_ref()
-                    .and_then(|key| sources.get(key))
-                    .map(project_node)
+        }
+        let selected = if state.graph_global {
+            state
+                .selected_project
+                .as_ref()
+                .and_then(|key| sources.get(key))
+                .map(project_node)
+        } else {
+            match state.attention.selected.as_ref() {
+                Some(Selection::Question(key)) => state
+                    .questions
+                    .iter()
+                    .find(|question| &question.key == key)
+                    .map(question_node),
+                Some(Selection::Content(key)) => state
+                    .contents
+                    .iter()
+                    .find(|content| &content.key == key)
+                    .map(content_node),
+                None => None,
+            }
+        };
+        match state.attention.graph.draw(
+            ctx,
+            &nodes,
+            &edges,
+            selected.as_ref(),
+            width.saturating_sub(if compact { 2 } else { 0 }),
+            height.saturating_sub(if compact {
+                2 + u32::from(show_return)
             } else {
-                match state.attention.selected.as_ref() {
-                    Some(Selection::Question(key)) => state
-                        .questions
-                        .iter()
-                        .find(|question| &question.key == key)
-                        .map(question_node),
-                    Some(Selection::Content(key)) => state
-                        .contents
-                        .iter()
-                        .find(|content| &content.key == key)
-                        .map(content_node),
-                    None => None,
-                }
-            };
-            match state.attention.graph.draw(
-                ctx,
-                &nodes,
-                &edges,
-                selected.as_ref(),
-                width.saturating_sub(2),
-                height.saturating_sub(2 + u32::from(show_return)),
-            ) {
-                Ok(response) => {
-                    if let Some(activated) = response.activated {
-                        match activated {
-                            project_graph::NodeId::Project {
-                                environment_id,
-                                project_id,
-                            } => {
-                                select_project(
-                                    state,
-                                    format!("{environment_id}\0{project_id}"),
-                                    actions,
-                                );
-                            }
-                            id @ project_graph::NodeId::Question { .. } => {
-                                if let Some(question) = state
-                                    .questions
-                                    .iter()
-                                    .find(|question| question_node(question) == id)
-                                {
-                                    let key = question.key.clone();
-                                    select(state, Selection::Question(key), true, actions);
-                                }
-                            }
-                            id @ project_graph::NodeId::Content { .. } => {
-                                if let Some(content) = state
-                                    .contents
-                                    .iter()
-                                    .find(|content| content_node(content) == id)
-                                {
-                                    let key = content.key.clone();
-                                    select(state, Selection::Content(key), false, actions);
-                                }
+                1
+            }),
+        ) {
+            Ok(response) => {
+                if let Some(activated) = response.activated {
+                    match activated {
+                        project_graph::NodeId::Project {
+                            environment_id,
+                            project_id,
+                        } => {
+                            select_project(
+                                state,
+                                format!("{environment_id}\0{project_id}"),
+                                actions,
+                            );
+                        }
+                        id @ project_graph::NodeId::Question { .. } => {
+                            if let Some(question) = state
+                                .questions
+                                .iter()
+                                .find(|question| question_node(question) == id)
+                            {
+                                let key = question.key.clone();
+                                select(state, Selection::Question(key), true, actions);
                             }
                         }
-                        ctx.request_frame();
+                        id @ project_graph::NodeId::Content { .. } => {
+                            if let Some(content) = state
+                                .contents
+                                .iter()
+                                .find(|content| content_node(content) == id)
+                            {
+                                let key = content.key.clone();
+                                select(state, Selection::Content(key), false, actions);
+                            }
+                        }
                     }
-                }
-                Err(error) => {
-                    ctx.text(error.to_string())
-                        .fg(tailwind::AMBER.c300)
-                        .w(width.saturating_sub(2))
-                        .wrap();
+                    ctx.request_frame();
                 }
             }
-            if ctx.focused_name() == Some("project-navigation")
-                && ctx.consume_key_code(KeyCode::Backspace)
-            {
-                state.graph_global = true;
-                ctx.request_frame();
+            Err(error) => {
+                ctx.text(error.to_string())
+                    .fg(tailwind::AMBER.c300)
+                    .w(width.saturating_sub(2))
+                    .wrap();
             }
-        });
+        }
+        if ctx.focused_name() == Some("project-navigation")
+            && ctx.consume_key_code(KeyCode::Backspace)
+        {
+            state.graph_global = true;
+            ctx.request_frame();
+        }
+    });
 }
 
 fn content_keys(ctx: &mut Context, scroll: &mut ScrollState, page: u32) {
@@ -1075,6 +1212,95 @@ mod tests {
                 super::super::draw(ctx, &ui::View::default(), editor, &mut modal, None, state);
         });
         actions
+    }
+
+    #[test]
+    fn r8_small_context_keeps_navigation_and_retained_source_addressable() {
+        let mut state = SurfaceState::new();
+        state.attention_mode = true;
+        state.show_context = true;
+        state.questions = vec![delivery_question()];
+        state.contents = vec![content(
+            "Alpha",
+            "guide",
+            "guide",
+            "Release guide",
+            "Original evidence",
+        )];
+        let mut editor = ui::editor("Exact 日本語  \n", "violet", "");
+        let mut backend =
+            super::super::tests::ResizableBackend::new(40, 12).with_activation_boundaries();
+        for _ in 0..4 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        backend.assert_contains("Forms 1");
+        backend.assert_contains("Library 1");
+        backend.assert_contains("Projects");
+        backend.assert_contains("Context");
+        let (x, y) = backend.find_text("Projects").unwrap();
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().click(x, y).build(),
+        );
+        for _ in 0..4 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        backend.assert_contains("│ Alpha │");
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().key_code(KeyCode::Esc).build(),
+        );
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        let (x, y) = backend.find_text("Context ▾").unwrap();
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().click(x, y).build(),
+        );
+        for _ in 0..4 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        backend.assert_contains("Copy ID");
+        backend.assert_contains("Alpha");
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().key_code(KeyCode::Esc).build(),
+        );
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        assert_eq!(editor.lines().join("\n"), "Exact 日本語  \n");
+    }
+
+    #[test]
+    fn r8_short_form_action_follows_content_and_retained_source() {
+        let mut state = SurfaceState::new();
+        state.questions = vec![delivery_question()];
+        let mut backend = TestBackend::new(140, 38);
+        for _ in 0..3 {
+            render(&mut backend, &mut state);
+        }
+        let (_, body) = backend.find_text("Choose a release").unwrap();
+        let (_, action) = backend.find_text("Answer").unwrap();
+        assert!(
+            action > body && action - body <= 2,
+            "short action at {action}, body at {body}"
+        );
+        state.selected_project = Some(source("Empty").project_key());
+        for _ in 0..3 {
+            render(&mut backend, &mut state);
+        }
+        backend.assert_contains("Retained");
+        assert_eq!(selected_source(&state).unwrap().project, "Alpha");
     }
 
     #[test]
@@ -1794,8 +2020,9 @@ mod tests {
                 surface_frame(&mut backend, &mut state, &mut editor, vec![]);
             }
         }
-        backend.assert_contains("Forms 1 ›");
-        let (x, y) = backend.find_text("Forms 1 ›").unwrap();
+        backend.assert_contains("Forms 1");
+        backend.assert_contains("Library 1");
+        let (x, y) = backend.find_text("Library 1").unwrap();
         let actions = surface_frame(
             &mut backend,
             &mut state,
@@ -1806,29 +2033,62 @@ mod tests {
         for _ in 0..3 {
             surface_frame(&mut backend, &mut state, &mut editor, vec![]);
         }
-        backend.assert_contains("Library 1 ›");
         assert_eq!(selected_content(&state), Some(&report));
         let label = &state.attention.list.items()[0];
-        assert!(label.ends_with('…'), "{label}");
-        assert!(label.width() <= 15, "{label}");
+        assert!(label.width() <= 34 && label.contains("release"), "{label}");
         assert!(!label.contains("Research · Research"));
-        for (key, label) in [
-            (KeyCode::Right, "Forms 1 ›"),
-            (KeyCode::Left, "Library 1 ›"),
-        ] {
-            let actions = surface_frame(
-                &mut backend,
-                &mut state,
-                &mut editor,
-                EventBuilder::new().key_code(key).build(),
-            );
-            assert!(actions.is_empty());
-            for _ in 0..3 {
-                surface_frame(&mut backend, &mut state, &mut editor, vec![]);
-            }
-            backend.assert_contains(label);
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().key_code(KeyCode::Esc).build(),
+        );
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        // The compact strip is one composite: arrows move its cursor, Enter opens its actual list.
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new()
+                .key_code(KeyCode::Left)
+                .key_code(KeyCode::Enter)
+                .build(),
+        );
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        backend.assert_contains("Forms 1");
+        backend.assert_contains("Release scope");
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().key_code(KeyCode::Esc).build(),
+        );
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new()
+                .key_code(KeyCode::Right)
+                .key_code(KeyCode::Enter)
+                .build(),
+        );
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
         }
         assert_eq!(selected_content(&state), Some(&report));
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().key_code(KeyCode::Esc).build(),
+        );
         for (width, height) in [(70, 22), (86, 31), (140, 38)] {
             surface_frame(
                 &mut backend,
@@ -1988,7 +2248,12 @@ mod tests {
             graph = ctx.measured_layout_rect("t3oxide.projects");
         });
         let graph = graph.expect("persistent graph has native layout geometry");
-        assert!(graph.width >= 40 && graph.height >= 20, "{graph:?}");
+        assert!(
+            graph.width >= 40 && (6..=10).contains(&graph.height),
+            "{graph:?}"
+        );
+        backend.assert_contains("│ Alpha │");
+        backend.assert_contains("│ Beta │");
         state.selected_project = None;
         render(&mut backend, &mut state);
         backend.assert_contains("Forms 2");
