@@ -1,4 +1,193 @@
-# Revised Rust/SLT integration — 2026-11-05
+# Rust / SLT verification
+
+## Active correction pass — 2026-11-05
+
+The compact Model integration source passed **254 Rust tests**, workspace/vendor
+formatting, both Clippy checks and `git diff --check`. Rust/Cargo **1.92.0**
+compiled all targets with all features; that check did not execute tests. The
+production SLT-to-App fixture at 140×38, 70×22 and 40×12 exercises the painted
+Model pointer target, a native display-name/action-label collision, native model
+and option staging, batched Space/Enter, child Tab/BackTab/Escape, outside-click
+dismissal and local favorite saving. Explicit Apply produces one exact pending
+operation, matching acknowledgement and native fixture effect, preserving the
+Unicode draft and caret. The pointer repair uses the SLT row container's returned
+response so its hit rectangle belongs to the painted field. These are source
+and synthetic fixture results; this candidate has no new release, PTY, installed
+host, physical or visual acceptance evidence.
+
+The correction pass is still in progress. The second frozen release (R2) is
+`t3oxide 0.11.0 · Rust / SLT`, SHA-256
+`99bbe9f5738c3927cb62e5c677422f13b08eb2b66347139e1086e7215e565e57`,
+9,187,104 bytes on macOS ARM64. Its 317-file source manifest has SHA-256
+`b0fd9ff72cdbc865e7c1837a8db47f5d16243957d2f3b1699490231444b1701a`.
+These results qualify that frozen source, rather than later working-tree changes.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Source checks | 199 Rust tests, workspace/vendor formatting and both Clippy checks passed. Official Rust/Cargo 1.92.0 compiled all targets with all features; this was a compile check, without test execution. |
+| Shared checks | Unchanged dependency hashes retained the passing 259 Node and 5 Python results. Six affected installer tests were rerun after the NOTICE change; revised Python inputs passed syntax checks. |
+| Production-entry PTY | One uninterrupted run passed all 26 checks in 43.572 seconds on the exact release. Source bytes, modes and file set, runtime inputs and protected payloads matched before and after. These are synthetic endpoint results. |
+| Physical Rex | Controlled-fixture draft paint/resize, independent tab drafts, whole-draft clipboard bytes, modal guards and explicit answer submission have passing evidence. Direct Settled→Unread pointer activation failed; Run→Unread restored the list. That defect is retained for a later-source correction. |
+| Native answer | A fresh two-question submission received its original source/request/revision ACK, with both exact answers returned and no pending operation. Physical review navigation retained the answers. Final handback verified clipboard items, types and bytes and preserved prior session labels, windows and layouts, with an independently reconnected client's owner-metadata change recorded separately. |
+| Visual review and adoption | Three fresh blind reviewers and a separate judge ranked R2 first against the preserved baseline and fixed references. The visual acceptance bar was not met; source/detail cues, graph framing, contrast and selection remain correction work. No correction-pass M4 switch has occurred. |
+
+The corrected debug executable
+`e11202eddf066bd97fa19cfed3274a7f19925d1b97cac93d27e711e5c0ca5b8e`
+previously established all 26 outcomes across nine completed and 17 remaining
+checks. Its combined attempts remain failed; the later release run above is the
+single complete pass. Setup/selector diagnostics and physical failures remain
+retained evidence.
+
+The next source revision separately introduces the accepted bounded context-I/O
+worker, navigator activation correction, further presentation corrections and
+physically proved Copy draft shortcut metadata. Focused source checks passed:
+13 worker regressions, 43 UI tests, three project-graph tests and lib/tests Clippy.
+An earlier checkpoint passed seven Store-preservation and 53 lifecycle tests.
+Fresh consequential review found native question retirement closing a pending
+Context view without invalidating its read token. The new regression failed
+before the correction, then passed for replacement and cancellation while
+retaining the original answer draft, composer and protected operations. Source
+lookup also rejects a changed original digest or reference; its expanded
+regression failed before the check and passes afterward.
+
+The worker owns context reads and writes separately from draft storage and drains
+accepted outcomes before joining. It adds one in-process thread; a Store scan's
+duration remains unbounded. These source results do not establish latency or
+resource savings.
+
+The next frozen debug executable has SHA-256
+`faad35bbb9bf9e6958dd365d31b9bd87b7de5b25450c77dc15fddeac09456610`.
+Its 318-file source snapshot passed 221 Rust tests, workspace/vendor formatting,
+both Clippy checks and an official Rust/Cargo 1.92.0 all-target/all-feature compile
+check. That minimum-version check did not execute tests. Unchanged shared inputs
+retain the passing 259 Node, five Python and six installer results.
+
+All 28 debug PTY outcomes completed across scoped runs. Three earlier attempts
+remain failed: exact selectors stopped on the annotated Copy draft row, an
+incorrect Unread-lane expectation and a Context-title/composer substring
+collision. Narrow harness corrections preserved the product, generic matching
+and state assertions. The final context-only continuation passed in 9.868 seconds:
+child-local exact-file fault injection proved the read was blocked while real
+Esc, an independent exact Unicode draft save/restore and an internal-tab source
+change remained usable. After release, only the newly requested source painted.
+Durable/native/journal, caret, original pending identity and no-replay checks
+passed. Navigator pointer checks separately passed two cycles in both populated
+and empty Settled fixtures.
+
+These are scoped debug results, not one uninterrupted 28-check pass. The debug
+artifact's original source and runtime snapshots remain frozen; its runtime
+harness selector migrations are recorded separately.
+
+Subsequent UI source review found two pointer-navigation regressions: a
+conditional scope control could inherit the question list's previous hit target,
+and compact project navigation removed its clickable global return. Focused
+regressions reproduced both before correction. Scope controls now retain stable
+interaction slots, and global return remains clickable in compact layouts.
+The corrected tests cover queued Down/click input at both responsive placements
+and populated/empty project returns at 46×22 and 40×12 while retaining source,
+form/report and unsent draft. The corrected source passed 223 Rust tests,
+workspace/vendor formatting, both Clippy checks and the official Rust/Cargo
+1.92.0 all-target/all-feature compile check.
+
+These corrected inputs were subsequently frozen in R3 below. The earlier debug
+and R2 results do not certify later UI changes; no M4 switch has occurred.
+
+Fresh consequential review found stale form ownership after closing the last tab
+and inaccessible keyboard scrolling in Recovery detail with choices. Both failed
+their new regressions before the small corrections and passed afterward. The
+copy test also established that its first command can initialize the current
+reading bookmark; its baseline now establishes that bookmark through a separate
+normal action, retaining full durable/native state equality around each copy.
+
+### Third frozen candidate (R3)
+
+The distinct R3 release is `t3oxide 0.11.0 · Rust / SLT`, SHA-256
+`6674f76ed994592377f056e6c0cbdf70235ba7d1069a318b256ff6bd61e8b199`,
+9,237,072 bytes on macOS ARM64. Its 318-file source manifest has SHA-256
+`33aee3faee9b3e16a480814730229b411c473057a02c9473a66876a0ae88881b`.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Production-entry PTY | One uninterrupted run passed all 28 checks in 59.500 seconds, including the mandatory exact-file context gate and Navigator pointer cycles in both fixtures. All 23 product children exited normally. Source, protected payloads, runtime and gate inputs matched before/after; all eight stable context snapshots retained full durable/native/journal equality. This is synthetic endpoint evidence. |
+| Physical Rex | Controlled-fixture resize, exact clipboard/draft preservation, populated/empty Navigator cycles, search, commands, three distinct sends and an explicitly reviewed answer completed. The four operations received exact controlled-fixture ACKs; genuine-native ACK qualification on the final artifact remains pending. |
+| Retained failures | Selecting an empty project replaced a selected report with an older retained Form. Compact global navigation retained a misleading project title. Earlier physical pointers did nothing until an unmodified Esc; the delivery/focus cause remains unresolved. A separate PTY diagnostic stopped on its startup precondition before pointer input. |
+| Preservation and visual review | Clipboard items/types/bytes, drafts, prior session layouts and the named R2 window were restored. An initial unnamed transient panel was absent at handback and remains a recorded caveat. Three blind reviewers and the separate judge ranked R3 first; candidate scores span 7–8.5, below the acceptance bar. The judge froze its independent assessment before reading the council. No M4 switch occurred. |
+
+The subsequent source revision preserves the selected detail when an empty
+destination has no selection, without changing the report's original source.
+It also labels the global graph at compact heights while retaining independent
+Browse scope. Both regressions failed against the R3 code before correction and
+passed afterward. The report regression uses actual Library and graph pointers,
+an older retained question, exact report/source/revision, empty Browse counts,
+global return and an unchanged Unicode draft. The compact regression checks the
+global title at 46×22 and 40×12.
+
+This later source passed 224 Rust tests, workspace/vendor formatting, both Clippy
+checks and the official Rust/Cargo 1.92.0 all-target/all-feature compile check.
+The minimum-version check did not execute tests. R3's frozen binary and evidence
+remain unchanged; the two later corrections require a new artifact and affected
+physical/visual acceptance.
+
+The next UI revision improves selected conversation titles and shared source
+labels, distinguishes a browse cursor from attached content, fits complete
+compact tab/count controls, bounds the search query and separates question
+progress from choice position. Library shortening affects display labels only;
+the original content/source/revision remains available. Sparse graph spacing
+uses the accepted layout library's public configuration while retaining the
+existing viewport and shared paint/hit geometry.
+
+Fresh source review found one P2 in that revision: a wheel event could hide a
+source line and shift its interaction slot to another conversation before a
+queued click. A regression under production SLT activation boundaries, with
+controller Highlight acceptance, clicked A2's displayed source line and opened
+A3 before correction. The source line now retains its interaction slot at zero
+height when hidden; the same sequence opens only A2 afterward. This reproduced
+defect is separate from R3's unresolved physical pointer no-ops.
+
+After that correction, all eight navigator regressions and the integrated
+230 Rust tests passed, with workspace/vendor formatting, both Clippy checks
+and the official Rust/Cargo 1.92.0 all-target/all-feature compile check. The
+minimum-version check did not execute tests. Retained-state resize coverage
+includes 140×38, 100×31, 86×31, 70×22, 40×12 and wide restoration. This later
+source still requires its own immutable artifact, production-entry PTY and
+physical/native/visual acceptance.
+
+### First frozen candidate (R1)
+
+The first frozen candidate is
+`t3oxide 0.11.0 · Rust / SLT`, SHA-256
+`6b3ec23b109602ad376717210bf3bbe511c7267ec96ccdd82d8ab77fcd44ab10`,
+9,203,856 bytes on macOS ARM64. Its source manifest covers 317 files and has
+SHA-256 `befbe98e0b009d1f68ba719bf35bd23b495d97ebdb7486abf75e51ff077f2b40`.
+Later source changes are outside that artifact's results.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Frozen-candidate source checks | 185 Rust tests, workspace/vendor formatting and both Clippy checks passed with Rust/Cargo 1.99.1. Unchanged shared inputs retained the passing 259 Node and 5 Python results. |
+| Production-entry PTY | All 24 checks passed on the exact frozen candidate. Binary, source, adapter, fixture, harness and packaged-file hashes matched before and after. This is synthetic endpoint evidence. |
+| Declared minimum Rust | Rust/Cargo 1.92.0 compiled production and test targets with all features on a later, unchanged 317-file snapshot. Subsequent UI/vendor changes still need reconciliation. This was a compile check, without test execution. |
+| Physical Rex with controlled fixtures | Resize retained the exact multiline Unicode draft and independent internal-tab drafts. Form validation, explicit review and acknowledged submission were observed. The editor also reproduced a hidden draft prefix above blank rows, and the review clipped its second answer. These remain failures for this artifact. |
+| Physical Rex with native T3 | A disposable two-field answer received its original source ACK. Ctrl+Enter, portable Send and pointer Send each produced one distinct native dispatch/reply. Plain Enter inserted one newline; slash completion opened Help without dispatch. No pending operation remained in the disposable source. |
+| Clipboard | Native source copy and normal Ctrl+A/C copied exact bytes. Cmd+A/C copied the draft only in the preexisting manual Rex editing mode; normal Cmd+A/C copied the terminal. The new whole-draft action needs physical verification on the next artifact. |
+| Visual review | Three independent reviewers and a separate judge ranked the candidate first against the preserved baseline and fixed established-TUI references. The acceptance bar was not met; layout, spacing, controls and navigation corrections continue. |
+| Installed adoption | No correction-pass M4 switch has occurred. The previous deployment described below remains historical evidence. |
+
+Failed-first source regressions now cover the editor viewport, unresolved
+inherited-content graph identity and keyboard access to complete answer reviews.
+The production PTY suite gained an editor-paint check that correctly fails
+the first frozen candidate and a whole-draft copy check. R2 passed both in its
+complete release run and the controlled physical retest. That later evidence
+does not change the first candidate's failed results.
+
+Current limits remain explicit: metadata refresh covers a bounded loaded window;
+definitive removal requires a complete first-page scope. Native dependency edges
+and coverage are unavailable, so live synthesis remains unknown. Native answer
+preflight has no server-side revision CAS. Local context can retain already-loaded
+completed evidence automatically and retrieve its retained full source; this does
+not scan unloaded transcripts or establish a complete inventory. No latency or
+resource-saving claim follows from these checks.
+
+## Prior SLT deployment — historical evidence
 
 Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`
 and relevant later preserved UX behavior into the isolated SLT client. The

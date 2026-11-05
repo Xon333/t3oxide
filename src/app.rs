@@ -1,7 +1,9 @@
 //! One event-driven client workspace. Background reads never acquire mutation
 //! authority; every write is journaled before it reaches the adapter.
 mod actions;
+mod content;
 mod context;
+mod context_worker;
 #[cfg(test)]
 mod input;
 #[cfg(test)]
@@ -36,6 +38,8 @@ use std::{
 };
 
 pub(super) type Job = Box<dyn FnOnce() + Send + 'static>;
+// Refresh unopened sources without a subscription per conversation or a second loop.
+const METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 pub(super) struct Pool {
     tx: Sender<Job>,
 }
@@ -95,6 +99,7 @@ pub(super) enum Background {
         version: u64,
         result: Result<(), String>,
     },
+    Context(context_worker::Event),
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MutationContext {
@@ -107,6 +112,7 @@ pub(super) enum ReadKind {
     Projects { profile: usize, purpose: NewPurpose },
     Defaults { profile: usize, project: Value },
     Models(ModelScope),
+    Effort(ModelScope),
     Review,
     Activity,
     Inspect,
@@ -237,6 +243,7 @@ pub(super) struct Launch {
 }
 #[derive(Clone, Debug)]
 pub(super) struct ModelEdit {
+    environment_id: String,
     scope: ModelScope,
     catalog: Value,
     original: Value,
@@ -247,6 +254,29 @@ pub(super) struct RequestEdit {
     request: Value,
     index: usize,
     answers: serde_json::Map<String, Value>,
+}
+#[derive(Clone, Debug)]
+pub(super) struct AnswerDelivery {
+    source: crate::attention::Source,
+    operation: String,
+    phase: AnswerPhase,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) enum AnswerPhase {
+    Submitting,
+    Uncertain,
+    Acknowledged,
+    Rejected,
+}
+impl AnswerPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Submitting => "submitting",
+            Self::Uncertain => "uncertain",
+            Self::Acknowledged => "acknowledged",
+            Self::Rejected => "rejected",
+        }
+    }
 }
 pub(super) struct Navigation {
     token: u64,
@@ -278,6 +308,8 @@ pub(super) struct Host {
     request: Option<(bool, bool, String, bool)>,
     windowed: bool,
     refresh_loaded: bool,
+    refresh_cursor: u64,
+    request_cursor: u64,
     projects: Vec<Value>,
     projects_more: bool,
 }
@@ -300,6 +332,7 @@ pub struct App {
     pub(super) layout: LayoutMode,
     pub(super) theme: String,
     pub(super) filter: String,
+    pub(super) search_query: String,
     pub(super) filtering: bool,
     pub(super) server_search: bool,
     pub(super) lane: String,
@@ -315,6 +348,7 @@ pub struct App {
     pub(super) launch: Option<Launch>,
     pub(super) model_edit: Option<ModelEdit>,
     pub(super) request_edit: Option<RequestEdit>,
+    pub(super) answer_deliveries: VecDeque<AnswerDelivery>,
     pub(super) creation_profile: Option<usize>,
     pub(super) delivery: String,
     pub(super) notice: String,
@@ -334,10 +368,20 @@ pub struct App {
     pub(super) draft_version: u64,
     pub(super) save_at: Option<Instant>,
     pub(super) form_save_at: Option<Instant>,
+    pub(super) metadata_refresh_at: Instant,
     pub(super) draft_error: String,
     pub(super) in_flight: Arc<Mutex<HashSet<(String, bool)>>>,
     pub(super) recents: VecDeque<(usize, String)>,
     pub(super) tabs: Vec<(usize, String)>,
+    pub(super) tab_titles: HashMap<(usize, String), String>,
+    pub(super) loaded_contents: VecDeque<crate::slt_ui::ContentItem>,
+    pub(super) context_capture_pending: HashMap<String, crate::context_store::RecordInput>,
+    pub(super) context_capture_known: HashSet<String>,
+    pub(super) context_capture_inflight: bool,
+    pub(super) context_capture_status: String,
+    pub(super) context_io: context::ContextIo,
+    #[cfg(test)]
+    pub(super) context_test_barrier: Option<context::IoBarrier>,
     pub(super) return_positions: HashMap<String, (usize, bool, TextArea<'static>)>,
     pub(super) read_connection: Option<Connection>,
     pub(super) read_cancel: Option<(Connection, String)>,
@@ -376,7 +420,7 @@ impl App {
         let workspace = workspace::WorkspaceState::new(&snapshot, &environments);
         let host_workers = environments.len().clamp(1, 8);
         Ok(Self {
-            mouse: !args.no_mouse,
+            mouse: !args.no_mouse && preferences["mouse"].as_bool().unwrap_or(true),
             args,
             environments,
             state,
@@ -390,9 +434,14 @@ impl App {
             navigation_serial: 0,
             mode,
             focus: Focus::Navigator,
-            layout: LayoutMode::Split,
+            layout: match preferences["layout"].as_str() {
+                Some("focus") => LayoutMode::Focus,
+                Some("wide") => LayoutMode::Wide,
+                _ => LayoutMode::Split,
+            },
             theme: theme.clone(),
             filter: String::new(),
+            search_query: String::new(),
             filtering: false,
             server_search: false,
             lane: "Open".into(),
@@ -408,6 +457,7 @@ impl App {
             launch: None,
             model_edit: None,
             request_edit: None,
+            answer_deliveries: VecDeque::new(),
             creation_profile,
             delivery: "auto".into(),
             notice: String::new(),
@@ -426,10 +476,20 @@ impl App {
             draft_version: 0,
             save_at: None,
             form_save_at: None,
+            metadata_refresh_at: Instant::now() + METADATA_REFRESH_INTERVAL,
             draft_error: String::new(),
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             recents: VecDeque::new(),
             tabs: Vec::new(),
+            tab_titles: HashMap::new(),
+            loaded_contents: VecDeque::new(),
+            context_capture_pending: HashMap::new(),
+            context_capture_known: HashSet::new(),
+            context_capture_inflight: false,
+            context_capture_status: String::new(),
+            context_io: context::ContextIo::default(),
+            #[cfg(test)]
+            context_test_barrier: None,
             return_positions: HashMap::new(),
             read_connection: None,
             read_cancel: None,
@@ -658,10 +718,14 @@ impl App {
                 v["sltUi"] = json!({});
             }
             v["sltUi"]["theme"] = json!(theme);
+            v["sltUi"]["mouse"] = json!(self.mouse);
+            v["sltUi"]["layout"] = json!(match self.layout {
+                LayoutMode::Split => "split", LayoutMode::Focus => "focus", LayoutMode::Wide => "wide",
+            });
             v["sltUi"]["tabPlacement"] = json!("internal");
             v["sltUi"]["tabs"] = json!(self.tabs.iter().map(|(profile, thread)| {
                 let env = &self.environments[*profile];
-                json!({"profileId":env.id,"environmentId":env.environment_id,"threadId":thread})
+                json!({"profileId":env.id,"environmentId":env.environment_id,"threadId":thread,"title":self.tab_titles.get(&(*profile,thread.clone()))})
             }).collect::<Vec<_>>());
             Ok(())
         })
@@ -700,6 +764,28 @@ impl App {
             .or(host.request.as_ref())
             .map(|(_, search, query, _)| (*search, query.clone()))
             .unwrap_or_else(|| (host.page.search, host.page.query.clone()))
+    }
+
+    fn refresh_metadata_if_due(&mut self, now: Instant) {
+        if now < self.metadata_refresh_at {
+            return;
+        }
+        self.metadata_refresh_at = now + METADATA_REFRESH_INTERVAL;
+        for profile in 0..self.environments.len() {
+            // Explicit pending reads own their original scope. A timer never
+            // replaces or queues behind them, even while browsing another host.
+            if self.hosts[profile].loading {
+                continue;
+            }
+            let (search, query) = self.metadata_query(profile);
+            let cursor = self.hosts[profile].refresh_cursor;
+            if let Err(error) =
+                self.refresh_profile_at(profile, false, search, query, true, Some(cursor))
+            {
+                self.hosts[profile].error = error.to_string();
+                self.dirty = true;
+            }
+        }
     }
 
     pub(super) fn refresh(&mut self, append: bool, search: bool) -> Result<()> {
@@ -744,6 +830,18 @@ impl App {
         query: String,
         refresh_loaded: bool,
     ) -> Result<()> {
+        self.refresh_profile_at(profile, append, search, query, refresh_loaded, None)
+    }
+
+    fn refresh_profile_at(
+        &mut self,
+        profile: usize,
+        append: bool,
+        search: bool,
+        query: String,
+        refresh_loaded: bool,
+        cursor_override: Option<u64>,
+    ) -> Result<()> {
         let refresh_loaded = refresh_loaded && self.lane != "Pins";
         let include_thread = self
             .active
@@ -769,12 +867,13 @@ impl App {
             };
             cursor
         } else {
-            0
+            cursor_override.filter(|_| refresh_loaded).unwrap_or(0)
         };
         host.generation += 1;
         let generation = host.generation;
         host.loading = true;
         host.refresh_loaded = refresh_loaded;
+        host.request_cursor = cursor;
         let env = self.environments[profile].clone();
         let tx = self.tx.clone();
         host.request = Some((append, search, query.clone(), refresh_loaded));
@@ -979,6 +1078,7 @@ impl App {
 
     fn handle(&mut self, event: Background) -> Result<()> {
         match event {
+            Background::Context(event) => self.handle_context_event(event)?,
             Background::Saved {
                 key,
                 version,
@@ -1000,6 +1100,18 @@ impl App {
                 append,
                 result,
             } => {
+                let protected: HashSet<_> = self
+                    .selected_thread()
+                    .filter(|row| row.profile == profile)
+                    .map(|row| row.id.clone())
+                    .into_iter()
+                    .chain(
+                        self.active
+                            .as_ref()
+                            .filter(|active| active.profile == profile)
+                            .map(|active| active.thread.clone()),
+                    )
+                    .collect();
                 let host = &mut self.hosts[profile];
                 if generation != host.generation {
                     return Ok(());
@@ -1101,7 +1213,22 @@ impl App {
                         let same_scope = host.page.search == page.search
                             && host.page.query == page.query
                             && host.page.navigation_pins_only == page.navigation_pins_only;
+                        host.refresh_cursor = if host.refresh_loaded && same_scope {
+                            page.next_cursor
+                                .filter(|cursor| *cursor < host.page.threads.len() as u64)
+                                .unwrap_or(0)
+                        } else {
+                            0
+                        };
                         if host.refresh_loaded && same_scope && !host.page.threads.is_empty() {
+                            if host.request_cursor == 0 && !page.more && page.next_cursor.is_none()
+                            {
+                                let present: HashSet<_> =
+                                    page.threads.iter().map(|row| row.id.as_str()).collect();
+                                host.page
+                                    .threads
+                                    .retain(|row| present.contains(row.id.as_str()));
+                            }
                             for fresh in page.threads {
                                 if let Some(current) =
                                     host.page.threads.iter_mut().find(|row| row.id == fresh.id)
@@ -1114,6 +1241,13 @@ impl App {
                             host.page.observed_at = page.observed_at;
                             host.page.inclusive_children = page.inclusive_children;
                             if host.page.threads.len() > 1600 {
+                                host.page.threads.sort_by(|left, right| {
+                                    protected
+                                        .contains(&right.id)
+                                        .cmp(&protected.contains(&left.id))
+                                        .then_with(|| right.activity_at().cmp(left.activity_at()))
+                                        .then_with(|| left.id.cmp(&right.id))
+                                });
                                 host.page.threads.truncate(1600);
                                 host.windowed = true;
                             }
@@ -1203,6 +1337,7 @@ impl App {
                 };
                 let before = lifecycle_key(&a.projection);
                 let profile = a.profile;
+                let mut retired_request_view = false;
                 match packet.event.as_str() {
                     "view" => {
                         a.projection.apply_snapshot(packet.data, &a.thread)?;
@@ -1245,6 +1380,7 @@ impl App {
                         {
                             self.request_edit = None;
                             self.dialog = None;
+                            retired_request_view = true;
                             self.notice =
                                 "That request changed; open Requests to review the current offer."
                                     .into();
@@ -1252,6 +1388,9 @@ impl App {
                     }
                 }
                 let after = lifecycle_key(&a.projection);
+                if retired_request_view {
+                    self.invalidate_context_view();
+                }
                 let pin_changed = before
                     .as_ref()
                     .zip(after.as_ref())
@@ -1266,6 +1405,7 @@ impl App {
                 {
                     self.refresh_profile(profile, false, false, String::new(), true)?;
                 }
+                self.observe_loaded_content()?;
                 self.observe_navigation();
                 self.observe_completion()?;
                 self.restore_reading_position_if_ready();
@@ -1305,6 +1445,18 @@ impl App {
             } => match result {
                 Ok(value) => self.mutation_done(context, &id, &op, &fields, value)?,
                 Err(error) => {
+                    if op == "answer" {
+                        let phase = if self
+                            .state
+                            .pending(&self.environments[context.profile].environment_id, false)
+                            .is_some_and(|record| record["id"] == id)
+                        {
+                            AnswerPhase::Uncertain
+                        } else {
+                            AnswerPhase::Rejected
+                        };
+                        self.remember_answer_delivery(context.profile, &id, &fields, phase);
+                    }
                     if let Some(receipt) = &mut self.receipt
                         && receipt["id"] == id
                     {
@@ -1386,6 +1538,7 @@ impl App {
         })
     }
     pub(super) fn cancel_modal_read(&mut self) {
+        self.invalidate_context_view();
         self.serial = self.serial.wrapping_add(1);
         if let Some((c, id)) = self.read_cancel.take() {
             c.cancel_read(&id);
@@ -1693,6 +1846,9 @@ impl App {
             self.in_flight.lock().unwrap().remove(&lane);
             return Err(error);
         }
+        if op == "answer" {
+            self.remember_answer_delivery(profile, &id, &fields, AnswerPhase::Submitting);
+        }
         let active = self.active.as_ref().filter(|a| a.profile == profile);
         let reusable = active
             .and_then(|a| a.connection.as_ref())
@@ -1881,6 +2037,13 @@ impl App {
             profile,
             draft_version,
         } = context;
+        if op == "answer" {
+            let mut identity = fields.clone();
+            identity["id"] = json!(id);
+            identity["environmentId"] = json!(self.environments[profile].environment_id);
+            validate_ack(op, &identity, &value)?;
+            self.remember_answer_delivery(profile, id, fields, AnswerPhase::Acknowledged);
+        }
         if op == "send"
             && self
                 .active
@@ -2079,7 +2242,114 @@ impl App {
     }
     fn modal(&self) -> Option<ui::Modal> {
         use std::hash::{Hash, Hasher};
+        fn option_value<'a>(selection: &'a Value, id: &str) -> Option<&'a Value> {
+            array(selection, "options")
+                .iter()
+                .find(|option| option["id"] == id)
+                .map(|option| &option["value"])
+        }
         self.dialog.as_ref().map(|d| {
+            let edit = self.model_edit.as_ref();
+            let selected_model = edit.and_then(|edit| {
+                array(&edit.catalog, "models")
+                    .iter()
+                    .find(|model| model["slug"] == edit.selection["model"])
+            });
+            let items: Vec<_> = d
+                .choices
+                .iter()
+                .map(|choice| {
+                    use ui::ModalItemRole as Role;
+                    let (role, applied) = match &choice.intent {
+                        Intent::Model(index) => edit
+                            .and_then(|edit| {
+                                array(&edit.catalog, "models").get(*index).map(|model| {
+                                    (
+                                        Role::Model {
+                                            native_id: string(model, "slug"),
+                                        },
+                                        model["slug"] == edit.original["model"],
+                                    )
+                                })
+                            })
+                            .unwrap_or_default(),
+                        Intent::Option(id) => edit
+                            .zip(selected_model)
+                            .and_then(|(edit, model)| {
+                                array(model, "options")
+                                    .iter()
+                                    .find(|option| option["id"] == *id)
+                                    .map(|option| {
+                                        let value = option_value(&edit.selection, id);
+                                        (
+                                            Role::ModelOption {
+                                                id: id.clone(),
+                                                label: string(option, "label"),
+                                                value: value
+                                                    .map(|value| {
+                                                        value
+                                                            .as_str()
+                                                            .map(str::to_owned)
+                                                            .unwrap_or_else(|| value.to_string())
+                                                    })
+                                                    .unwrap_or_else(|| "Native default".into()),
+                                            },
+                                            edit.selection["model"] == edit.original["model"]
+                                                && value == option_value(&edit.original, id),
+                                        )
+                                    })
+                            })
+                            .unwrap_or_default(),
+                        Intent::OptionValue(id, value) => (
+                            Role::ModelOptionValue { id: id.clone() },
+                            edit.is_some_and(|edit| {
+                                edit.selection["model"] == edit.original["model"]
+                                    && option_value(&edit.original, id)
+                                        .map_or(value.is_null(), |original| original == value)
+                            }),
+                        ),
+                        Intent::ModelApply => (Role::ModelApply, false),
+                        Intent::ModelSave => (Role::ModelSave, false),
+                        Intent::ClearOverride => (Role::ModelClear, false),
+                        _ => (Role::Choice, false),
+                    };
+                    ui::ModalItem {
+                        label: choice.label.clone(),
+                        description: choice.description.clone(),
+                        checked: choice.checked,
+                        action: matches!(
+                            choice.intent,
+                            Intent::QuestionNext | Intent::QuestionBack | Intent::QuestionSubmit
+                        ),
+                        role,
+                        applied,
+                    }
+                })
+                .collect();
+            let model = if edit.is_some() && matches!(d.kind, DialogKind::Menu) {
+                use ui::ModalItemRole as Role;
+                if items.iter().any(|item| item.role == Role::ModelApply)
+                    && items.iter().any(|item| item.role == Role::ModelSave)
+                    && items.iter().all(|item| {
+                        matches!(item.role, Role::Model { .. } | Role::ModelOption { .. }
+                            | Role::ModelApply | Role::ModelSave | Role::ModelClear)
+                    })
+                {
+                    Some(ui::ModelDialog::Configuration)
+                } else if let Some(ui::ModalItem {
+                    role: Role::ModelOptionValue { id }, ..
+                }) = items.first()
+                    && items.iter().all(|item| {
+                        matches!(&item.role, Role::ModelOptionValue { id: other } if other == id)
+                    })
+                {
+                    Some(ui::ModelDialog::OptionValues { id: id.clone() })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             let mut identity = std::collections::hash_map::DefaultHasher::new();
             self.generation.hash(&mut identity);
             if let Some(active) = &self.active {
@@ -2093,27 +2363,24 @@ impl App {
                 )
                     .hash(&mut identity);
             }
-            for choice in &d.choices {
+            model.hash(&mut identity);
+            for (choice, item) in d.choices.iter().zip(&items) {
                 format!("{:?}", choice.intent).hash(&mut identity);
+                item.role.hash(&mut identity);
+                item.checked.hash(&mut identity);
+                item.applied.hash(&mut identity);
             }
             ui::Modal {
                 title: d.title.clone(),
                 description: d.description.clone(),
-                items: d
-                    .choices
-                    .iter()
-                    .map(|c| ui::ModalItem {
-                        label: c.label.clone(),
-                        description: c.description.clone(),
-                        checked: c.checked,
-                    })
-                    .collect(),
+                items,
                 selected: d.selected,
                 scroll: d.scroll,
                 detail: d.detail.clone(),
                 editor: matches!(d.kind, DialogKind::Text(_) | DialogKind::Palette),
                 footer: d.footer.clone(),
                 action_stamp: identity.finish(),
+                model,
             }
         })
     }
@@ -2139,11 +2406,7 @@ impl App {
                         t.project,
                         if t.kind() == "fork" { " · fork" } else { "" }
                     ),
-                    status: if t.status != "failed" && t.attention() {
-                        "needs_input".into()
-                    } else {
-                        t.status.clone()
-                    },
+                    status: t.presentation_status().into(),
                     depth: *depth,
                     pinned: t.pinned(),
                     section: self.open_section(t).into(),
@@ -2217,6 +2480,12 @@ impl App {
             ("Recovery".into(), pending.to_string()),
             ("Hosts".into(), self.host_status()),
         ];
+        if !self.context_capture_status.is_empty() {
+            inspector.push((
+                "Context capture".into(),
+                self.context_capture_status.clone(),
+            ));
+        }
         if flag(&metadata, "limited") {
             inspector.push((
                 "History".into(),
@@ -2235,6 +2504,16 @@ impl App {
             }
         }
         if let Some(row) = self.active_summary() {
+            if row.inbox()["workingKnown"] == false {
+                inspector.push(("Execution evidence".into(), "Unknown".into()));
+            }
+            if row.inbox()["backgroundHolding"] == true {
+                inspector.push(("Background work".into(), "Waiting".into()));
+            }
+            let native_status = string(row.inbox(), "nativeStatus");
+            if !native_status.is_empty() && native_status != row.presentation_status() {
+                inspector.push(("Native status".into(), native_status));
+            }
             inspector.push((
                 "Navigation pin".into(),
                 if row.pinned() { "Pinned" } else { "Unpinned" }.into(),

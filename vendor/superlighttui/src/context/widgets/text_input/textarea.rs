@@ -740,6 +740,11 @@ impl Context {
         {
             state.scroll_offset = cursor_vrow + 1 - visible_rows.max(1) as usize;
         }
+        // Growth and reflow can leave the old viewport past the last full page
+        // even while the caret is still visible. Match the code editor's bound.
+        let total_rows = vlines.map_or(state.lines.len(), <[TextareaVLine]>::len);
+        let max_scroll = total_rows.saturating_sub(visible_rows.max(1) as usize);
+        state.scroll_offset = state.scroll_offset.min(max_scroll);
 
         let (_interaction_id, mut response) = self.begin_widget_interaction(focused);
         self.commands

@@ -1,17 +1,18 @@
 //! SLT owns active terminal rendering, widget focus and editor input (A1–A5, B1–B3).
 //! Controller actions retain native source identities; a widget never acknowledges a write.
 
-use crate::{domain, project_graph, reports, ui};
+mod attention;
+mod dialogs;
+mod navigator;
+
+use crate::{domain, reports, ui};
 use ratatui_textarea::TextArea;
 use serde_json::Value;
 use slt::{
-    Border, ButtonVariant, Color, Context, KeyCode, KeyModifiers, ListState, ScrollState,
-    SpinnerState, TextareaState, WidgetColors, palette::tailwind,
+    Border, ButtonVariant, Color, Context, KeyCode, KeyModifiers, Response, ScrollState,
+    SpinnerState, SplitPaneState, TabsState, TextareaState, Theme, WidgetColors, palette::tailwind,
 };
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, HashMap},
-};
+use std::collections::{BTreeMap, HashMap};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Stable source shared by conversation tabs and actual human requests.
@@ -53,6 +54,18 @@ pub struct AttentionItem {
     pub request: Value,
 }
 
+/// Read-only native content, qualified by its original source and revision.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContentItem {
+    pub key: String,
+    pub source: Source,
+    pub title: String,
+    pub kind: String,
+    pub markdown: String,
+    pub revision: String,
+    pub truncated: bool,
+}
+
 /// UI intent. Only the controller may dispatch or acknowledge native operations.
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -84,6 +97,9 @@ pub struct SurfaceState {
     pub thread_sources: BTreeMap<String, Source>,
     pub projects: Vec<Source>,
     pub questions: Vec<AttentionItem>,
+    /// Controller-owned delivery phases keyed by the complete native request source hash.
+    pub answer_delivery: BTreeMap<String, String>,
+    pub contents: Vec<ContentItem>,
     pub dependency_status: String,
     pub attention_mode: bool,
     pub internal_tabs: bool,
@@ -95,21 +111,25 @@ pub struct SurfaceState {
     composer: TextareaState,
     composer_key: String,
     tab_editors: HashMap<String, TextareaState>,
-    tabs_scroll: ScrollState,
+    tabs_control: TabsState,
+    tabs_start: usize,
     modal_editor: TextareaState,
     modal_stamp: Option<u64>,
     modal_selected: usize,
-    navigator: ListState,
-    navigator_keys: Vec<String>,
-    navigator_selection: usize,
+    navigator: navigator::State,
+    sidebar_hidden: Option<bool>,
+    navigation_split: SplitPaneState,
+    sidebar_width: Option<u32>,
+    applied_layout: Option<ui::LayoutMode>,
+    viewport: Option<(u32, u32)>,
+    focused_control: Option<String>,
+    attention: attention::State,
+    dialog: dialogs::State,
+    overlay_open: bool,
     transcript: ScrollState,
     pub(crate) transcript_layout: Option<ui::TranscriptLayout>,
     pub(crate) transcript_jump: Option<(String, String, usize)>,
     controller_scroll: Option<(usize, bool)>,
-    attention_scroll: ScrollState,
-    support_scroll: ScrollState,
-    project_graph: project_graph::ProjectGraph,
-    modal_scroll: ScrollState,
     context_scroll: ScrollState,
     command_selected: usize,
     command_escape: Option<String>,
@@ -118,6 +138,8 @@ pub struct SurfaceState {
     pub loading_question: Option<String>,
     reports: reports::Cache,
     spinner: SpinnerState,
+    bars: HashMap<&'static str, usize>,
+    browsing_scope: String,
 }
 
 impl SurfaceState {
@@ -126,6 +148,7 @@ impl SurfaceState {
             internal_tabs: true,
             graph_global: true,
             transcript: ScrollState::new().stick_to_bottom(true),
+            navigation_split: SplitPaneState::new(0.27),
             ..Self::default()
         }
     }
@@ -141,7 +164,25 @@ pub fn draw(
     state: &mut SurfaceState,
 ) -> Vec<Action> {
     let mut actions = Vec::new();
+    let geometry = (ctx.width(), ctx.height());
+    let resized = state
+        .viewport
+        .replace(geometry)
+        .is_some_and(|old| old != geometry);
+    let restore_focus = (resized
+        && modal.is_none()
+        && !state.overlay_open
+        && state.composer_key == state.active_key
+        && !ctx.raw_events().any(|event| {
+            matches!(
+                event,
+                slt::Event::Key(_) | slt::Event::Mouse(_) | slt::Event::Paste(_)
+            )
+        }))
+    .then(|| state.focused_control.clone())
+    .flatten();
     state.transcript_layout = None;
+    state.overlay_open = modal.is_some();
     if state.composer_key != state.active_key {
         if !state.composer_key.is_empty() {
             state.tab_editors.insert(
@@ -162,54 +203,82 @@ pub fn draw(
         ctx.request_frame();
     }
     sync_editor(&mut state.composer, composer);
+    if modal.is_none() {
+        let copy_draft = KeyModifiers(KeyModifiers::CONTROL.0 | KeyModifiers::ALT.0);
+        let presses: Vec<_> = ctx
+            .key_presses_when(true)
+            .filter(|(_, key)| key.code == KeyCode::Char('c') && key.modifiers == copy_draft)
+            .map(|(index, _)| index)
+            .collect();
+        for index in presses {
+            // Claim the whole-draft command before textarea's selection-copy layer.
+            ctx.consume_event(index);
+            actions.push(Action::Command("copy-draft".into()));
+        }
+    }
     let width = ctx.width();
     let height = ctx.height();
+    if state.applied_layout != Some(view.layout) {
+        match view.layout {
+            ui::LayoutMode::Focus => state.sidebar_hidden = Some(true),
+            ui::LayoutMode::Wide => {
+                state.sidebar_hidden = Some(false);
+                state.show_context = true;
+            }
+            ui::LayoutMode::Split => state.sidebar_hidden = None,
+        }
+        state.applied_layout = Some(view.layout);
+    }
+    ctx.set_theme(surface_theme(&view.theme));
+    state.browsing_scope = browsing_scope(view, state);
     ctx.disabled(modal.is_some(), |ctx| {
-        ctx.container().grow(1).col(|ctx| {
-            ctx.row(|ctx| {
-                ctx.text("T3oxide").bold().fg(tailwind::VIOLET.c300);
-                mode_button(ctx, "A", !state.attention_mode, || {
-                    state.attention_mode = false
-                });
-                mode_button(ctx, "B", state.attention_mode, || {
-                    state.attention_mode = true
-                });
-                ctx.text(&view.title).truncate().grow(1);
-                if ctx.button("Search").clicked {
-                    actions.push(Action::Command("search".into()));
-                }
-                if ctx.button("Commands").clicked {
-                    actions.push(Action::Command("palette".into()));
-                }
-                if ctx.button("Context").clicked {
-                    state.show_context = !state.show_context;
+        ctx.container().w(width).h(height).col(|ctx| {
+            draw_header(ctx, view, state, &mut actions);
+            let footer_height = 1 + u32::from(!view.notice.is_empty());
+            let body_height = height.saturating_sub(1 + footer_height).max(1);
+            let context_side = state.show_context && width >= 112;
+            let context_bottom = state.show_context && !context_side;
+            let context_height = if context_bottom {
+                (body_height / 3)
+                    .clamp(4, 9)
+                    .min(body_height.saturating_sub(6))
+            } else {
+                0
+            };
+            let content_width = width.saturating_sub(if context_side { 27 } else { 0 });
+            let content_height = body_height.saturating_sub(context_height);
+            ctx.container().h(content_height).row(|ctx| {
+                ctx.container()
+                    .w(content_width)
+                    .h(content_height)
+                    .col(|ctx| {
+                        if state.attention_mode {
+                            attention::draw(
+                                ctx,
+                                view,
+                                state,
+                                content_width,
+                                content_height,
+                                &mut actions,
+                            );
+                        } else {
+                            draw_conversations(
+                                ctx,
+                                view,
+                                composer,
+                                state,
+                                content_width,
+                                content_height,
+                                &mut actions,
+                            );
+                        }
+                    });
+                if context_side {
+                    draw_context(ctx, view, state, 27, content_height, &mut actions);
                 }
             });
-            if state.show_context && (width < 110 || state.attention_mode) {
-                draw_context(ctx, view, state, &mut actions);
-            } else if state.attention_mode {
-                draw_attention(ctx, state, height, &mut actions);
-            } else {
-                draw_tabs(ctx, state, &mut actions);
-                ctx.container().grow(1).row(|ctx| {
-                    if width >= 65 {
-                        draw_navigator(ctx, view, state, height, &mut actions);
-                    }
-                    ctx.container().grow(1).col(|ctx| {
-                        draw_transcript(ctx, view, state, &mut actions);
-                        draw_composer(ctx, view, composer, state, height, &mut actions);
-                    });
-                    if state.show_context && width >= 110 {
-                        ctx.container()
-                            .w(26)
-                            .border(Border::Rounded)
-                            .title("Context")
-                            .p(1)
-                            .col(|ctx| {
-                                draw_context(ctx, view, state, &mut actions);
-                            });
-                    }
-                });
+            if context_bottom && context_height > 0 {
+                draw_context(ctx, view, state, width, context_height, &mut actions);
             }
             ctx.row(|ctx| {
                 ctx.text(&view.status).dim().truncate().grow(1);
@@ -221,289 +290,757 @@ pub fn draw(
                 }
             });
             if !view.notice.is_empty() {
-                ctx.text(&view.notice).dim().truncate();
+                let warning = ctx.theme().warning;
+                ctx.text(&view.notice).fg(warning).truncate();
             }
         });
     });
     if let Some(modal) = modal {
-        draw_modal(ctx, modal, modal_editor, state, &mut actions);
+        dialogs::draw(ctx, modal, modal_editor, state, &mut actions);
     } else {
         state.modal_stamp = None;
     }
     global_actions(ctx, modal.is_some(), state, &mut actions);
     if modal.is_none() {
+        if let Some(name) = restore_focus {
+            // Responsive panes can add named controls before the old focus slot.
+            // Re-resolve that name through SLT after the new layout is registered.
+            let navigator_visible = !state
+                .sidebar_hidden
+                .unwrap_or(width < 78 || view.layout == ui::LayoutMode::Focus);
+            let name = if (name.starts_with("navigator") || name == "pane-divider")
+                && !navigator_visible
+            {
+                "composer".into()
+            } else {
+                name
+            };
+            ctx.focus_by_name(&name);
+            state.focused_control = Some(name);
+            ctx.request_frame();
+        } else {
+            state.focused_control = ctx.focused_name().map(str::to_owned);
+        }
         // Buttons and content outside navigation act on the displayed source.
         // Preserve the invoking context while a modal owns SLT focus.
-        state.focus = Some(match ctx.focused_name() {
+        state.focus = Some(match state.focused_control.as_deref() {
             Some("navigator") => ui::Focus::Navigator,
-            Some(name) if name.starts_with("thread:") => ui::Focus::Navigator,
+            Some("transcript") => ui::Focus::Transcript,
+            Some("context") => ui::Focus::Inspector,
             _ => ui::Focus::Composer,
         });
     }
     actions
 }
 
-fn mode_button(ctx: &mut Context, label: &str, selected: bool, click: impl FnOnce()) {
-    let variant = if selected {
-        ButtonVariant::Primary
-    } else {
-        ButtonVariant::Default
-    };
-    if ctx.button(label).variant(variant).clicked {
-        click();
+fn surface_theme(name: &str) -> Theme {
+    let mut theme = Theme::dark();
+    match name.to_ascii_lowercase().as_str() {
+        "terminal" => {
+            theme.bg = Color::Reset;
+            theme.text = Color::Reset;
+            theme.text_dim = Color::DarkGray;
+            theme.border = Color::DarkGray;
+        }
+        "cyan" => {
+            theme.primary = tailwind::CYAN.c300;
+            theme.accent = tailwind::CYAN.c300;
+        }
+        "lime" => {
+            theme.primary = tailwind::LIME.c300;
+            theme.accent = tailwind::LIME.c300;
+        }
+        "light" => theme = Theme::light(),
+        "nord" => theme = Theme::nord(),
+        _ => {
+            theme.primary = tailwind::VIOLET.c300;
+            theme.accent = tailwind::VIOLET.c300;
+        }
     }
+    if theme.is_dark {
+        theme.border = tailwind::SLATE.c700;
+    }
+    theme.selected_bg = theme.primary;
+    theme.selected_fg = if theme.is_dark {
+        tailwind::SLATE.c950
+    } else {
+        Color::White
+    };
+    theme
+}
+
+fn browsing_scope(view: &ui::View, state: &SurfaceState) -> String {
+    let Some((_, scope)) = view.inspector.iter().find(|(key, _)| key == "Browsing") else {
+        return "All sources".into();
+    };
+    for source in &state.projects {
+        let identity = format!("{} / {}", source.environment, source.project_id);
+        if let Some(suffix) = scope.strip_prefix(&identity)
+            && (suffix.is_empty() || suffix.starts_with(" · "))
+        {
+            return format!("{} · {}{suffix}", source.environment_label, source.project);
+        }
+    }
+    scope.clone()
+}
+
+fn secondary_button(ctx: &mut Context, label: &str) -> Response {
+    let colors = WidgetColors::new()
+        .fg(ctx.theme().surface_text)
+        .bg(ctx.theme().surface)
+        .accent(ctx.theme().primary);
+    ctx.button(label)
+        .variant(ButtonVariant::Primary)
+        .colors(&colors)
+        .show()
+}
+
+fn primary_button(ctx: &mut Context, label: &str, enabled: bool) -> Response {
+    ctx.disabled(!enabled, |ctx| {
+        if enabled {
+            let colors = WidgetColors::new().fg(ctx.theme().selected_fg);
+            ctx.button(label)
+                .variant(ButtonVariant::Primary)
+                .colors(&colors)
+                .show()
+        } else {
+            secondary_button(ctx, label)
+        }
+    })
+}
+
+/// One Tab stop for a compact action group; arrows choose, Enter or click acts.
+fn action_bar(
+    ctx: &mut Context,
+    name: &str,
+    cursor: &mut usize,
+    items: &[(&str, bool, bool)],
+) -> Option<usize> {
+    if items.is_empty() {
+        return None;
+    }
+    *cursor = (*cursor).min(items.len() - 1);
+    let focused = ctx.register_focusable_named(name);
+    let _ = ctx.register_focusable();
+    let keys: Vec<_> = ctx
+        .key_presses_when(focused)
+        .map(|(i, k)| (i, k.clone()))
+        .collect();
+    let mut activated = None;
+    for (i, key) in keys {
+        match key.code {
+            KeyCode::Left => *cursor = cursor.saturating_sub(1),
+            KeyCode::Right => *cursor = (*cursor + 1).min(items.len() - 1),
+            KeyCode::Home => *cursor = 0,
+            KeyCode::End => *cursor = items.len() - 1,
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if items[*cursor].2 {
+                    activated = Some(*cursor);
+                }
+            }
+            _ => continue,
+        }
+        ctx.consume_event(i);
+        ctx.request_frame();
+    }
+    let theme = *ctx.theme();
+    ctx.container().wrap().gap(1).row_gap(0).row(|ctx| {
+        for (i, (label, selected, enabled)) in items.iter().enumerate() {
+            let response = ctx.interaction();
+            ctx.text(format!(" {label} "))
+                .fg(if !enabled {
+                    theme.text_dim
+                } else if *selected {
+                    theme.selected_fg
+                } else {
+                    theme.text
+                })
+                .bg(if *selected {
+                    theme.selected_bg
+                } else {
+                    theme.surface
+                })
+                .with_if(focused && *cursor == i, |text| {
+                    text.fg(theme.selected_fg).bg(theme.primary).underline();
+                })
+                .with_if(!enabled, |text| {
+                    text.dim();
+                });
+            if response.clicked && *enabled {
+                *cursor = i;
+                activated = Some(i);
+                ctx.focus_by_name(name);
+                ctx.request_frame();
+            }
+        }
+    });
+    activated
+}
+
+/// One focus owner, with a persistent active tab distinct from its keyboard edge.
+fn quiet_tabs(ctx: &mut Context, tabs: &mut TabsState) -> Response {
+    if tabs.labels.is_empty() {
+        return Response::default();
+    }
+    tabs.selected = tabs.selected.min(tabs.labels.len() - 1);
+    let before = tabs.selected;
+    let focused = ctx.register_focusable();
+    let keys: Vec<_> = ctx
+        .key_presses_when(focused)
+        .map(|(i, key)| (i, key.code.clone()))
+        .collect();
+    for (event, key) in keys {
+        match key {
+            KeyCode::Left => {
+                tabs.selected = (tabs.selected + tabs.labels.len() - 1) % tabs.labels.len()
+            }
+            KeyCode::Right => tabs.selected = (tabs.selected + 1) % tabs.labels.len(),
+            _ => continue,
+        }
+        ctx.consume_event(event);
+        ctx.request_frame();
+    }
+    let theme = *ctx.theme();
+    let mut response = Response {
+        focused,
+        ..Response::default()
+    };
+    ctx.row(|ctx| {
+        for (index, label) in tabs.labels.iter().enumerate() {
+            if index > 0 {
+                ctx.text("│").fg(theme.border);
+            }
+            let hit = ctx.interaction();
+            ctx.text(format!(" {label} "))
+                .fg(if index == tabs.selected {
+                    theme.text
+                } else {
+                    theme.surface_text
+                })
+                .bg(if index == tabs.selected {
+                    theme.surface_hover
+                } else {
+                    theme.surface
+                })
+                .with_if(focused && index == tabs.selected, |text| {
+                    text.underline().fg(theme.primary);
+                });
+            if hit.clicked {
+                tabs.selected = index;
+                response.clicked = true;
+                ctx.request_frame();
+            }
+        }
+    });
+    response.changed = tabs.selected != before;
+    response
+}
+
+fn draw_header(
+    ctx: &mut Context,
+    view: &ui::View,
+    state: &mut SurfaceState,
+    actions: &mut Vec<Action>,
+) {
+    let width = ctx.width();
+    let primary = ctx.theme().primary;
+    let surface = ctx.theme().surface;
+    ctx.container().h(1).bg(surface).row(|ctx| {
+        if width >= 80 {
+            ctx.text("T3oxide ").fg(primary);
+        }
+        let sidebar = !state
+            .sidebar_hidden
+            .unwrap_or(width < 78 || view.layout == ui::LayoutMode::Focus);
+        let items = [
+            ("☰", sidebar, true),
+            ("A", !state.attention_mode, true),
+            ("B", state.attention_mode, true),
+            ("Search", false, true),
+            (if width < 60 { "⌘" } else { "Commands" }, false, true),
+            (
+                if width < 50 { "ⓘ" } else { "Context" },
+                state.show_context,
+                true,
+            ),
+        ];
+        match action_bar(
+            ctx,
+            "toolbar",
+            state.bars.entry("toolbar").or_default(),
+            &items,
+        ) {
+            Some(0) => {
+                toggle_sidebar(state, width);
+                ctx.request_frame();
+            }
+            Some(1) => state.attention_mode = false,
+            Some(2) => state.attention_mode = true,
+            Some(3) => actions.push(Action::Command("search".into())),
+            Some(4) => actions.push(Action::Command("palette".into())),
+            Some(5) => {
+                state.show_context = !state.show_context;
+                ctx.request_frame();
+            }
+            _ => {}
+        }
+    });
+}
+
+fn toggle_sidebar(state: &mut SurfaceState, width: u32) {
+    let hidden = state
+        .sidebar_hidden
+        .unwrap_or(width < 78 || state.applied_layout == Some(ui::LayoutMode::Focus));
+    state.sidebar_hidden = Some(!hidden);
 }
 
 fn draw_context(
     ctx: &mut Context,
     view: &ui::View,
     state: &mut SurfaceState,
-    actions: &mut Vec<Action>,
-) {
-    ctx.row(|ctx| {
-        ctx.text("Context").bold().grow(1);
-        if ctx.button("×").clicked {
-            state.show_context = false;
-        }
-    });
-    ctx.scrollable(&mut state.context_scroll)
-        .grow(1)
-        .col(|ctx| {
-            for (label, value) in &view.inspector {
-                if !value.is_empty() {
-                    ctx.text(label).dim();
-                    ctx.text(value).wrap();
-                }
-            }
-            for (label, command) in [
-                ("Records", "context"),
-                ("Capture source", "context-save"),
-                ("Resume", "resume"),
-            ] {
-                if ctx.button(label).clicked {
-                    actions.push(Action::Command(command.into()));
-                }
-            }
-        });
-    ctx.row(|ctx| {
-        if ctx.button("Copy ID").clicked {
-            actions.push(Action::CopyId);
-        }
-        if ctx.button("Internal tabs ✓").clicked {
-            state.internal_tabs = true;
-            actions.push(Action::Command("internal-tabs".into()));
-        }
-    });
-}
-
-fn draw_tabs(ctx: &mut Context, state: &mut SurfaceState, actions: &mut Vec<Action>) {
-    ctx.container().h(1).col(|ctx| {
-        ctx.scroll_row(&mut state.tabs_scroll, |ctx| {
-            for tab in &state.tabs {
-                let variant = if state.active_key == tab.key {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Default
-                };
-                ctx.register_focusable_named(&format!("tab:{}", tab.key));
-                if ctx.button(&tab.title).variant(variant).clicked {
-                    actions.push(Action::SelectTab(tab.key.clone()));
-                }
-            }
-            if !state.active_key.is_empty() && ctx.button("×").clicked {
-                actions.push(Action::CloseTab(state.active_key.clone()));
-            }
-            if ctx.button("+").clicked {
-                actions.push(Action::Command("search".into()));
-            }
-        });
-    });
-}
-
-fn draw_navigator(
-    ctx: &mut Context,
-    view: &ui::View,
-    state: &mut SurfaceState,
+    width: u32,
     height: u32,
     actions: &mut Vec<Action>,
 ) {
-    let width = if ctx.width() >= 100 { 36 } else { 27 };
-    ctx.container().w(width).border(Border::Rounded).col(|ctx| {
-        let compact = width < 36;
-        ctx.row(|ctx| {
-            for (lane, label) in [("Open", "Unread"), ("Running", "Running"), ("Pins", "Pins")] {
-                if compact && lane == "Pins" {
-                    continue;
-                }
-                let variant = if view.lane == lane {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Default
-                };
-                if ctx.button(label).variant(variant).clicked {
-                    actions.push(Action::Lane(lane.into()));
-                }
-            }
-        });
-        ctx.row(|ctx| {
-            if compact
-                && ctx
-                    .button("Pins")
-                    .variant(if view.lane == "Pins" {
-                        ButtonVariant::Primary
+    let focus_color = ctx.theme().primary;
+    ctx.group("t3oxide.context")
+        .w(width)
+        .h(height)
+        .border(Border::Rounded)
+        .focus_within_border_fg(focus_color)
+        .title("Context")
+        .col(|ctx| {
+            ctx.register_focusable_named("context");
+            ctx.scrollable(&mut state.context_scroll)
+                .grow(1)
+                .col(|ctx| {
+                    let selected_source = if state.attention_mode {
+                        attention::selected_source(state)
                     } else {
-                        ButtonVariant::Default
-                    })
-                    .clicked
-            {
-                actions.push(Action::Lane("Pins".into()));
-            }
-            if ctx.button("Settled").clicked {
-                actions.push(Action::Lane("Settled".into()));
-            }
-        });
-        ctx.row(|ctx| {
-            if ctx.button("Project").clicked {
-                actions.push(Action::Command("project".into()));
-            }
-            if ctx.button("Env").clicked {
-                actions.push(Action::Command("env".into()));
-            }
-        });
-        let keys: Vec<_> = view.rows.iter().map(|row| row.key.clone()).collect();
-        let layout_changed = keys != state.navigator_keys;
-        if keys != state.navigator_keys {
-            state.navigator.set_items(keys.clone());
-            state.navigator.set_item_heights(vec![2; keys.len()]);
-            state.navigator_keys = keys;
-        }
-        if state.navigator_selection != view.selected {
-            state.navigator.set_selected_index(view.selected);
-            state.navigator_selection = view.selected;
-        }
-        let clicked = Cell::new(None);
-        let selected = state.navigator.selected_index();
-        ctx.register_focusable_named("navigator");
-        let response = ctx.virtual_list_variable(
-            &mut state.navigator,
-            height.saturating_sub(12).max(3),
-            |ctx, index| {
-                let row = &view.rows[index];
-                let attention = matches!(
-                    row.status.as_str(),
-                    "failed" | "needs_input" | "needs-input"
-                );
-                let colors = WidgetColors::new().fg(if attention {
-                    tailwind::AMBER.c300
-                } else if row.section == "Completed" {
-                    tailwind::SLATE.c400
-                } else {
-                    tailwind::SLATE.c100
-                });
-                ctx.row(|ctx| {
-                    let marker = if selected == Some(index) {
-                        "▸"
-                    } else if row.pinned {
-                        "◆"
-                    } else if row.section == "Unread" {
-                        "●"
-                    } else {
-                        " "
+                        state.source.as_ref()
                     };
-                    ctx.text(marker).fg(if attention {
-                        tailwind::AMBER.c300
-                    } else {
-                        tailwind::VIOLET.c300
-                    });
-                    ctx.register_focusable_named(&format!("thread:{}", row.key));
-                    if ctx.button(&row.title).colors(&colors).clicked && !layout_changed {
-                        clicked.set(Some(index));
+                    if let Some(source) = selected_source {
+                        source_tags(ctx, source);
+                        if !source.thread.is_empty() {
+                            ctx.text(&source.thread).dim().wrap();
+                        }
+                    }
+                    if state.attention_mode
+                        && let Some(content) = attention::selected_content(state)
+                    {
+                        for (label, value) in [
+                            ("Kind", content.kind.clone()),
+                            ("Item", content.key.replace('\0', " / ")),
+                            ("Revision", content.revision.clone()),
+                        ] {
+                            ctx.text(label).dim();
+                            ctx.text(value).wrap();
+                        }
+                        if content.truncated {
+                            ctx.text("Excerpt").dim();
+                        }
+                    }
+                    if !state.attention_mode {
+                        for (label, value) in &view.inspector {
+                            if !value.is_empty() {
+                                ctx.row(|ctx| {
+                                    ctx.text(label).dim().w(9);
+                                    ctx.text(value).wrap().grow(1);
+                                });
+                            }
+                        }
                     }
                 });
-                let (environment, project) = row
+            let items = if width < 40 {
+                vec![("Copy ID", false, true), ("Records", false, true)]
+            } else {
+                vec![
+                    ("Copy ID", false, true),
+                    ("Records", false, true),
+                    ("Capture", false, true),
+                    ("Resume", false, true),
+                ]
+            };
+            match action_bar(
+                ctx,
+                "context-tools",
+                state.bars.entry("context-tools").or_default(),
+                &items,
+            ) {
+                Some(0) => {
+                    if state.attention_mode {
+                        if let Some(source) = attention::selected_source(state) {
+                            ctx.copy_to_clipboard(source.thread.clone());
+                        }
+                    } else {
+                        actions.push(Action::CopyId);
+                    }
+                }
+                Some(1) => actions.push(Action::Command("context".into())),
+                Some(2) => actions.push(Action::Command("context-save".into())),
+                Some(3) => actions.push(Action::Command("resume".into())),
+                _ => {}
+            }
+        });
+}
+
+fn draw_tabs(ctx: &mut Context, state: &mut SurfaceState, width: u32, actions: &mut Vec<Action>) {
+    if state.tabs.is_empty() {
+        return;
+    }
+    let active = state
+        .tabs
+        .iter()
+        .position(|tab| tab.key == state.active_key)
+        .unwrap_or(0);
+    let capacity = ((width.saturating_sub(16)) / 24).max(1) as usize;
+    if active < state.tabs_start {
+        state.tabs_start = active;
+    }
+    if active >= state.tabs_start + capacity {
+        state.tabs_start = active + 1 - capacity;
+    }
+    state.tabs_start = state.tabs_start.min(state.tabs.len().saturating_sub(1));
+    let start = state.tabs_start;
+    let end = (start + capacity).min(state.tabs.len());
+    let label_width = (width.saturating_sub(16) / (end - start).max(1) as u32)
+        .saturating_sub(5)
+        .clamp(4, 32);
+    state.tabs_control.labels = state.tabs[start..end]
+        .iter()
+        .map(|tab| {
+            let title = if tab.title.is_empty() || tab.title == tab.source.thread {
+                if tab.source.project.is_empty() {
+                    "Conversation"
+                } else {
+                    &tab.source.project
+                }
+            } else {
+                &tab.title
+            };
+            elide(title, label_width as usize)
+        })
+        .collect();
+    state.tabs_control.selected = active.saturating_sub(start);
+    ctx.container().h(1).row(|ctx| {
+        let previous = ctx.interaction();
+        ctx.text(" ‹ ").with_if(start == 0, |text| {
+            text.dim();
+        });
+        if previous.clicked && start > 0 {
+            actions.push(Action::SelectTab(state.tabs[start - 1].key.clone()));
+        }
+        let focused = ctx.register_focusable_named("conversation-tabs");
+        let keys: Vec<_> = ctx
+            .key_presses_when(focused)
+            .map(|(i, key)| (i, key.code.clone()))
+            .collect();
+        let mut target = active;
+        for (i, key) in keys {
+            match key {
+                KeyCode::Left => target = target.saturating_sub(1),
+                KeyCode::Right => target = (target + 1).min(state.tabs.len() - 1),
+                KeyCode::Home => target = 0,
+                KeyCode::End => target = state.tabs.len() - 1,
+                _ => continue,
+            }
+            ctx.consume_event(i);
+        }
+        if target != active {
+            actions.push(Action::SelectTab(state.tabs[target].key.clone()));
+        }
+        let response = quiet_tabs(ctx, &mut state.tabs_control);
+        if response.changed {
+            actions.push(Action::SelectTab(
+                state.tabs[start + state.tabs_control.selected].key.clone(),
+            ));
+        }
+        let next = ctx.interaction();
+        ctx.text(" › ").with_if(end == state.tabs.len(), |text| {
+            text.dim();
+        });
+        if next.clicked && end < state.tabs.len() {
+            actions.push(Action::SelectTab(state.tabs[end].key.clone()));
+        }
+        let close = ctx.interaction();
+        ctx.text(" × ").dim();
+        if close.clicked {
+            actions.push(Action::CloseTab(state.active_key.clone()));
+        }
+        let add = ctx.interaction();
+        ctx.text(" + ").dim();
+        if add.clicked {
+            actions.push(Action::Command("search".into()));
+        }
+    });
+    if ctx.focused_name() == Some("conversation-tabs") && ctx.consume_key_code(KeyCode::Delete) {
+        actions.push(Action::CloseTab(state.active_key.clone()));
+    }
+}
+
+fn elide(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if text.width() <= width {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    for grapheme in text.graphemes(true) {
+        if out.width() + grapheme.width() >= width {
+            break;
+        }
+        out.push_str(grapheme);
+    }
+    out.push('…');
+    out
+}
+
+/// Fit display text using SLT's own word-wrap measurement, preserving graphemes.
+fn elide_lines(ctx: &Context, text: &str, width: u32, rows: u32) -> String {
+    if width == 0 || rows == 0 {
+        return String::new();
+    }
+    let columns = Some(u16::try_from(width).unwrap_or(u16::MAX));
+    if u32::from(ctx.measure_text(text, columns).1) <= rows {
+        return text.to_owned();
+    }
+    let mut shown = elide(text, width.saturating_mul(rows) as usize);
+    if !shown.ends_with('…') {
+        shown.push('…');
+    }
+    while u32::from(ctx.measure_text(&shown, columns).1) > rows {
+        shown.pop();
+        let end = shown
+            .grapheme_indices(true)
+            .next_back()
+            .map_or(0, |(end, _)| end);
+        shown.truncate(end);
+        shown.truncate(shown.trim_end().len());
+        shown.push('…');
+    }
+    shown
+}
+
+fn draw_conversations(
+    ctx: &mut Context,
+    view: &ui::View,
+    composer: &mut TextArea<'static>,
+    state: &mut SurfaceState,
+    width: u32,
+    height: u32,
+    actions: &mut Vec<Action>,
+) {
+    let tabs_height = u32::from(!state.tabs.is_empty());
+    draw_tabs(ctx, state, width, actions);
+    let height = height.saturating_sub(tabs_height);
+    let sidebar = !state
+        .sidebar_hidden
+        .unwrap_or(width < 78 || view.layout == ui::LayoutMode::Focus);
+    if sidebar && width >= 74 {
+        let attached_key = state.active_key.clone();
+        let mut nav = std::mem::take(&mut state.navigator);
+        let mut split = std::mem::take(&mut state.navigation_split);
+        // Keep the preferred cell width separate from a temporary resize bound.
+        // Only a native divider gesture changes that preference.
+        let available = width.saturating_sub(1);
+        let min_sidebar = 27;
+        let max_sidebar = available.saturating_sub(38).max(min_sidebar);
+        let nav_width = state
+            .sidebar_width
+            .unwrap_or(30)
+            .clamp(min_sidebar, max_sidebar);
+        split.min_ratio = f64::from(min_sidebar) / f64::from(available);
+        split.set_ratio(f64::from(nav_width) / f64::from(available));
+        let main_width = width.saturating_sub(nav_width + 1);
+        let colors: Vec<_> = view
+            .rows
+            .iter()
+            .map(|row| {
+                let source = state.thread_sources.get(&row.key);
+                let (env, project) = row
                     .subtitle
                     .split_once(" / ")
                     .unwrap_or((&row.subtitle, ""));
-                let project_identity = state
-                    .thread_sources
-                    .get(&row.key)
-                    .map_or_else(|| project.to_owned(), Source::project_key);
-                ctx.line(|ctx| {
-                    ctx.text("  ");
-                    let environment_identity = state
-                        .thread_sources
-                        .get(&row.key)
-                        .map_or(environment, |source| source.environment.as_str());
-                    ctx.text(environment)
-                        .fg(identity_color(environment_identity));
-                    ctx.text(" · ").dim();
-                    ctx.text(project).fg(identity_color(&project_identity));
-                    if !row.status.is_empty() {
-                        ctx.text(format!(" · {}", row.status)).dim();
+                (
+                    identity_color(source.map_or(env, |source| source.environment.as_str())),
+                    identity_color(&source.map_or_else(|| project.to_owned(), Source::project_key)),
+                )
+            })
+            .collect();
+        let mut nav_actions = Vec::new();
+        let spinner = state.spinner.clone();
+        if state.overlay_open {
+            // SLT's draggable handle uses deferred raw drawing, after modal paint.
+            // Keep the settled pane geometry but compose this divider as normal text.
+            ctx.container().w(width).h(height).row(|ctx| {
+                navigator::draw(
+                    ctx,
+                    view,
+                    navigator::Presentation {
+                        colors: &colors,
+                        attached_key: &attached_key,
+                    },
+                    &mut nav,
+                    reports::Geometry {
+                        width: nav_width,
+                        height,
+                    },
+                    &spinner,
+                    &mut nav_actions,
+                );
+                ctx.container().w(1).h(height).col(|ctx| {
+                    for _ in 0..height {
+                        ctx.text("│").dim();
                     }
                 });
+                draw_conversation(ctx, view, composer, state, main_width, height, actions);
+            });
+        } else {
+            ctx.register_focusable_named("pane-divider");
+            let response = ctx.split_pane(
+                &mut split,
+                |ctx| {
+                    navigator::draw(
+                        ctx,
+                        view,
+                        navigator::Presentation {
+                            colors: &colors,
+                            attached_key: &attached_key,
+                        },
+                        &mut nav,
+                        reports::Geometry {
+                            width: nav_width,
+                            height,
+                        },
+                        &spinner,
+                        &mut nav_actions,
+                    );
+                },
+                |ctx| {
+                    draw_conversation(ctx, view, composer, state, main_width, height, actions);
+                },
+            );
+            if response.changed {
+                let width = (f64::from(available) * response.ratio).round() as u32;
+                state.sidebar_width = Some(width.clamp(min_sidebar, max_sidebar));
+                ctx.request_frame();
+            }
+        }
+        state.navigator = nav;
+        state.navigation_split = split;
+        actions.extend(nav_actions);
+    } else if sidebar {
+        let colors = vec![(tailwind::CYAN.c300, tailwind::VIOLET.c300); view.rows.len()];
+        navigator::draw(
+            ctx,
+            view,
+            navigator::Presentation {
+                colors: &colors,
+                attached_key: &state.active_key,
             },
+            &mut state.navigator,
+            reports::Geometry { width, height },
+            &state.spinner,
+            actions,
         );
-        if response.changed
-            && let Some(index) = state.navigator.selected_index()
-        {
-            state.navigator_selection = index;
-            actions.push(Action::Highlight(index));
-        }
-        if let Some(index) = clicked.get() {
-            actions.push(Action::Open(index));
-        } else if !layout_changed
-            && response.focused
-            && ctx.consume_key_code(KeyCode::Enter)
-            && let Some(index) = state.navigator.selected_index()
-        {
-            actions.push(Action::Open(index));
-        }
-        if view.rows.is_empty() {
-            ctx.text("No conversations").dim();
-        }
-    });
+    } else {
+        draw_conversation(ctx, view, composer, state, width, height, actions);
+    }
+}
+
+fn draw_conversation(
+    ctx: &mut Context,
+    view: &ui::View,
+    composer: &mut TextArea<'static>,
+    state: &mut SurfaceState,
+    width: u32,
+    height: u32,
+    actions: &mut Vec<Action>,
+) {
+    ctx.group("t3oxide.conversation")
+        .w(width)
+        .h(height)
+        .col(|ctx| {
+            let editor_width = width.saturating_sub(3).max(1);
+            state.composer.wrap_width = Some(editor_width);
+            let rows = editor_rows(&mut state.composer, height);
+            let completion_rows = if state.command_open {
+                completion_indices(&state.composer.value(), state.command_escape.as_deref())
+                    .len()
+                    .min(4) as u32
+            } else {
+                0
+            }
+            .min(height.saturating_sub(rows + 4));
+            let composer_height = rows + 3 + completion_rows;
+            draw_transcript(
+                ctx,
+                view,
+                state,
+                width,
+                height.saturating_sub(composer_height),
+                actions,
+            );
+            draw_composer(
+                ctx,
+                view,
+                composer,
+                state,
+                ComposerLayout {
+                    width,
+                    rows,
+                    completions: completion_rows,
+                },
+                actions,
+            );
+        });
+}
+
+fn editor_rows(editor: &mut TextareaState, height: u32) -> u32 {
+    let lines = u32::try_from(editor.visual_line_count()).unwrap_or(u32::MAX);
+    let max = height
+        .saturating_sub(5)
+        .min((height / 3).clamp(1, 12))
+        .max(1);
+    lines.clamp(2.min(max), max)
 }
 
 fn draw_transcript(
     ctx: &mut Context,
     view: &ui::View,
     state: &mut SurfaceState,
+    width: u32,
+    height: u32,
     actions: &mut Vec<Action>,
 ) {
-    // Context::width is terminal-wide; reserve the real A-side panels and chrome.
-    let sidebar = if ctx.width() >= 100 {
-        36
-    } else if ctx.width() >= 65 {
-        27
-    } else {
-        0
-    };
-    let context = if state.show_context && ctx.width() >= 110 {
-        26
-    } else {
-        0
-    };
+    if height == 0 {
+        return;
+    }
     let geometry = reports::Geometry {
-        width: ctx.width().saturating_sub(sidebar + context + 4).max(1),
-        height: ctx.height().saturating_sub(14).max(3),
+        width: width.saturating_sub(4).max(1),
+        height: height.saturating_sub(5).max(1),
     };
-    ctx.row(|ctx| {
-        if view.requests > 0 && ctx.button(format!("Questions {}", view.requests)).clicked {
-            actions.push(Action::Command("requests".into()));
-        }
-        if ctx.button("Earlier").clicked {
-            actions.push(Action::Command("earlier".into()));
-        }
-        if ctx.button("Latest").clicked {
+    let questions = format!("Questions {}", view.requests);
+    let mut tools = vec![("Earlier", false, true), ("Latest", view.follow, true)];
+    if view.requests > 0 {
+        tools.push((questions.as_str(), false, true));
+    }
+    match action_bar(
+        ctx,
+        "transcript-tools",
+        state.bars.entry("transcript-tools").or_default(),
+        &tools,
+    ) {
+        Some(0) => actions.push(Action::Command("earlier".into())),
+        Some(1) => {
             state.transcript.offset = state.transcript.max_offset();
             actions.push(Action::Command("latest".into()));
         }
-        ctx.spacer();
-        if ctx.button("Copy ID").clicked {
-            actions.push(Action::CopyId);
-        }
-    });
+        Some(2) => actions.push(Action::Command("requests".into())),
+        _ => {}
+    }
+    if height == 1 {
+        return;
+    }
     if state.controller_scroll != Some((view.transcript_scroll, view.follow)) {
         state.transcript.offset = if view.follow {
             usize::MAX
@@ -543,42 +1080,52 @@ fn draw_transcript(
     let before_binding = state.transcript.offset;
     state.transcript.follow_focus = false;
     state.transcript.stick_to_bottom = view.follow && state.transcript_jump.is_none();
-    ctx.group(&group).grow(1).col(|ctx| {
-        let mut viewport = ctx.scrollable(&mut state.transcript);
-        // Bind first so SLT can accept deferred adjustments and fresh bounds.
-        // Then the explicit, source-qualified jump overrides that accepted offset.
-        if let Some(target) = jump
-            && state.transcript.viewport_height() > 0
-        {
-            state.transcript.offset = target.min(state.transcript.max_offset());
-            viewport = viewport.scroll_offset(state.transcript.offset as u32);
-            jumped = true;
-        }
-        viewport.grow(1).border(Border::Rounded).p(1).col(|ctx| {
-            for message in &view.messages {
-                ctx.group(&transcript_message_group(message)).col(|ctx| {
-                    ctx.text(&message.role).bold().fg(if message.role == "You" {
-                        tailwind::CYAN.c300
-                    } else {
-                        tailwind::VIOLET.c300
-                    });
-                    state.reports.draw(
-                        ctx,
-                        &message.key,
-                        &reports::content_revision(&message.text),
-                        &message.text,
-                        geometry,
-                    );
-                    if message.truncated {
-                        ctx.text("Excerpt").dim();
-                    }
-                    if message.streaming {
-                        ctx.spinner(&state.spinner);
+    ctx.group(&group)
+        .w(width)
+        .h(height.saturating_sub(1))
+        .col(|ctx| {
+            ctx.register_focusable_named("transcript");
+            let mut viewport = ctx.scrollable(&mut state.transcript);
+            // Bind first so SLT can accept deferred adjustments and fresh bounds.
+            // Then the explicit, source-qualified jump overrides that accepted offset.
+            if let Some(target) = jump
+                && state.transcript.viewport_height() > 0
+            {
+                state.transcript.offset = target.min(state.transcript.max_offset());
+                viewport = viewport.scroll_offset(state.transcript.offset as u32);
+                jumped = true;
+            }
+            viewport
+                .grow(1)
+                .border(Border::Rounded)
+                .focus_within_border_fg(tailwind::VIOLET.c300)
+                .p(1)
+                .col(|ctx| {
+                    for message in &view.messages {
+                        ctx.group(&transcript_message_group(message)).col(|ctx| {
+                            ctx.text(&message.role).bold().fg(if message.role == "You" {
+                                tailwind::CYAN.c300
+                            } else {
+                                tailwind::VIOLET.c300
+                            });
+                            state.reports.draw(
+                                ctx,
+                                &message.key,
+                                &reports::content_revision(&message.text),
+                                &message.text,
+                                geometry,
+                            );
+                            if message.truncated {
+                                ctx.text("Excerpt").dim();
+                            }
+                            if message.streaming {
+                                ctx.spinner(&state.spinner);
+                            }
+                            ctx.text("");
+                        });
                     }
                 });
-            }
         });
-    });
     if let (Some(items), Some(rect)) = (items, measured)
         && state.transcript.viewport_height() > 0
     {
@@ -617,29 +1164,75 @@ fn transcript_message_group(message: &ui::MessageView) -> String {
     )
 }
 
+struct ComposerLayout {
+    width: u32,
+    rows: u32,
+    completions: u32,
+}
+
 fn draw_composer(
     ctx: &mut Context,
     view: &ui::View,
     legacy: &mut TextArea<'static>,
     state: &mut SurfaceState,
-    height: u32,
+    layout: ComposerLayout,
     actions: &mut Vec<Action>,
 ) {
-    ctx.container()
+    let ComposerLayout {
+        width,
+        rows,
+        completions,
+    } = layout;
+    let focus_color = ctx.theme().primary;
+    ctx.group("t3oxide.composer")
+        .w(width)
         .border(Border::Rounded)
+        .focus_within_border_fg(focus_color)
         .title("Prompt")
         .col(|ctx| {
-            let available = ctx.width().saturating_sub(8).max(10);
-            state.composer.wrap_width = Some(available);
+            let indices = if state.command_open {
+                completion_indices(&state.composer.value(), state.command_escape.as_deref())
+            } else {
+                Vec::new()
+            };
+            if !indices.is_empty() {
+                let selected = state.command_selected.min(indices.len() - 1);
+                let start = selected.saturating_sub(completions.saturating_sub(1) as usize);
+                for (position, index) in indices
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .take(completions as usize)
+                {
+                    let command = &domain::ACTIONS[*index];
+                    let response = ctx.interaction();
+                    ctx.text(elide(
+                        &format!(
+                            " {} /{}",
+                            if position == selected { "▸" } else { " " },
+                            command.name
+                        ),
+                        width.saturating_sub(2) as usize,
+                    ))
+                    .with_if(position == selected, |text| {
+                        text.fg(focus_color).bold();
+                    });
+                    if response.clicked {
+                        actions.push(Action::Command(command.name.into()));
+                        state.command_escape = Some(state.composer.value());
+                        state.command_open = false;
+                        ctx.focus_by_name("composer");
+                        ctx.request_frame();
+                    }
+                }
+            }
+            state.composer.wrap_width = Some(width.saturating_sub(3).max(1));
             let focused = ctx.register_focusable_named("composer");
             let typed_slash = ctx.key_presses_when(focused).any(|(_, key)| {
                 key.code == KeyCode::Char('/') && key.modifiers == KeyModifiers::NONE
             });
             composer_keys(ctx, focused, state, actions);
-            if ctx
-                .textarea(&mut state.composer, if height < 24 { 3 } else { 5 })
-                .changed
-            {
+            if ctx.textarea(&mut state.composer, rows).changed {
                 *legacy = ui::editor(&state.composer.value(), &view.theme, "Write a message…");
                 state.command_selected = 0;
                 if typed_slash && state.composer.value().starts_with('/') {
@@ -647,340 +1240,35 @@ fn draw_composer(
                     state.command_escape = None;
                 }
                 actions.push(Action::DraftChanged);
+                ctx.request_frame();
             }
-            let indices = if state.command_open {
-                completion_indices(&state.composer.value(), state.command_escape.as_deref())
-            } else {
-                Vec::new()
-            };
-            if !indices.is_empty() {
-                for (position, index) in indices
-                    .iter()
-                    .enumerate()
-                    .skip(state.command_selected.saturating_sub(3))
-                    .take(4)
-                {
-                    let action = &domain::ACTIONS[*index];
-                    let variant = if position == state.command_selected {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Default
-                    };
-                    if ctx
-                        .button(format!("/{}  {}", action.name, action.label))
-                        .variant(variant)
-                        .clicked
-                    {
-                        actions.push(Action::Command(action.name.into()));
-                        state.command_escape = Some(state.composer.value());
-                        state.command_open = false;
-                    }
-                }
-            }
-            let compact = ctx.width() < 110 || state.show_context;
-            if compact {
-                ctx.text("↵ newline · Ctrl↵ / Ctrl+] send").dim();
-            }
+            let can_send =
+                !state.active_key.is_empty() && !state.composer.value().trim().is_empty();
             ctx.row(|ctx| {
-                if ctx.button("Model · effort").clicked {
-                    actions.push(Action::Command("model".into()));
+                match action_bar(
+                    ctx,
+                    "composer-tools",
+                    state.bars.entry("composer-tools").or_default(),
+                    &[
+                        ("Model", false, true),
+                        ("Effort", false, true),
+                        ("Stop", false, true),
+                    ],
+                ) {
+                    Some(0) => actions.push(Action::Command("model".into())),
+                    Some(1) => actions.push(Action::Command("effort".into())),
+                    Some(2) => actions.push(Action::Stop),
+                    _ => {}
                 }
-                if compact {
-                    ctx.spacer();
-                } else {
-                    ctx.text("↵ newline · Ctrl↵ / Ctrl+] send")
-                        .dim()
-                        .truncate()
-                        .grow(1);
-                }
-                if ctx.button("Stop").clicked {
-                    actions.push(Action::Stop);
-                }
-                let disabled =
-                    state.active_key.is_empty() || state.composer.value().trim().is_empty();
-                if ctx
-                    .disabled(disabled, |ctx| {
-                        ctx.button("Send").variant(ButtonVariant::Primary).show()
-                    })
-                    .clicked
-                {
+                ctx.spacer();
+                ctx.register_focusable_named("composer-send");
+                if primary_button(ctx, "Send", can_send).clicked {
                     actions.push(Action::Send);
                     ctx.focus_by_name("composer");
                     ctx.request_frame();
                 }
             });
         });
-}
-
-fn draw_attention(
-    ctx: &mut Context,
-    state: &mut SurfaceState,
-    height: u32,
-    actions: &mut Vec<Action>,
-) {
-    let mut projects: BTreeMap<String, (String, String, usize)> = BTreeMap::new();
-    for source in &state.projects {
-        projects.entry(source.project_key()).or_insert((
-            source.project.clone(),
-            source.environment_label.clone(),
-            0,
-        ));
-    }
-    for question in &state.questions {
-        let entry = projects.entry(question.source.project_key()).or_insert((
-            question.source.project.clone(),
-            question.source.environment_label.clone(),
-            0,
-        ));
-        entry.2 += 1;
-    }
-    if state.retained_question.as_ref().map(|q| &q.key) != state.selected_question.as_ref() {
-        state.retained_question = state
-            .selected_question
-            .as_deref()
-            .and_then(|key| state.questions.iter().find(|q| q.key == key))
-            .cloned();
-    }
-    let geometry = reports::Geometry {
-        width: ctx.width().saturating_sub(32).max(1),
-        height: height.saturating_sub(11).max(3),
-    };
-    ctx.container().grow(1).row(|ctx| {
-        ctx.container().w(28).col(|ctx| {
-            ctx.scrollable(&mut state.attention_scroll)
-                .grow(1)
-                .border(Border::Rounded)
-                .title("Questions")
-                .col(|ctx| {
-                    for (project, (name, environment, count)) in &projects {
-                        if *count == 0 {
-                            continue;
-                        }
-                        ctx.text(format!("{name} · {environment} · {count}"))
-                            .bold()
-                            .fg(identity_color(project));
-                        for question in state
-                            .questions
-                            .iter()
-                            .filter(|q| &q.source.project_key() == project)
-                        {
-                            ctx.register_focusable_named(&format!("question:{}", question.key));
-                            if ctx.button(&question.title).clicked {
-                                state.selected_project = Some(project.clone());
-                                state.selected_question = Some(question.key.clone());
-                                state.retained_question = Some(question.clone());
-                                actions.push(Action::InspectQuestion(question.clone()));
-                            }
-                        }
-                    }
-                    if state.questions.is_empty() {
-                        ctx.text("No loaded questions").dim();
-                    }
-                });
-            // B1: level changes retain this region and the selected report.
-            let graph_height = (height / 3).clamp(6, 11);
-            ctx.container()
-                .h(graph_height)
-                .border(Border::Rounded)
-                .title("Projects")
-                .col(|ctx| {
-                    if !state.graph_global && ctx.button("↑ All projects").clicked {
-                        state.graph_global = true;
-                    }
-                    let mut sources = state.projects.clone();
-                    for question in &state.questions {
-                        if !sources
-                            .iter()
-                            .any(|source| source.project_key() == question.source.project_key())
-                        {
-                            sources.push(question.source.clone());
-                        }
-                    }
-                    let mut nodes = Vec::new();
-                    let mut edges = Vec::new();
-                    for source in &sources {
-                        if !state.graph_global
-                            && state.selected_project.as_deref() != Some(&source.project_key())
-                        {
-                            continue;
-                        }
-                        let project_id = project_node(source);
-                        nodes.push(project_graph::Node {
-                            id: project_id.clone(),
-                            label: source.project.clone(),
-                            color: identity_color(&source.project_key()),
-                        });
-                        if !state.graph_global {
-                            for question in state.questions.iter().filter(|question| {
-                                question.source.project_key() == source.project_key()
-                            }) {
-                                let id = question_node(question);
-                                nodes.push(project_graph::Node {
-                                    id: id.clone(),
-                                    label: question.title.clone(),
-                                    color: identity_color(&source.project_key()),
-                                });
-                                edges.push(project_graph::Edge {
-                                    from: project_id.clone(),
-                                    to: id,
-                                });
-                            }
-                        }
-                    }
-                    let selected = if state.graph_global {
-                        sources
-                            .iter()
-                            .find(|source| {
-                                state.selected_project.as_deref() == Some(&source.project_key())
-                            })
-                            .map(project_node)
-                    } else {
-                        state
-                            .questions
-                            .iter()
-                            .find(|question| {
-                                Some(&question.key) == state.selected_question.as_ref()
-                            })
-                            .map(question_node)
-                    };
-                    match state.project_graph.draw(
-                        ctx,
-                        &nodes,
-                        &edges,
-                        selected.as_ref(),
-                        26,
-                        graph_height.saturating_sub(if state.graph_global { 2 } else { 3 }),
-                    ) {
-                        Ok(response) => {
-                            if let Some(activated) = response.activated {
-                                match activated {
-                                    project_graph::NodeId::Project {
-                                        environment_id,
-                                        project_id,
-                                    } => {
-                                        let key = format!("{environment_id}\0{project_id}");
-                                        if state.selected_project.as_ref() != Some(&key) {
-                                            let question = state
-                                                .questions
-                                                .iter()
-                                                .find(|question| {
-                                                    question.source.project_key() == key
-                                                })
-                                                .cloned();
-                                            state.selected_question = question
-                                                .as_ref()
-                                                .map(|question| question.key.clone());
-                                            state.retained_question = question.clone();
-                                            if let Some(question) = question {
-                                                actions.push(Action::InspectQuestion(question));
-                                            }
-                                        }
-                                        state.selected_project = Some(key);
-                                        state.graph_global = false;
-                                    }
-                                    id @ project_graph::NodeId::Question { .. } => {
-                                        if let Some(question) = state
-                                            .questions
-                                            .iter()
-                                            .find(|question| question_node(question) == id)
-                                        {
-                                            state.selected_project =
-                                                Some(question.source.project_key());
-                                            state.selected_question = Some(question.key.clone());
-                                            state.retained_question = Some(question.clone());
-                                            actions.push(Action::InspectQuestion(question.clone()));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            ctx.text(error.to_string()).fg(tailwind::AMBER.c300).wrap();
-                        }
-                    }
-                });
-        });
-        ctx.container()
-            .grow(1)
-            .border(Border::Rounded)
-            .p(1)
-            .col(|ctx| {
-                let selected = state.retained_question.as_ref();
-                if let Some(question) = selected {
-                    let current = state.questions.iter().find(|live| live.key == question.key);
-                    let unchanged = current.is_some_and(|live| {
-                        live.request == question.request && live.source == question.source
-                    });
-                    ctx.text(&question.title).bold();
-                    source_tags(ctx, &question.source);
-                    if !state.dependency_status.is_empty() {
-                        ctx.text(&state.dependency_status).dim().wrap();
-                    }
-                    ctx.text(&question.summary).wrap();
-                    if !unchanged {
-                        ctx.text(if current.is_some() {
-                            "Source changed · select question again"
-                        } else {
-                            "Source unavailable"
-                        })
-                        .fg(tailwind::AMBER.c300)
-                        .wrap();
-                    }
-                    ctx.row(|ctx| {
-                        if ctx
-                            .disabled(!unchanged, |ctx| {
-                                ctx.button("Answer").variant(ButtonVariant::Primary).show()
-                            })
-                            .clicked
-                        {
-                            actions.push(Action::Answer(question.clone()));
-                        }
-                        if ctx.button("Open in A").clicked {
-                            actions.push(Action::OpenSource(question.source.clone()));
-                            state.attention_mode = false;
-                        }
-                    });
-                    ctx.separator();
-                    ctx.scrollable(&mut state.support_scroll)
-                        .grow(1)
-                        .title("Supporting content")
-                        .col(|ctx| {
-                            if question.supporting_truncated {
-                                ctx.text("Excerpt").dim();
-                            }
-                            state.reports.draw(
-                                ctx,
-                                &question.supporting_source_key,
-                                &question.supporting_revision,
-                                &question.supporting_markdown,
-                                geometry,
-                            );
-                        });
-                } else {
-                    ctx.text(if state.selected_project.is_some() {
-                        "No loaded questions"
-                    } else {
-                        "Choose a question"
-                    })
-                    .dim();
-                }
-            });
-    });
-}
-
-fn project_node(source: &Source) -> project_graph::NodeId {
-    project_graph::NodeId::Project {
-        environment_id: source.environment.clone(),
-        project_id: source.project_id.clone(),
-    }
-}
-fn question_node(question: &AttentionItem) -> project_graph::NodeId {
-    project_graph::NodeId::Question {
-        environment_id: question.source.environment.clone(),
-        project_id: question.source.project_id.clone(),
-        thread_id: question.source.thread.clone(),
-        request_id: domain::string(&question.request, "id"),
-    }
 }
 
 fn source_tags(ctx: &mut Context, source: &Source) {
@@ -997,107 +1285,6 @@ fn source_tags(ctx: &mut Context, source: &Source) {
         ctx.text(&source.project)
             .fg(identity_color(&source.project_key()));
     });
-}
-
-fn draw_modal(
-    ctx: &mut Context,
-    modal: &ui::Modal,
-    legacy: &mut TextArea<'static>,
-    state: &mut SurfaceState,
-    actions: &mut Vec<Action>,
-) {
-    sync_editor(&mut state.modal_editor, legacy);
-    let layout_changed = state.modal_stamp != Some(modal.action_stamp);
-    if layout_changed {
-        state.modal_selected = modal.selected;
-        ctx.request_frame();
-    }
-    let palette = modal.editor && modal.title == "Commands";
-    ctx.modal(|ctx| {
-        let width = ctx.width().saturating_sub(8).clamp(30, 90);
-        let height = ctx.height().saturating_sub(4);
-        let background = ctx.theme().bg;
-        ctx.group("t3oxide.modal")
-            .bg(background)
-            .w(width)
-            .max_h(height)
-            .p(1)
-            .col(|ctx| {
-                ctx.row(|ctx| {
-                    ctx.text(&modal.title).bold().grow(1);
-                    if ctx.button("×").clicked && !layout_changed {
-                        actions.push(Action::CloseModal);
-                    }
-                });
-                if !modal.description.is_empty() {
-                    ctx.text(&modal.description).wrap();
-                }
-                if modal.editor {
-                    let focused = ctx.register_focusable_named("modal-editor");
-                    palette_keys(
-                        ctx,
-                        focused && (!layout_changed || palette),
-                        palette,
-                        modal,
-                        state,
-                        actions,
-                    );
-                    if ctx
-                        .disabled(layout_changed && !palette, |ctx| {
-                            ctx.textarea(&mut state.modal_editor, 3)
-                        })
-                        .changed
-                    {
-                        *legacy = ui::editor(&state.modal_editor.value(), "violet", "Type here…");
-                        actions.push(Action::ModalEditChanged);
-                    }
-                    if ctx
-                        .button("Continue")
-                        .variant(ButtonVariant::Primary)
-                        .clicked
-                        && !layout_changed
-                    {
-                        actions.push(Action::ModalSubmit);
-                    }
-                }
-                let detail_height = ctx.height().saturating_sub(13).max(3);
-                ctx.scrollable(&mut state.modal_scroll)
-                    .max_h(detail_height)
-                    .col(|ctx| {
-                        if !modal.detail.is_empty() {
-                            ctx.markdown(&modal.detail);
-                        }
-                        for (index, item) in modal.items.iter().enumerate() {
-                            let variant =
-                                if item.checked || palette && index == state.modal_selected {
-                                    ButtonVariant::Primary
-                                } else {
-                                    ButtonVariant::Default
-                                };
-                            ctx.register_focusable_named(&format!(
-                                "modal-choice:{}:{index}",
-                                modal.action_stamp
-                            ));
-                            if ctx.button(&item.label).variant(variant).clicked && !layout_changed {
-                                actions.push(Action::ModalChoice(index));
-                            }
-                            if !item.description.is_empty() {
-                                ctx.text(&item.description).dim().wrap();
-                            }
-                        }
-                    });
-                if !modal.footer.is_empty() {
-                    ctx.text(&modal.footer).dim().wrap();
-                }
-            });
-    });
-    if state.modal_stamp != Some(modal.action_stamp) {
-        state.modal_stamp = Some(modal.action_stamp);
-        state.modal_scroll = ScrollState::new();
-        if modal.editor {
-            ctx.focus_by_name("modal-editor");
-        }
-    }
 }
 
 // The focused widget owns this key layer before textarea's editing handler.
@@ -1125,7 +1312,11 @@ fn composer_keys(
         Vec::new()
     };
     let mut consumed = Vec::new();
-    for (index, key) in ctx.key_presses_when(focused) {
+    let keys: Vec<_> = ctx
+        .key_presses_when(focused)
+        .map(|(index, key)| (index, key.clone()))
+        .collect();
+    for (index, key) in keys {
         if send_key(&key.code, key.modifiers)
             && !(key.code == KeyCode::Enter && !completion.is_empty())
         {
@@ -1139,19 +1330,23 @@ fn composer_keys(
                     state.command_escape = Some(state.composer.value());
                     state.command_open = false;
                     consumed.push(index);
+                    ctx.request_frame();
                 }
                 KeyCode::Up => {
                     state.command_selected = state.command_selected.saturating_sub(1);
                     consumed.push(index);
+                    ctx.request_frame();
                 }
                 KeyCode::Down => {
                     state.command_selected = (state.command_selected + 1).min(completion.len() - 1);
                     consumed.push(index);
+                    ctx.request_frame();
                 }
                 KeyCode::Esc => {
                     state.command_escape = Some(state.composer.value());
                     state.command_open = false;
                     consumed.push(index);
+                    ctx.request_frame();
                 }
                 _ => {}
             }
@@ -1159,53 +1354,6 @@ fn composer_keys(
     }
     for index in consumed {
         ctx.consume_event(index);
-    }
-}
-
-fn palette_keys(
-    ctx: &mut Context,
-    focused: bool,
-    palette: bool,
-    modal: &ui::Modal,
-    state: &mut SurfaceState,
-    actions: &mut Vec<Action>,
-) {
-    if focused && !palette {
-        let submit: Vec<_> = ctx
-            .key_presses_when(true)
-            .filter(|(_, key)| send_key(&key.code, key.modifiers))
-            .map(|(index, _)| index)
-            .collect();
-        for index in submit {
-            ctx.consume_event(index);
-            actions.push(Action::ModalSubmit);
-        }
-    }
-    if palette && focused {
-        let mut consumed = Vec::new();
-        for (index, key) in ctx.key_presses_when(focused) {
-            match key.code {
-                KeyCode::Enter if !modal.items.is_empty() => {
-                    actions.push(Action::ModalChoice(
-                        state.modal_selected.min(modal.items.len() - 1),
-                    ));
-                    consumed.push(index);
-                }
-                KeyCode::Up => {
-                    state.modal_selected = state.modal_selected.saturating_sub(1);
-                    consumed.push(index);
-                }
-                KeyCode::Down => {
-                    state.modal_selected =
-                        (state.modal_selected + 1).min(modal.items.len().saturating_sub(1));
-                    consumed.push(index);
-                }
-                _ => {}
-            }
-        }
-        for index in consumed {
-            ctx.consume_event(index);
-        }
     }
 }
 
@@ -1236,11 +1384,63 @@ fn global_actions(
             KeyCode::F(1) => Some(Action::Command("help".into())),
             KeyCode::F(2) if !modal => {
                 state.attention_mode = !state.attention_mode;
+                consumed.push(index);
+                ctx.request_frame();
+                None
+            }
+            KeyCode::F(3) if !modal => {
+                toggle_sidebar(state, ctx.width());
+                consumed.push(index);
+                ctx.request_frame();
+                None
+            }
+            KeyCode::F(4) if !modal => {
+                state.show_context = !state.show_context;
+                consumed.push(index);
+                ctx.request_frame();
+                None
+            }
+            KeyCode::F(6) if !modal => {
+                let mut panes = if state.attention_mode {
+                    vec!["attention-list", "project-navigation", "attention-content"]
+                } else {
+                    let mut names = Vec::new();
+                    if !state.sidebar_hidden.unwrap_or(ctx.width() < 78) {
+                        names.push("navigator");
+                    }
+                    names.extend(["transcript", "composer"]);
+                    names
+                };
+                if state.show_context {
+                    panes.push("context");
+                }
+                let current = ctx
+                    .focused_name()
+                    .and_then(|name| panes.iter().position(|pane| *pane == name));
+                let next = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    current
+                        .unwrap_or(0)
+                        .checked_sub(1)
+                        .unwrap_or(panes.len() - 1)
+                } else {
+                    current.map_or(0, |index| (index + 1) % panes.len())
+                };
+                ctx.focus_by_name(panes[next]);
+                consumed.push(index);
+                ctx.request_frame();
                 None
             }
             KeyCode::Esc if modal => Some(Action::CloseModal),
             KeyCode::Esc => {
-                ctx.focus_by_name("navigator");
+                ctx.focus_by_name(if state.attention_mode {
+                    "attention-list"
+                } else if state.sidebar_hidden.unwrap_or(ctx.width() < 78) {
+                    "composer"
+                } else {
+                    "navigator"
+                });
+                consumed.push(index);
+                ctx.request_frame();
                 None
             }
             _ => None,
@@ -1276,12 +1476,23 @@ fn completion_indices(text: &str, escaped: Option<&str>) -> Vec<usize> {
     if query.contains(char::is_whitespace) {
         return Vec::new();
     }
-    domain::ACTIONS
+    let mut indices: Vec<_> = domain::ACTIONS
         .iter()
         .enumerate()
         .filter(|(_, action)| action.name.starts_with(&query))
         .map(|(index, _)| index)
-        .collect()
+        .collect();
+    const PRIORITY: &[&str] = &[
+        "new", "search", "model", "requests", "views", "refresh", "pin", "latest", "recover",
+        "help",
+    ];
+    indices.sort_by_key(|index| {
+        PRIORITY
+            .iter()
+            .position(|name| *name == domain::ACTIONS[*index].name)
+            .unwrap_or(PRIORITY.len())
+    });
+    indices
 }
 
 fn send_key(code: &KeyCode, modifiers: KeyModifiers) -> bool {
@@ -1311,6 +1522,517 @@ fn identity_color(identity: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Cells(slt::Buffer);
+
+    impl slt::Backend for Cells {
+        fn size(&self) -> (u32, u32) {
+            (self.0.area.width, self.0.area.height)
+        }
+        fn buffer_mut(&mut self) -> &mut slt::Buffer {
+            &mut self.0
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The public SLT frame path with a real geometry change and retained focus/layout state.
+    pub(super) struct ResizableBackend {
+        cells: Cells,
+        state: slt::AppState,
+        config: slt::RunConfig,
+    }
+
+    impl ResizableBackend {
+        pub(super) fn new(width: u32, height: u32) -> Self {
+            Self {
+                cells: Cells(slt::Buffer::empty(slt::Rect::new(0, 0, width, height))),
+                state: slt::AppState::new(),
+                config: slt::RunConfig::default(),
+            }
+        }
+        pub(super) fn with_activation_boundaries(mut self) -> Self {
+            self.config = self.config.activation_boundaries(true);
+            self
+        }
+        pub(super) fn render(&mut self, draw: impl FnMut(&mut Context)) {
+            self.run_with_events(Vec::new(), draw);
+        }
+        pub(super) fn run_with_events(
+            &mut self,
+            events: Vec<slt::Event>,
+            mut draw: impl FnMut(&mut Context),
+        ) {
+            for event in &events {
+                if let slt::Event::Resize(width, height) = *event {
+                    self.cells.0.resize(slt::Rect::new(0, 0, width, height));
+                }
+            }
+            self.cells.0.reset();
+            slt::frame_owned(
+                &mut self.cells,
+                &mut self.state,
+                &self.config,
+                events,
+                &mut draw,
+            )
+            .unwrap();
+        }
+        fn line(&self, y: u32) -> String {
+            (0..self.cells.0.area.width)
+                .map(|x| self.cells.0.get(x, y).symbol.as_str())
+                .collect()
+        }
+        pub(super) fn text(&self) -> String {
+            (0..self.cells.0.area.height)
+                .map(|y| self.line(y))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        pub(super) fn find_text(&self, expected: &str) -> Option<(u32, u32)> {
+            (0..self.cells.0.area.height).find_map(|y| {
+                let line = self.line(y);
+                line.find(expected).map(|byte| {
+                    (
+                        unicode_width::UnicodeWidthStr::width(&line[..byte]) as u32,
+                        y,
+                    )
+                })
+            })
+        }
+        pub(super) fn assert_contains(&self, expected: &str) {
+            assert!(
+                self.find_text(expected).is_some(),
+                "missing {expected:?}:\n{}",
+                self.text()
+            );
+        }
+        pub(super) fn assert_not_contains(&self, expected: &str) {
+            assert!(
+                self.find_text(expected).is_none(),
+                "unexpected {expected:?}:\n{}",
+                self.text()
+            );
+        }
+    }
+
+    const PHYSICAL_PASTE_DRAFT: &str = concat!(
+        "Review the release scope with the original request preserved. Keep the current source ",
+        "and the next action visible while this sentence wraps inside the actual editor pane.\n",
+        "Unicode: café 日本語.\n",
+        "Long_token_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789"
+    );
+
+    #[test]
+    fn shared_control_roles_and_tabs_keep_focus_separate_from_persistent_selection() {
+        let mut backend = slt::TestBackend::new(80, 12);
+        let mut tabs = TabsState::new(vec!["First thread", "Second thread"]);
+        let mut bar = 0;
+        let mut focus = None;
+        let mut activations = Vec::new();
+        let mut callback = |ctx: &mut Context| {
+            action_bar(
+                ctx,
+                "toolbar-controls",
+                &mut bar,
+                &[("Search", false, true), ("Commands", false, true)],
+            );
+            ctx.register_focusable_named("tabs");
+            if quiet_tabs(ctx, &mut tabs).changed {
+                activations.push(tabs.selected);
+            }
+            ctx.register_focusable_named("action");
+            secondary_button(ctx, "Save");
+            focus = ctx.focused_name().map(str::to_owned);
+        };
+        for _ in 0..3 {
+            backend.render(&mut callback);
+        }
+        backend.assert_not_contains("[ First thread ]");
+        let (x, y) = backend.find_text("First thread").unwrap();
+        let initial = backend.buffer().get(x, y).style;
+        assert!(!initial.modifiers.contains(slt::Modifiers::BOLD));
+        backend.run_with_events(
+            slt::EventBuilder::new().key_code(KeyCode::Tab).build(),
+            &mut callback,
+        );
+        backend.render(&mut callback);
+        drop(callback);
+        // The tab composite has one focusable slot; no per-title stops.
+        assert_eq!(focus.as_deref(), Some("tabs"));
+        assert!(activations.is_empty());
+        assert_eq!(tabs.selected, 0);
+    }
+
+    #[test]
+    fn primary_actions_paint_explicit_contrasting_text_and_keep_disabled_guard() {
+        for name in ["violet", "cyan", "lime", "light", "terminal", "nord"] {
+            let theme = surface_theme(name);
+            let mut backend = slt::TestBackend::new(40, 8);
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    ctx.set_theme(theme);
+                    primary_button(ctx, "Submit", true);
+                    primary_button(ctx, "Unavailable", false);
+                });
+            }
+            let (x, y) = backend.find_text("Submit").unwrap();
+            let style = backend.buffer().get(x, y).style;
+            assert_eq!(style.fg, Some(theme.selected_fg), "{name}");
+            assert_eq!(style.bg, Some(theme.primary), "{name}");
+            assert_ne!(style.fg, Some(Color::Reset), "{name}");
+            let (x, y) = backend.find_text("Unavailable").unwrap();
+            assert_ne!(backend.buffer().get(x, y).style.bg, style.bg, "{name}");
+            let mut activated = false;
+            backend.run_with_events(slt::EventBuilder::new().click(x, y).build(), |ctx| {
+                ctx.set_theme(theme);
+                primary_button(ctx, "Submit", true);
+                activated = primary_button(ctx, "Unavailable", false).clicked;
+            });
+            assert!(!activated, "{name} disabled action");
+        }
+    }
+
+    #[test]
+    fn search_scope_uses_the_actual_browsing_identity_and_keeps_human_names() {
+        let mut state = SurfaceState::new();
+        state.projects = vec![Source {
+            environment: "native-0".into(),
+            environment_label: "Build".into(),
+            project_id: "project-a".into(),
+            project: "Release".into(),
+            ..Default::default()
+        }];
+        let view = ui::View {
+            inspector: vec![(
+                "Browsing".into(),
+                "native-0 / project-a · High or higher".into(),
+            )],
+            ..Default::default()
+        };
+        assert_eq!(
+            browsing_scope(&view, &state),
+            "Build · Release · High or higher"
+        );
+        state.source = Some(Source {
+            project: "Other active source".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            browsing_scope(&view, &state),
+            "Build · Release · High or higher"
+        );
+    }
+
+    #[test]
+    fn sidebar_resize_keeps_default_width_and_restores_an_explicit_native_drag() {
+        let mut backend = ResizableBackend::new(140, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "environment/thread".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor("retained draft", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        let mut sidebar = None;
+        for (width, height) in [(140, 38), (86, 31), (140, 38)] {
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    sidebar = ctx.measured_layout_rect("t3oxide.navigator");
+                });
+            }
+            assert_eq!(
+                sidebar.unwrap().width,
+                30,
+                "default sidebar at {width}x{height}"
+            );
+        }
+        let rect = sidebar.unwrap();
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .click(rect.right(), rect.y + 5)
+                .drag(50, rect.y + 5)
+                .mouse_up(50, rect.y + 5)
+                .build(),
+            |ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            },
+        );
+        let preferred = state
+            .sidebar_width
+            .expect("native drag sets the cell preference");
+        assert!(preferred >= 48, "drag changed the narrow default");
+        backend.render(|ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            ctx.focus_by_name("composer");
+        });
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        for (width, height) in [(86, 31), (70, 22), (40, 12), (140, 38)] {
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    assert_eq!((ctx.width(), ctx.height()), (width, height));
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            let mut focused = Vec::new();
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    sidebar = ctx.measured_layout_rect("t3oxide.navigator");
+                    focused.push(ctx.focused_name().map(str::to_owned));
+                });
+            }
+            assert_eq!(
+                focused.last().unwrap().as_deref(),
+                Some("composer"),
+                "{width}x{height}: {focused:?}"
+            );
+            assert_eq!(state.sidebar_width, Some(preferred));
+            assert_eq!(editor.lines().join("\n"), "retained draft");
+            if width == 140 {
+                assert_eq!(sidebar.unwrap().width, preferred);
+            }
+        }
+        let (x, y) = backend
+            .find_text("Env")
+            .expect("resized navigator's actual action target");
+        let mut actions = Vec::new();
+        backend.run_with_events(slt::EventBuilder::new().click(x, y).build(), |ctx| {
+            actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        assert!(matches!(actions.as_slice(), [Action::Command(name)] if name == "env"));
+        for hidden in [true, false] {
+            backend.run_with_events(
+                slt::EventBuilder::new().key_code(KeyCode::F(3)).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    sidebar = ctx.measured_layout_rect("t3oxide.navigator");
+                });
+            }
+            assert_eq!(state.sidebar_hidden, Some(hidden));
+            assert_eq!(state.sidebar_width, Some(preferred));
+            if hidden {
+                backend.assert_not_contains("Unread");
+            } else {
+                assert_eq!(sidebar.unwrap().width, preferred);
+            }
+        }
+        assert_eq!(editor.lines().join("\n"), "retained draft");
+    }
+
+    #[test]
+    fn textarea_paste_growth_reveals_earlier_rows_without_moving_the_caret() {
+        let mut backend = ResizableBackend::new(80, 12);
+        let mut editor = TextareaState::new().word_wrap(76);
+        backend.render(|ctx| {
+            ctx.textarea(&mut editor, 2);
+        });
+        backend.run_with_events(
+            slt::EventBuilder::new().paste(PHYSICAL_PASTE_DRAFT).build(),
+            |ctx| {
+                ctx.textarea(&mut editor, 2);
+            },
+        );
+        assert_eq!(PHYSICAL_PASTE_DRAFT.len(), 283);
+        assert_eq!(
+            reports::content_revision(PHYSICAL_PASTE_DRAFT),
+            "sha256:11c3a0522c981bec97d78a649c7f43bea3409a94ce5cd83d02c62feeb9463f10"
+        );
+        assert_eq!(editor.value(), PHYSICAL_PASTE_DRAFT);
+        assert!(
+            editor.scroll_offset > 0,
+            "the initial two-row editor follows the paste caret"
+        );
+        let cursor = (editor.cursor_row, editor.cursor_col);
+        for _ in 0..3 {
+            let rows = editor.visual_line_count() as u32;
+            backend.render(|ctx| {
+                ctx.textarea(&mut editor, rows);
+            });
+        }
+        backend.assert_contains("Review the release scope");
+        backend.assert_contains("Unicode: café 日本語.");
+        assert_eq!(editor.scroll_offset, 0, "the whole draft now fits");
+        assert_eq!((editor.cursor_row, editor.cursor_col), cursor);
+        assert!(editor.selection().is_none());
+
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .key_with(KeyCode::Left, KeyModifiers::SHIFT)
+                .build(),
+            |ctx| {
+                ctx.textarea(&mut editor, 2);
+            },
+        );
+        let cursor = (editor.cursor_row, editor.cursor_col);
+        let selection = editor.selection();
+        for (width, rows) in [(45, 7), (36, 3), (76, 6)] {
+            editor.wrap_width = Some(width);
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width + 4, 12).build(),
+                |ctx| {
+                    ctx.textarea(&mut editor, rows);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    ctx.textarea(&mut editor, rows);
+                });
+            }
+            assert!(
+                editor.scroll_offset <= editor.visual_line_count().saturating_sub(rows as usize)
+            );
+            assert_eq!((editor.cursor_row, editor.cursor_col), cursor);
+            assert_eq!(editor.selection(), selection);
+            assert_eq!(editor.selected_text().as_deref(), Some("9"));
+            assert_eq!(editor.value(), PHYSICAL_PASTE_DRAFT);
+        }
+        backend.assert_contains("Review the release scope");
+        backend.assert_contains("Unicode: café 日本語.");
+        backend.assert_contains("012345678▎9");
+
+        editor.set_selection((1, 0), (1, 0));
+        editor.scroll_offset = 1;
+        backend.render(|ctx| {
+            ctx.textarea(&mut editor, 4);
+        });
+        assert_eq!(editor.scroll_offset, 1, "a valid viewport stays in place");
+        assert_eq!((editor.cursor_row, editor.cursor_col), (1, 0));
+    }
+
+    #[test]
+    fn composer_paste_grows_and_restores_all_rows_after_settled_resize() {
+        let mut backend = ResizableBackend::new(140, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/thread".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                ctx.focus_by_name("composer");
+            });
+        }
+        backend.run_with_events(
+            slt::EventBuilder::new().paste(PHYSICAL_PASTE_DRAFT).build(),
+            |ctx| {
+                let actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                assert!(actions.iter().all(|action| !matches!(action, Action::Send)));
+            },
+        );
+        let cursor = (state.composer.cursor_row, state.composer.cursor_col);
+        for (width, height) in [(140, 38), (86, 31), (70, 31), (70, 22), (140, 38)] {
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                });
+            }
+            assert_eq!(editor.lines().join("\n"), PHYSICAL_PASTE_DRAFT);
+            assert_eq!(state.composer.value(), PHYSICAL_PASTE_DRAFT);
+            assert_eq!(
+                (state.composer.cursor_row, state.composer.cursor_col),
+                cursor
+            );
+            assert!(state.composer.selection().is_none());
+            if width == 140 {
+                backend.assert_contains("Review the release scope");
+                backend.assert_contains("Unicode: café 日本語.");
+                backend.assert_contains("Long_token_");
+                assert_eq!(state.composer.scroll_offset, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn compact_resize_retains_draft_and_keeps_b_content_with_context() {
+        let draft = "alpha beta  日本語 👩‍💻\n".repeat(16);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/thread".into();
+        state.show_context = true;
+        state.tabs.push(Tab {
+            key: state.active_key.clone(),
+            title: "Conversation title".into(),
+            ..Tab::default()
+        });
+        let source = Source {
+            environment: "env".into(),
+            environment_label: "Env".into(),
+            project_id: "project".into(),
+            project: "Project".into(),
+            thread: "thread".into(),
+            ..Source::default()
+        };
+        state.contents.push(ContentItem {
+            key: "env/thread/report".into(),
+            source,
+            title: "Release guide".into(),
+            kind: "guide".into(),
+            markdown: "# Release guide\n\nReview the evidence.".into(),
+            revision: "rev".into(),
+            ..ContentItem::default()
+        });
+        let mut legacy = ui::editor(&draft, "violet", "");
+        let mut modal = ui::editor("", "violet", "");
+        let view = ui::View::default();
+        let mut backend = ResizableBackend::new(140, 38);
+        for (width, height) in [(140, 38), (70, 22), (40, 12), (140, 38)] {
+            state.attention_mode = false;
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut legacy, &mut modal, None, &mut state);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut legacy, &mut modal, None, &mut state);
+                });
+            }
+            backend.assert_contains("Prompt");
+            backend.assert_contains("Send");
+            assert_eq!(
+                legacy.lines().join("\n"),
+                draft,
+                "draft at {width}x{height}"
+            );
+            state.attention_mode = true;
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut legacy, &mut modal, None, &mut state);
+                });
+            }
+            backend.assert_contains("Projects");
+            backend.assert_contains("Release guide");
+            backend.assert_contains("Context");
+            assert_eq!(
+                attention::selected_content(&state).unwrap().key,
+                "env/thread/report"
+            );
+        }
+    }
 
     #[test]
     fn modal_open_requests_layout_and_focus_before_typing() {
@@ -1354,6 +2076,92 @@ mod tests {
             );
         });
         assert_eq!(modal_editor.lines().join("\n"), "command");
+    }
+
+    #[test]
+    fn copy_draft_chord_precedes_editor_copy_and_is_guarded_by_app_modals() {
+        let chord = KeyModifiers(KeyModifiers::CONTROL.0 | KeyModifiers::ALT.0);
+        let draft = "  café 日本語\nsecond line  \n\n";
+        let mut backend = slt::TestBackend::new(100, 31);
+        let mut state = SurfaceState::new();
+        state.active_key = "environment/current-thread".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor(draft, "violet", "");
+        let mut modal_editor = ui::editor("modal draft", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        for focus in ["composer", "navigator"] {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                assert!(ctx.focus_by_name(focus));
+            });
+            let cursor = (state.composer.cursor_row, state.composer.cursor_col);
+            let mut actions = Vec::new();
+            backend.run_with_events(
+                slt::EventBuilder::new()
+                    .key_with(KeyCode::Char('c'), chord)
+                    .build(),
+                |ctx| {
+                    actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    assert_eq!(ctx.focused_name(), Some(focus));
+                    assert!(
+                        !ctx.key_mod('c', chord),
+                        "whole-draft command claims the event"
+                    );
+                },
+            );
+            assert!(matches!(actions.as_slice(), [Action::Command(name)] if name == "copy-draft"));
+            assert_eq!(editor.lines().join("\n"), draft);
+            assert_eq!(
+                (state.composer.cursor_row, state.composer.cursor_col),
+                cursor
+            );
+            assert!(state.composer.selected_text().is_none());
+            assert_eq!(state.active_key, "environment/current-thread");
+        }
+        let modal = ui::Modal {
+            title: "Write answer".into(),
+            editor: true,
+            action_stamp: 7,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+            });
+        }
+        let mut actions = Vec::new();
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .key_with(KeyCode::Char('c'), chord)
+                .build(),
+            |ctx| {
+                actions = draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+            },
+        );
+        assert!(
+            actions.is_empty(),
+            "a modal never copies or changes the whole prompt"
+        );
+        assert_eq!(editor.lines().join("\n"), draft);
+        assert_eq!(modal_editor.lines().join("\n"), "modal draft");
     }
 
     #[test]
@@ -1439,15 +2247,7 @@ mod tests {
                 });
             }
             for label in [
-                "Unread",
-                "Running",
-                "Pins",
-                "Settled",
-                "Project",
-                "Env",
-                "Model · effort",
-                "Ctrl+] send",
-                "Stop",
+                "Unread", "Run", "Pins", "Settled", "Project", "Env", "Model", "Effort", "Stop",
                 "Send",
             ] {
                 backend.assert_contains(label);
@@ -1594,7 +2394,7 @@ mod tests {
 
     #[test]
     fn modal_clears_underlying_transcript_in_its_entire_rectangle() {
-        let mut backend = slt::TestBackend::new(110, 38);
+        let mut backend = slt::TestBackend::new(100, 32);
         let mut state = SurfaceState::new();
         let view = ui::View {
             messages: vec![ui::MessageView {
@@ -1637,6 +2437,14 @@ mod tests {
                     "underlay at {x},{y}"
                 );
             }
+        }
+        let divider = (99.0 * state.navigation_split.ratio).round() as u32;
+        for y in rect.y + 1..rect.y + rect.height - 1 {
+            assert_ne!(
+                backend.buffer().get(divider, y).symbol.as_str(),
+                "│",
+                "split handle painted through modal at {divider},{y}"
+            );
         }
     }
 
@@ -1689,10 +2497,10 @@ mod tests {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
         backend.render(|ctx| {
-            ctx.focus_by_name("question:remote/question");
+            ctx.focus_by_name("project-navigation");
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
-        backend.run_with_events(EventBuilder::new().key_code(KeyCode::Tab).build(), |ctx| {
+        backend.run_with_events(EventBuilder::new().build(), |ctx| {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
         backend.run_with_events(
@@ -1706,7 +2514,7 @@ mod tests {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
         let (x, y) = backend
-            .find_text("↑ All projects")
+            .find_text("All projects")
             .expect("same navigation region offers global return");
         backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
@@ -1775,7 +2583,7 @@ mod tests {
                 draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
             });
         }
-        backend.assert_contains("Questions");
+        backend.assert_contains("Forms");
         backend.assert_contains("Projects");
         backend.assert_contains("Answer");
         backend.assert_contains("Open in A");

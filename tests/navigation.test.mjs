@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {threadList,threadType} from '../adapter/navigation.mjs';
 import {lineage} from '../adapter/models.mjs';
 function thread(id,type=null,parent=null,status='idle') {return {id,title:id,projectId:'project',status,updatedAt:'2026-10-22T12:00:00Z',
+ latestRunId:status==='idle'?null:`run-${id}`,
  modelSelection:{model:'fixture'},lineage:{relationshipToParent:type,parentThreadId:parent,rootThreadId:parent??id}};}
 function shell(threads){return {threads,projects:[{id:'project',title:'Project'}]};}
 function ids(v){return v.threads.map(t=>t.id);}

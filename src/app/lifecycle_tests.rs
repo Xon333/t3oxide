@@ -137,6 +137,81 @@ impl Fixture {
         }
     }
 
+    fn surface_choice(&mut self, surface: &mut crate::slt_ui::SurfaceState, label: &str) {
+        let index = self
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .choices
+            .iter()
+            .position(|choice| choice.label == label)
+            .expect("native menu choice");
+        self.app
+            .surface_action(crate::slt_ui::Action::ModalChoice(index), surface)
+            .unwrap();
+    }
+
+    fn finish_effort_read(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let event = self
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("native effort catalog");
+            let complete = matches!(
+                &event,
+                Background::Read {
+                    kind: ReadKind::Effort(_),
+                    ..
+                }
+            );
+            self.app.handle(event).unwrap();
+            if complete {
+                break;
+            }
+        }
+    }
+
+    fn drain_context_work(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while self.app.context_has_work() {
+            let event = self
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("context worker completion");
+            self.app.handle(event).unwrap();
+        }
+    }
+
+    fn context_pack(&mut self, query: crate::context_store::Query) -> crate::context_store::Pack {
+        self.app
+            .context_action(context::Action::Recall(query))
+            .unwrap();
+        loop {
+            let event = self
+                .app
+                .rx
+                .recv_timeout(Duration::from_secs(8))
+                .expect("context recall completion");
+            let pack = match &event {
+                Background::Context(context_worker::Event::Finished(finished)) => {
+                    match &finished.result {
+                        Ok(context_worker::Output::Pack(pack)) => Some((**pack).clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            self.app.handle(event).unwrap();
+            if let Some(pack) = pack {
+                return pack;
+            }
+        }
+    }
+
     fn wait_native_effect(&self, profile: usize) {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -805,6 +880,1532 @@ fn synthetic_attachment(app: &mut App) {
 }
 
 #[test]
+fn surface_copy_draft_uses_the_active_prompt_without_selection_or_native_operations() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    fixture.app.tabs = vec![(0, "thread-a".into()), (1, "other-thread".into())];
+    fixture.app.threads = vec![
+        Thread::parse(
+            1,
+            json!({"id":"other-thread","title":"Highlighted elsewhere"}),
+        )
+        .unwrap(),
+    ];
+    fixture.app.visible = vec![(0, 0)];
+    fixture.app.selected = 0;
+    fixture.app.focus = Focus::Navigator;
+    fixture
+        .app
+        .state
+        .set_draft("native-0", "thread-a", "Older saved draft")
+        .unwrap();
+    fixture
+        .app
+        .state
+        .set_draft("native-1", "other-thread", "Other tab draft")
+        .unwrap();
+    let pending = json!({"id":"original-copy-test-operation","op":"answer","environmentId":"native-1","threadId":"other-thread","requestId":"other-request","revision":"a".repeat(64),"answers":{"choice":"Keep"}});
+    fixture
+        .app
+        .state
+        .save_pending("native-1", false, pending.clone())
+        .unwrap();
+    let saved = fixture.app.state.snapshot();
+    let tabs = fixture.app.tabs.clone();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    for exact in [
+        "\n \tRésumé 🙂 日本語 e\u{301}\n\nlast  \n\n",
+        " \t\n\n",
+        "",
+    ] {
+        fixture.app.replace_text(exact.into());
+        let draft_version = fixture.app.draft_version;
+        let save_at = fixture.app.save_at;
+        let cursor = fixture.app.composer.cursor();
+        fixture
+            .app
+            .surface_action(
+                crate::slt_ui::Action::Command("copy-draft".into()),
+                &mut surface,
+            )
+            .unwrap();
+        assert_eq!(fixture.app.clipboard_request.take().as_deref(), Some(exact));
+        assert_eq!(fixture.app.text(), exact);
+        assert_eq!(fixture.app.composer.cursor(), cursor);
+        assert_eq!(fixture.app.draft_version, draft_version);
+        assert_eq!(fixture.app.save_at, save_at);
+        assert_eq!(
+            fixture.app.draft_cache.lock().unwrap()["native-0/thread-a"].1,
+            exact
+        );
+        let active = fixture.app.active.as_ref().unwrap();
+        assert_eq!(
+            (active.profile, active.thread.as_str(), active.generation),
+            (0, "thread-a", 7)
+        );
+        assert!(
+            active.connection.is_none(),
+            "copy needs no native connection"
+        );
+        assert_eq!(fixture.app.tabs, tabs);
+        assert_eq!(fixture.app.selected_thread().unwrap().id, "other-thread");
+        assert_eq!(fixture.app.focus, Focus::Navigator);
+        assert_eq!(fixture.app.state.snapshot(), saved);
+        assert!(fixture.app.in_flight.lock().unwrap().is_empty());
+        assert!(fixture.app.rx.is_empty());
+    }
+    assert_eq!(fixture.app.state.pending("native-1", false), Some(pending));
+    assert!(fixture.native_states.iter().all(|path| !path.exists()));
+    let action = domain::ACTIONS
+        .iter()
+        .find(|action| action.name == "copy-draft")
+        .unwrap();
+    assert_eq!(action.label, "Copy draft");
+}
+
+#[test]
+fn closing_the_last_question_tab_preserves_answers_and_allows_navigation_and_quit() {
+    for dismiss_first in [false, true] {
+        let mut fixture = Fixture::new(0);
+        fixture.open_thread(0, "thread-question");
+        fixture
+            .app
+            .replace_text("Unsent original prompt 日本語  \n".into());
+        let active = fixture.app.active.as_mut().unwrap();
+        active.requests[0]["questions"][0]["allowCustomAnswer"] = json!(true);
+        let request = active.requests[0].clone();
+        let form =
+            crate::attention::Form::from_request("native-0", "thread-question", &request).unwrap();
+        fixture.app.review_request(request).unwrap();
+        fixture.app.edit_field(InputTarget::Question).unwrap();
+        let exact = "Fresh résumé 🙂\n日本語  \n  unfinished ";
+        fixture.app.modal_editor = ui::editor(exact, &fixture.app.theme, "");
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::ModalEditChanged, &mut surface)
+            .unwrap();
+        assert!(fixture.app.form_save_at.is_some());
+        if dismiss_first {
+            fixture
+                .app
+                .surface_action(crate::slt_ui::Action::CloseModal, &mut surface)
+                .unwrap();
+        }
+        assert_eq!(fixture.app.tabs, [(0, "thread-question".into())]);
+        let saved = fixture.app.state.snapshot();
+        let pending = (saved["pending"].clone(), saved["pendingStops"].clone());
+        fixture
+            .app
+            .surface_action(
+                crate::slt_ui::Action::CloseTab("0\0thread-question".into()),
+                &mut surface,
+            )
+            .unwrap();
+        assert!(fixture.app.active.is_none() && fixture.app.tabs.is_empty());
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            exact
+        );
+        assert_eq!(
+            fixture.app.state.draft("native-0", "thread-question"),
+            "Unsent original prompt 日本語  \n"
+        );
+        fixture
+            .app
+            .surface_action(
+                crate::slt_ui::Action::Command("palette".into()),
+                &mut surface,
+            )
+            .expect("a saved form cannot block actions after its last tab closes");
+        fixture
+            .app
+            .surface_action(
+                crate::slt_ui::Action::OpenSource(crate::slt_ui::Source {
+                    profile: 0,
+                    environment: "native-0".into(),
+                    thread: "thread-a".into(),
+                    ..Default::default()
+                }),
+                &mut surface,
+            )
+            .unwrap();
+        assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-a");
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::Command("quit".into()), &mut surface)
+            .unwrap();
+        fixture.app.drain_context().unwrap();
+        assert!(fixture.app.quit);
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            exact
+        );
+        let saved = fixture.app.state.snapshot();
+        assert_eq!(
+            (saved["pending"].clone(), saved["pendingStops"].clone()),
+            pending
+        );
+        assert!(fixture.app.in_flight.lock().unwrap().is_empty());
+        for path in &fixture.native_states {
+            if let Ok(bytes) = fs::read(path) {
+                let native: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(native["effects"].as_u64().unwrap_or(0), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn surface_palette_saves_the_latest_answer_before_replacing_its_editor() {
+    let mut fixture = Fixture::new(0);
+    fixture.open_thread(0, "thread-question");
+    let active = fixture.app.active.as_mut().unwrap();
+    active.requests[0]["questions"][0]["allowCustomAnswer"] = json!(true);
+    let request = active.requests[0].clone();
+    fixture.app.review_request(request.clone()).unwrap();
+    fixture.app.edit_field(InputTarget::Question).unwrap();
+    let freshest = "Résumé 🙂\n日本語  \n  unfinished ";
+    fixture.app.modal_editor = ui::editor(freshest, &fixture.app.theme, "");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalEditChanged, &mut surface)
+        .unwrap();
+    assert!(fixture.app.form_save_at.is_some());
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("palette".into()),
+            &mut surface,
+        )
+        .unwrap();
+    let form =
+        crate::attention::Form::from_request("native-0", "thread-question", &request).unwrap();
+    assert_eq!(
+        form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+        freshest
+    );
+    assert!(matches!(
+        fixture.app.dialog.as_ref().unwrap().kind,
+        DialogKind::Palette
+    ));
+    assert!(fixture.app.form_save_at.is_none());
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn surface_invalid_next_retains_the_question_dialog_and_focus() {
+    let mut fixture = Fixture::new(0);
+    fixture.open_thread(0, "thread-question");
+    let request = fixture.app.active.as_ref().unwrap().requests[0].clone();
+    fixture.app.review_request(request).unwrap();
+    let next = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .position(|choice| matches!(choice.intent, Intent::QuestionNext))
+        .unwrap();
+    fixture.app.dialog.as_mut().unwrap().selected = next;
+    let before = fixture.app.modal().unwrap();
+    let focus = fixture.app.focus;
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let error = fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalChoice(next), &mut surface)
+        .unwrap_err();
+    assert!(error.to_string().contains("requires an answer"), "{error}");
+    let after = fixture
+        .app
+        .modal()
+        .expect("invalid Next must keep the form open");
+    assert_eq!(after.action_stamp, before.action_stamp);
+    assert_eq!(after.selected, next);
+    assert_eq!(fixture.app.focus, focus);
+    assert_eq!(fixture.app.request_edit.as_ref().unwrap().index, 0);
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn reopening_requests_keeps_each_question_answer_and_review_uses_native_labels() {
+    let mut fixture = Fixture::new(0);
+    fixture.open_thread(0, "thread-question");
+    let active = fixture.app.active.as_mut().unwrap();
+    active.requests[0]["questions"] = json!([
+        {"id":"first-internal-id","header":"Release","question":"Which release?","required":true,
+            "options":[{"value":"stable-internal-value","label":"Stable release"}]},
+        {"id":"second-internal-id","header":"Notes","question":"What should accompany it?","required":true,"allowCustomAnswer":true}
+    ]);
+    let request = active.requests[0].clone();
+    fixture.app.review_request(request).unwrap();
+    fixture
+        .app
+        .question_option(json!("stable-internal-value"))
+        .unwrap();
+    fixture.app.question_next().unwrap();
+    fixture.app.edit_field(InputTarget::Question).unwrap();
+    let exact = "Résumé **literal**\n日本語  \n  unfinished ";
+    fixture.app.modal_editor = ui::editor(exact, &fixture.app.theme, "");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalEditChanged, &mut surface)
+        .unwrap();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("requests".into()),
+            &mut surface,
+        )
+        .unwrap();
+    let edit = fixture.app.request_edit.as_ref().unwrap();
+    assert_eq!(edit.answers["first-internal-id"], "stable-internal-value");
+    assert_eq!(edit.answers["second-internal-id"], exact);
+    assert_eq!(edit.index, 0);
+    for _ in 0..2 {
+        let next = fixture
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .choices
+            .iter()
+            .position(|choice| matches!(choice.intent, Intent::QuestionNext))
+            .unwrap();
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::ModalChoice(next), &mut surface)
+            .unwrap();
+    }
+    let review = &fixture.app.dialog.as_ref().unwrap().description;
+    assert_eq!(
+        review,
+        &format!(
+            "Release\nWhich release?\nStable release\n\nNotes\nWhat should accompany it?\n{exact}"
+        )
+    );
+    assert!(!review.contains("internal-id") && !review.contains("stable-internal-value"));
+    assert!(
+        fixture.app.state.pending_records().is_empty(),
+        "review never submits"
+    );
+}
+
+#[test]
+fn pending_question_inspection_cannot_replace_a_newer_selected_source() {
+    let mut fixture = Fixture::new(0);
+    fixture.open_thread(0, "thread-question");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    let old = surface.questions[0].clone();
+    let newer = crate::slt_ui::AttentionItem {
+        key: "newer-question".into(),
+        title: "New selection".into(),
+        ..old.clone()
+    };
+    surface.loading_question = Some(old.key);
+    surface.selected_question = Some(newer.key.clone());
+    surface.retained_question = Some(newer.clone());
+    fixture.app.populate_surface(&mut surface);
+    assert!(surface.loading_question.is_none());
+    assert_eq!(surface.retained_question.as_ref().unwrap().key, newer.key);
+}
+
+#[test]
+fn automatic_metadata_refresh_admits_new_attention_at_the_cache_bound_and_removes_complete_absences()
+ {
+    let mut fixture = Fixture::new(0);
+    fixture.app.hosts[0].page.threads = (0..1600)
+        .map(|index| {
+            Thread::parse(
+                0,
+                json!({
+                    "id":format!("old-{index:04}"),"title":"Earlier source","status":"idle",
+                    "inbox":{"activityAt":"2026-11-01T00:00:00Z","working":false}
+                }),
+            )
+            .unwrap()
+        })
+        .collect();
+    fixture.app.rebuild();
+    let selected = fixture.app.selected_thread().unwrap().id.clone();
+    fixture.app.hosts[0].refresh_loaded = true;
+    fixture.app.handle(Background::Page {profile:0,generation:0,append:false,result:Ok(json!({
+        "threads":[{"id":"new-attention","title":"New human question","status":"waiting", "inbox":{
+            "activityAt":"2026-11-05T00:00:00Z","attention":true,"working":false,
+            "pendingRequestId":"native-question","pendingRequestType":"user_input"}}],
+        "more":true,"nextCursor":200
+    }))}).unwrap();
+    assert_eq!(fixture.app.hosts[0].page.threads.len(), 1600);
+    assert!(
+        fixture
+            .app
+            .threads
+            .iter()
+            .any(|row| row.id == "new-attention" && row.running())
+    );
+    assert_eq!(fixture.app.selected_thread().unwrap().id, selected);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert!(
+        surface
+            .questions
+            .iter()
+            .any(|question| question.source.thread == "new-attention")
+    );
+    fixture.app.hosts[0].refresh_loaded = true;
+    fixture.app.hosts[0].request_cursor = 0;
+    fixture.app.handle(Background::Page {profile:0,generation:0,append:false,result:Ok(json!({
+        "threads":[{"id":selected,"title":"Retained selected source","status":"idle","inbox":{"working":false}}],
+        "more":false,"nextCursor":null
+    }))}).unwrap();
+    fixture.app.populate_surface(&mut surface);
+    assert_eq!(fixture.app.threads.len(), 1);
+    assert!(
+        surface.questions.is_empty(),
+        "complete authoritative removal retires phantom questions"
+    );
+}
+
+#[test]
+fn metadata_deadline_observes_unopened_other_host_questions_and_failures_without_input() {
+    let mut fixture = Fixture::new(0);
+    for profile in 0..2 {
+        let config_path = fixture
+            .directory
+            .path()
+            .join(format!("host-{profile}/host.json"));
+        let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+        config["fixture"]["persistInitialState"] = json!(true);
+        fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    }
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    fixture.app.replace_text("Exact unsent résumé 🙂".into());
+    fixture.app.flush_draft().unwrap();
+    fixture.drain_pages();
+    fixture.app.lane = "Running".into();
+    fixture.app.scope = Some(0);
+    fixture.app.rebuild();
+    let selected = fixture.app.selected_thread().map(Thread::key);
+    let original_source = fixture.app.draft_key();
+    let original_generation = fixture.app.generation;
+    let mut native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[1]).unwrap()).unwrap();
+    let mut question = native["projections"]["thread-question"].clone();
+    question["thread"]["id"] = json!("thread-review");
+    question["thread"]["title"] = json!("External question");
+    for item in question["turnItems"].as_array_mut().unwrap() {
+        item["threadId"] = json!("thread-review");
+    }
+    native["projections"]["thread-review"] = question;
+    native["projections"]["thread-fork"]["thread"]["status"] = json!("failed");
+    native["projections"]["thread-fork"]["runs"][0]["status"] = json!("failed");
+    native["projections"]["thread-fork"]["thread"]["latestRunCompletedAt"] =
+        json!("2026-11-05T10:00:00.000Z");
+    fs::write(
+        &fixture.native_states[1],
+        serde_json::to_vec(&native).unwrap(),
+    )
+    .unwrap();
+    let due = fixture.app.metadata_refresh_at;
+    let generations: Vec<_> = fixture
+        .app
+        .hosts
+        .iter()
+        .map(|host| host.generation)
+        .collect();
+    fixture.app.refresh_metadata_if_due(due);
+    assert!(
+        fixture
+            .app
+            .hosts
+            .iter()
+            .all(|host| host.loading && host.queued.is_none())
+    );
+    fixture
+        .app
+        .refresh_metadata_if_due(due + Duration::from_millis(1));
+    assert_eq!(
+        fixture
+            .app
+            .hosts
+            .iter()
+            .map(|host| host.generation)
+            .collect::<Vec<_>>(),
+        generations
+            .iter()
+            .map(|generation| generation + 1)
+            .collect::<Vec<_>>()
+    );
+    fixture.drain_pages();
+    for id in ["thread-review", "thread-fork"] {
+        assert!(
+            fixture
+                .app
+                .threads
+                .iter()
+                .any(|row| row.profile == 1 && row.id == id && row.running()),
+            "unopened {id} must update independently of the attached host"
+        );
+    }
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert!(
+        surface
+            .questions
+            .iter()
+            .any(|question| question.source.environment == "native-1"
+                && question.source.thread == "thread-review")
+    );
+    assert_eq!(fixture.app.selected_thread().map(Thread::key), selected);
+    assert_eq!(fixture.app.draft_key(), original_source);
+    assert_eq!(fixture.app.generation, original_generation);
+    assert_eq!(fixture.app.text(), "Exact unsent résumé 🙂");
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert_eq!(native["effects"], 0);
+}
+
+#[test]
+fn surface_search_starts_in_the_current_project_and_scope_switch_retains_query() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("search".into()),
+            &mut surface,
+        )
+        .unwrap();
+    assert!(matches!(
+        fixture.app.dialog.as_ref().unwrap().kind,
+        DialogKind::Text(InputTarget::Search)
+    ));
+    assert_eq!(
+        fixture.app.state.snapshot()["sltBrowserScope"],
+        json!({"profileId":"profile-0","environmentId":"native-0","projectId":"project-a"})
+    );
+    fixture.app.modal_editor = ui::editor("Exact unsent query", &fixture.app.theme, "");
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("search-scope".into()),
+            &mut surface,
+        )
+        .unwrap();
+    assert_eq!(fixture.app.search_query, "Exact unsent query");
+    let all = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .position(|choice| choice.label == "All projects")
+        .unwrap();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalChoice(all), &mut surface)
+        .unwrap();
+    assert_eq!(
+        fixture.app.modal_editor.lines().join("\n"),
+        "Exact unsent query"
+    );
+    assert!(fixture.app.state.snapshot()["sltBrowserScope"].is_null());
+}
+
+#[test]
+fn model_modal_roles_preserve_native_indices_and_cancel_only_the_child() {
+    use ui::{ModalItemRole as Role, ModelDialog};
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    let original = json!({"instanceId":"selected-account","model":"native-a","options":[
+        {"id":"native-effort","value":"high"}
+    ]});
+    fixture.app.model_edit = Some(ModelEdit {
+        environment_id: "native-0".into(),
+        scope: ModelScope::Next,
+        catalog: json!({"models":[
+            {"slug":"native-a","name":"Apply reviewed selection","options":[
+                {"id":"native-effort","label":"Save favorite","type":"select","options":[
+                    {"id":"low","label":"Apply reviewed selection"},
+                    {"id":"high","label":"Save favorite"}
+                ]}
+            ]},
+            {"slug":"native-b","name":"Save favorite","options":[]}
+        ]}),
+        original: original.clone(),
+        selection: original.clone(),
+    });
+    fixture.app.model_menu().unwrap();
+    let modal = fixture.app.modal().unwrap();
+    assert_eq!(modal.model, Some(ModelDialog::Configuration));
+    assert_eq!(modal.items.len(), 6);
+    assert_eq!(
+        modal.items[0].role,
+        Role::Model {
+            native_id: "native-a".into()
+        }
+    );
+    assert!(modal.items[0].checked && modal.items[0].applied);
+    assert_eq!(
+        modal.items[1].role,
+        Role::Model {
+            native_id: "native-b".into()
+        }
+    );
+    assert!(!modal.items[1].checked && !modal.items[1].applied);
+    assert_eq!(
+        modal.items[2].role,
+        Role::ModelOption {
+            id: "native-effort".into(),
+            label: "Save favorite".into(),
+            value: "high".into(),
+        }
+    );
+    assert!(modal.items[2].applied);
+    assert_eq!(modal.items[3].role, Role::ModelApply);
+    assert_eq!(modal.items[4].role, Role::ModelSave);
+    assert_eq!(modal.items[5].role, Role::ModelClear);
+    // A catalog replacement at the same controller index must invalidate UI geometry.
+    fixture.app.model_edit.as_mut().unwrap().catalog["models"][1]["slug"] = json!("replacement");
+    assert_ne!(
+        fixture.app.modal().unwrap().action_stamp,
+        modal.action_stamp
+    );
+    fixture.app.model_edit.as_mut().unwrap().catalog["models"][1]["slug"] = json!("native-b");
+
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalChoice(2), &mut surface)
+        .unwrap();
+    let values = fixture.app.modal().unwrap();
+    assert_eq!(
+        values.model,
+        Some(ModelDialog::OptionValues {
+            id: "native-effort".into()
+        })
+    );
+    assert!(values.items.iter().all(|item| item.role
+        == Role::ModelOptionValue {
+            id: "native-effort".into()
+        }));
+    assert!(values.items[2].checked && values.items[2].applied);
+    assert!(!values.items[1].checked && !values.items[1].applied);
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalChoice(1), &mut surface)
+        .unwrap();
+    let staged = fixture.app.model_edit.as_ref().unwrap().selection.clone();
+    assert_eq!(staged["options"][0]["value"], "low");
+    assert!(!fixture.app.modal().unwrap().items[2].applied);
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalChoice(2), &mut surface)
+        .unwrap();
+    let values = fixture.app.modal().unwrap();
+    assert!(values.items[1].checked && !values.items[1].applied);
+    assert!(!values.items[2].checked && values.items[2].applied);
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::CloseModal, &mut surface)
+        .unwrap();
+    assert_eq!(
+        fixture.app.modal().unwrap().model,
+        Some(ModelDialog::Configuration)
+    );
+    assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, staged);
+    assert!(fixture.app.state.pending_records().is_empty());
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalChoice(1), &mut surface)
+        .unwrap();
+    let modal = fixture.app.modal().unwrap();
+    assert!(modal.items[0].applied && !modal.items[0].checked);
+    assert!(modal.items[1].checked && !modal.items[1].applied);
+    assert!(
+        array(
+            &fixture.app.model_edit.as_ref().unwrap().selection,
+            "options"
+        )
+        .is_empty()
+    );
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::CloseModal, &mut surface)
+        .unwrap();
+    assert!(fixture.app.modal().is_none());
+    assert!(fixture.app.state.pending_records().is_empty());
+
+    fixture.app.menu(
+        "Model · provider text",
+        "",
+        vec![
+            Choice::new("Apply reviewed selection", "", Intent::Close),
+            Choice::new("Save favorite", "", Intent::Close),
+        ],
+    );
+    let unrelated = fixture.app.modal().unwrap();
+    assert!(unrelated.model.is_none());
+    assert!(unrelated.items.iter().all(|item| item.role == Role::Choice));
+}
+
+#[test]
+fn option_checked_value_is_independent_of_keyboard_selection_and_defaults() {
+    let mut fixture = Fixture::new(0);
+    let catalog = json!({"models":[{"slug":"model-a","options":[
+        {"id":"effort","type":"enum","options":[{"id":"low","label":"Low"},{"id":"high","label":"High"}]},
+        {"id":"enabled","type":"boolean"}
+    ]}]});
+    for (id, value, expected) in [
+        ("effort", json!("high"), "High"),
+        ("enabled", json!(false), "false"),
+        ("effort", Value::Null, "Native default"),
+    ] {
+        fixture.app.model_edit = Some(ModelEdit {
+            environment_id: "native-0".into(),
+            catalog: catalog.clone(),
+            scope: ModelScope::Current,
+            original: json!({"instanceId":"selected-account","model":"model-a"}),
+            selection: json!({"instanceId":"selected-account","model":"model-a","options":
+                if value.is_null() {json!([])} else {json!([{"id":id,"value":value}])}}),
+        });
+        fixture.app.choose_option(id).unwrap();
+        let modal = fixture.app.modal().unwrap();
+        assert_eq!(modal.selected, 0);
+        assert_eq!(
+            modal
+                .items
+                .iter()
+                .filter(|item| item.checked)
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            [expected]
+        );
+        assert_eq!(
+            fixture.app.model_edit.as_ref().unwrap().selection["instanceId"],
+            "selected-account"
+        );
+    }
+}
+
+#[test]
+fn surface_effort_opens_native_options_and_preserves_staged_model_until_apply() {
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("effort".into()),
+            &mut surface,
+        )
+        .unwrap();
+    fixture.finish_effort_read();
+    let modal = fixture.app.modal().unwrap();
+    assert_eq!(modal.title, "Reasoning");
+    assert_eq!(
+        modal
+            .items
+            .iter()
+            .filter(|item| item.checked)
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Medium"]
+    );
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().selection["instanceId"],
+        "fixture-provider"
+    );
+    fixture.surface_choice(&mut surface, "High");
+    let fast = array(&fixture.app.model_edit.as_ref().unwrap().catalog, "models")
+        .iter()
+        .position(|model| model["slug"] == "fixture-fast")
+        .unwrap();
+    fixture.app.choose_model(fast).unwrap();
+    let staged_model = fixture.app.model_edit.as_ref().unwrap().selection.clone();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("effort".into()),
+            &mut surface,
+        )
+        .unwrap();
+    fixture.finish_effort_read();
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().selection,
+        staged_model
+    );
+    assert_eq!(
+        fixture
+            .app
+            .modal()
+            .unwrap()
+            .items
+            .iter()
+            .filter(|item| item.checked)
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Native default"]
+    );
+    fixture.surface_choice(&mut surface, "High");
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("effort".into()),
+            &mut surface,
+        )
+        .unwrap();
+    fixture.finish_effort_read();
+    assert_eq!(
+        fixture
+            .app
+            .modal()
+            .unwrap()
+            .items
+            .iter()
+            .filter(|item| item.checked)
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["High"]
+    );
+    fixture.surface_choice(&mut surface, "Native default");
+    assert!(
+        array(
+            &fixture.app.model_edit.as_ref().unwrap().selection,
+            "options"
+        )
+        .is_empty()
+    );
+    assert!(
+        fixture.app.state.pending_records().is_empty(),
+        "choosing effort only stages the selection"
+    );
+    assert_eq!(
+        fixture.app.metadata()["modelSelection"]["model"],
+        "fixture-model"
+    );
+    fixture.surface_choice(&mut surface, "Apply reviewed selection");
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation {op,fields,result:Ok(_),..}
+        if op == "select-model" && fields["threadId"] == "thread-a"
+            && fields["modelSelection"]["instanceId"] == "fixture-provider"
+            && fields["modelSelection"]["model"] == "fixture-fast"
+            && array(&fields["modelSelection"], "options").is_empty())
+    );
+    fixture.app.handle(event).unwrap();
+}
+
+#[test]
+fn slt_model_picker_commits_only_the_reviewed_native_selection() {
+    fn input(
+        backend: &mut ::slt::TestBackend,
+        fixture: &mut Fixture,
+        surface: &mut crate::slt_ui::SurfaceState,
+        events: Vec<::slt::Event>,
+    ) {
+        backend.run_with_events(events, |ctx| fixture.draw_slt(ctx, surface));
+        for _ in 0..4 {
+            backend.render(|ctx| fixture.draw_slt(ctx, surface));
+        }
+        assert!(
+            !backend.has_pending_input(),
+            "all modal inputs were handled"
+        );
+    }
+    fn click(
+        backend: &mut ::slt::TestBackend,
+        fixture: &mut Fixture,
+        surface: &mut crate::slt_ui::SurfaceState,
+        label: &str,
+    ) {
+        let painted = backend.snapshot();
+        let (y, line) = painted
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(label))
+            .last()
+            .unwrap_or_else(|| panic!("visible modal control {label}:\n{painted}"));
+        let x = unicode_width::UnicodeWidthStr::width(&line[..line.find(label).unwrap()]);
+        input(
+            backend,
+            fixture,
+            surface,
+            ::slt::EventBuilder::new().click(x as u32, y as u32).build(),
+        );
+    }
+
+    for (width, height, keyboard_apply) in [(140, 38, false), (70, 22, true), (40, 12, false)] {
+        let mut fixture = Fixture::new(500);
+        let config_path = &fixture.app.environments[0].host_config;
+        let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+        config["fixture"]["persistInitialState"] = json!(true);
+        fs::write(config_path, config.to_string()).unwrap();
+        fixture.open(0);
+        let draft = "Exact 日本語 café e\u{301}  draft\n\n";
+        fixture.app.composer = ui::editor(draft, &fixture.app.theme, "");
+        fixture.app.flush_draft().unwrap();
+        let caret = fixture.app.composer.cursor();
+        let original = fixture.app.metadata()["modelSelection"].clone();
+        let native_before = fs::read(&fixture.native_states[0]).unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::Command("model".into()), &mut surface)
+            .unwrap();
+        while fixture.app.model_edit.is_none() {
+            let event = fixture.app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            fixture.app.handle(event).unwrap();
+        }
+        // A provider's display name may equal a client action. Keep its real native slug.
+        fixture.app.model_edit.as_mut().unwrap().catalog["models"][0]["name"] =
+            json!("Apply reviewed selection");
+        fixture.app.model_menu().unwrap();
+        let mut backend = ::slt::TestBackend::new(width, height)
+            .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+        input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        backend.assert_contains("Apply reviewed");
+        // The native model name collides with a former footer label. Space+Enter
+        // chooses that same native value without applying the configuration.
+        input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key(' ')
+                .key_code(::slt::KeyCode::Enter)
+                .build(),
+        );
+        assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, original);
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+        click(&mut backend, &mut fixture, &mut surface, "Apply reviewed");
+        backend.assert_contains("✓ Apply reviewed");
+        input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Down)
+                .key_code(::slt::KeyCode::Enter)
+                .build(),
+        );
+        let model_only = json!({"instanceId":"fixture-provider","model":"fixture-fast"});
+        assert_eq!(
+            fixture.app.model_edit.as_ref().unwrap().selection,
+            model_only
+        );
+        // Child dismissal consumes the batch instead of leaking Enter into Apply.
+        for key in [
+            ::slt::KeyCode::Tab,
+            ::slt::KeyCode::BackTab,
+            ::slt::KeyCode::Esc,
+        ] {
+            click(&mut backend, &mut fixture, &mut surface, "Reasoning");
+            assert!(matches!(fixture.app.modal().unwrap().model,
+                Some(ui::ModelDialog::OptionValues { ref id }) if id == "reasoningEffort"));
+            let followed_by_enter = key != ::slt::KeyCode::Esc;
+            let mut events = ::slt::EventBuilder::new().key_code(key);
+            if followed_by_enter {
+                events = events.key_code(::slt::KeyCode::Enter);
+            }
+            input(&mut backend, &mut fixture, &mut surface, events.build());
+            assert_eq!(
+                fixture.app.modal().unwrap().model,
+                Some(ui::ModelDialog::Configuration)
+            );
+            assert_eq!(
+                fixture.app.model_edit.as_ref().unwrap().selection,
+                model_only
+            );
+            assert!(fixture.app.state.pending_records().is_empty());
+            assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+        }
+        click(&mut backend, &mut fixture, &mut surface, "Reasoning");
+        assert!(fixture.app.modal().unwrap().items[0].checked);
+        input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::End)
+                .key_code(::slt::KeyCode::Enter)
+                .build(),
+        );
+        click(&mut backend, &mut fixture, &mut surface, "Speed");
+        input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::End)
+                .key_code(::slt::KeyCode::Enter)
+                .build(),
+        );
+        let staged = json!({"instanceId":"fixture-provider","model":"fixture-fast","options":[
+            {"id":"reasoningEffort","value":"high"},{"id":"serviceTier","value":"fast"}
+        ]});
+        assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, staged);
+        let modal = fixture.app.modal().unwrap();
+        assert_eq!(
+            modal
+                .items
+                .iter()
+                .filter(|item| item.checked)
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Fixture fast"]
+        );
+        assert_eq!(fixture.app.metadata()["modelSelection"], original);
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+        input(&mut backend, &mut fixture, &mut surface, Vec::new());
+
+        click(&mut backend, &mut fixture, &mut surface, "Speed");
+        click(&mut backend, &mut fixture, &mut surface, "Apply ↵");
+        assert_eq!(
+            fixture.app.modal().unwrap().model,
+            Some(ui::ModelDialog::Configuration)
+        );
+        assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, staged);
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+
+        if keyboard_apply {
+            click(&mut backend, &mut fixture, &mut surface, "Save favorite");
+        } else {
+            input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Tab)
+                    .key_code(::slt::KeyCode::Tab)
+                    .key(' ')
+                    .build(),
+            );
+        }
+        assert_eq!(fixture.app.modal().unwrap().title, "Save model favorite");
+        fixture.app.modal_editor = ui::editor("Reviewed favorite", &fixture.app.theme, "");
+        input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        click(&mut backend, &mut fixture, &mut surface, "Continue");
+        assert_eq!(
+            fixture.app.state.snapshot()["modelPresets"]["native-0"][0]["selection"],
+            staged
+        );
+        assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, staged);
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+
+        if keyboard_apply {
+            input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Tab)
+                    .key_code(::slt::KeyCode::Tab)
+                    .key_code(::slt::KeyCode::Tab)
+                    .key_code(::slt::KeyCode::Tab)
+                    .key_code(::slt::KeyCode::Enter)
+                    .build(),
+            );
+        } else {
+            click(&mut backend, &mut fixture, &mut surface, "Apply ↵");
+        }
+        let pending = fixture.app.state.pending("native-0", false).unwrap();
+        assert_eq!(pending["op"], "select-model");
+        assert_eq!(pending["threadId"], "thread-a");
+        assert_eq!(pending["modelSelection"], staged);
+        assert_eq!(pending["expectedModelSelection"], original);
+        assert_eq!(fixture.app.state.pending_records().len(), 1);
+        let event = fixture.next_mutation();
+        assert!(
+            matches!(&event, Background::Mutation {context, id, op, fields, result: Ok(_)}
+            if context.profile == 0 && *id == pending["id"] && op == "select-model"
+                && fields["threadId"] == "thread-a" && fields["modelSelection"] == staged
+                && fields["expectedModelSelection"] == original)
+        );
+        fixture.app.handle(event).unwrap();
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+        let native: Value =
+            serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+        assert_eq!(native["effects"], 1);
+    }
+}
+
+#[test]
+fn surface_effort_next_edits_the_existing_override_without_native_write() {
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    let selection = json!({"instanceId":"fixture-provider","model":"fixture-fast","options":[{"id":"reasoningEffort","value":"high"}]});
+    fixture
+        .app
+        .state
+        .update(|state| {
+            state["modelOverrides"]["native-0/thread-a"] =
+                json!({"id":"existing-override","selection":selection});
+            Ok(())
+        })
+        .unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("effort next".into()),
+            &mut surface,
+        )
+        .unwrap();
+    fixture.finish_effort_read();
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().selection,
+        selection
+    );
+    assert_eq!(
+        fixture
+            .app
+            .modal()
+            .unwrap()
+            .items
+            .iter()
+            .filter(|item| item.checked)
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["High"]
+    );
+    fixture.surface_choice(&mut surface, "Native default");
+    fixture.surface_choice(&mut surface, "Apply reviewed selection");
+    let staged =
+        fixture.app.state.snapshot()["modelOverrides"]["native-0/thread-a"]["selection"].clone();
+    assert_eq!(staged["instanceId"], "fixture-provider");
+    assert_eq!(staged["model"], "fixture-fast");
+    assert!(array(&staged, "options").is_empty());
+    assert_eq!(
+        fixture.app.metadata()["modelSelection"]["model"],
+        "fixture-model"
+    );
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn effort_requires_an_unambiguous_advertised_control_and_keeps_environment_scope() {
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::Command("effort".into()),
+            &mut surface,
+        )
+        .unwrap();
+    fixture.finish_effort_read();
+    let catalog = fixture.app.model_edit.as_ref().unwrap().catalog.clone();
+    let mut foreign = fixture.app.model_edit.as_ref().unwrap().clone();
+    foreign.environment_id = "native-1".into();
+    foreign.selection["model"] = json!("fixture-fast");
+    fixture.app.model_edit = Some(foreign);
+    fixture
+        .app
+        .read_result(ReadKind::Effort(ModelScope::Current), catalog.clone())
+        .unwrap();
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().selection,
+        catalog["current"]
+    );
+    for options in [
+        json!([{"id":"guess-me","label":"Effort","type":"select","options":[{"id":"value","label":"Value"}]}]),
+        json!([
+            {"id":"effort","type":"select","options":[{"id":"one","label":"One"}]},
+            {"id":"reasoningEffort","type":"select","options":[{"id":"two","label":"Two"}]}
+        ]),
+    ] {
+        let mut unsupported = catalog.clone();
+        unsupported["models"][0]["options"] = options;
+        fixture
+            .app
+            .read_result(ReadKind::Effort(ModelScope::Current), unsupported)
+            .unwrap();
+        let dialog = fixture.app.dialog.as_ref().unwrap();
+        assert_eq!(dialog.title, "Effort unavailable");
+        assert!(
+            matches!(&dialog.choices[0].intent, Intent::Command(command) if command == "model")
+        );
+        assert!(fixture.app.state.pending_records().is_empty());
+    }
+}
+
+#[test]
+fn surface_answer_delivery_waits_for_exact_ack_and_lost_ack_retains_original_operation() {
+    for lost in [false, true] {
+        let mut fixture = Fixture::new(1200);
+        if lost {
+            let path = &fixture.app.environments[0].host_config;
+            let mut config: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            config["fixture"]["dropAckOnce"] = json!(true);
+            fs::write(path, config.to_string()).unwrap();
+        }
+        fixture.open_thread(0, "thread-question");
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture.app.populate_surface(&mut surface);
+        let question = surface
+            .questions
+            .iter()
+            .find(|item| item.source.thread == "thread-question")
+            .unwrap()
+            .clone();
+        let source = crate::attention::Source::from_request(
+            "native-0",
+            "thread-question",
+            &question.request,
+        )
+        .unwrap();
+        let key = source.key().unwrap();
+        surface.retained_question = Some(question.clone());
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::Answer(question), &mut surface)
+            .unwrap();
+        fixture.surface_choice(&mut surface, "Continue");
+        fixture.surface_choice(&mut surface, "Next");
+        assert!(fixture.app.state.pending_records().is_empty());
+        fixture.surface_choice(&mut surface, "Submit answers");
+        let pending = fixture.app.state.pending("native-0", false).unwrap();
+        assert_eq!(pending["op"], "answer");
+        assert_eq!(pending["requestId"], source.request_id);
+        assert_eq!(pending["revision"], source.revision);
+        assert_eq!(pending["answers"]["choice"], "Continue");
+        fixture.app.populate_surface(&mut surface);
+        assert_eq!(surface.answer_delivery[&key], "submitting");
+        fixture.wait_native_effect(0);
+        // The native effect can remove the offer before its delayed ACK returns.
+        fixture.app.active.as_mut().unwrap().requests.clear();
+        fixture.app.notice = "Unrelated host refreshed".into();
+        fixture.app.populate_surface(&mut surface);
+        assert!(surface.questions.is_empty());
+        assert_eq!(surface.answer_delivery[&key], "submitting");
+        assert_eq!(
+            fixture.app.state.pending("native-0", false),
+            Some(pending.clone())
+        );
+        let event = fixture.next_mutation();
+        assert!(
+            matches!(&event, Background::Mutation {id, fields, result, ..}
+            if pending["id"] == *id && fields["revision"] == pending["revision"] && result.is_err() == lost)
+        );
+        fixture.app.handle(event).unwrap();
+        fixture.app.populate_surface(&mut surface);
+        assert_eq!(
+            surface.answer_delivery[&key],
+            if lost { "uncertain" } else { "acknowledged" }
+        );
+        assert!(surface.retained_question.is_some());
+        if lost {
+            assert_eq!(
+                fixture.app.state.pending("native-0", false),
+                Some(pending.clone())
+            );
+            fixture.app.answer_deliveries.clear();
+            fixture.app.populate_surface(&mut surface);
+            assert_eq!(
+                surface.answer_delivery[&key], "uncertain",
+                "durable pending survives presentation reset"
+            );
+            fixture.load_pages();
+            assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+            let native: Value =
+                serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+            assert_eq!(
+                native["effects"], 1,
+                "refresh must not replay an uncertain answer"
+            );
+        } else {
+            assert!(fixture.app.state.pending_records().is_empty());
+        }
+        for changed in [
+            crate::attention::Source {
+                environment_id: "native-1".into(),
+                ..source.clone()
+            },
+            crate::attention::Source {
+                thread_id: "thread-other".into(),
+                ..source.clone()
+            },
+            crate::attention::Source {
+                request_id: "request-other".into(),
+                ..source.clone()
+            },
+            crate::attention::Source {
+                revision: "a".repeat(64),
+                ..source.clone()
+            },
+        ] {
+            assert!(
+                !surface
+                    .answer_delivery
+                    .contains_key(&changed.key().unwrap())
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_answer_ack_never_marks_success_and_known_rejection_can_retry() {
+    let mut fixture = Fixture::new(0);
+    let revision = "b".repeat(64);
+    let fields = json!({"threadId":"thread-question","requestId":"request-question","revision":revision,"answers":{"choice":"Continue"}});
+    let mut pending = fields.clone();
+    pending["id"] = json!("original-answer-operation");
+    pending["op"] = json!("answer");
+    pending["environmentId"] = json!("native-0");
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    let source = crate::attention::Source::from_request(
+        "native-0",
+        "thread-question",
+        &json!({"id":"request-question","revision":revision}),
+    )
+    .unwrap();
+    let key = source.key().unwrap();
+    let context = MutationContext {
+        generation: 0,
+        profile: 0,
+        draft_version: None,
+    };
+    for field in [
+        "environmentId",
+        "threadId",
+        "requestId",
+        "revision",
+        "operationId",
+    ] {
+        let mut ack = json!({"sequence":2,"acknowledgement":{"environmentId":"native-0","threadId":"thread-question","requestId":"request-question","revision":revision,"operationId":"original-answer-operation"}});
+        ack["acknowledgement"][field] = json!("mismatched");
+        assert!(
+            fixture
+                .app
+                .handle(Background::Mutation {
+                    context,
+                    id: "original-answer-operation".into(),
+                    op: "answer".into(),
+                    fields: fields.clone(),
+                    result: Ok(ack)
+                })
+                .is_err()
+        );
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture.app.populate_surface(&mut surface);
+        assert_eq!(surface.answer_delivery[&key], "uncertain");
+        assert_eq!(
+            fixture.app.state.pending("native-0", false),
+            Some(pending.clone())
+        );
+    }
+    fixture
+        .app
+        .state
+        .reject_pending("native-0", false, "original-answer-operation")
+        .unwrap();
+    fixture
+        .app
+        .handle(Background::Mutation {
+            context,
+            id: "original-answer-operation".into(),
+            op: "answer".into(),
+            fields: fields.clone(),
+            result: Err("Known native rejection".into()),
+        })
+        .unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert_eq!(surface.answer_delivery[&key], "rejected");
+    fixture.app.remember_answer_delivery(
+        0,
+        "new-answer-operation",
+        &fields,
+        AnswerPhase::Submitting,
+    );
+    fixture
+        .app
+        .handle(Background::Mutation {
+            context,
+            id: "original-answer-operation".into(),
+            op: "answer".into(),
+            fields,
+            result: Err("Late old rejection".into()),
+        })
+        .unwrap();
+    fixture.app.populate_surface(&mut surface);
+    assert_eq!(
+        surface.answer_delivery[&key], "submitting",
+        "old results cannot replace a later operation's phase"
+    );
+}
+
+#[test]
+fn inherited_content_resolves_project_metadata_without_a_new_message_revision() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let active = fixture.app.active.as_ref().unwrap();
+    let generation = active.generation;
+    let mut snapshot = active.projection.snapshot().unwrap().as_wire_value();
+    snapshot["revision"] = json!(snapshot["revision"].as_u64().unwrap() + 1);
+    let mut inherited = snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "assistant_message")
+        .unwrap()
+        .clone();
+    inherited["sourceThreadId"] = json!("unloaded-parent");
+    inherited["key"] = json!(format!(
+        "unloaded-parent/{}",
+        inherited["itemId"].as_str().unwrap()
+    ));
+    snapshot["items"].as_array_mut().unwrap().push(inherited);
+    fixture
+        .app
+        .handle(Background::Packet {
+            generation,
+            packet: Packet::event("native-0", "view", snapshot),
+        })
+        .unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    let before = surface
+        .contents
+        .iter()
+        .find(|item| item.source.thread == "unloaded-parent")
+        .expect("unresolved inherited content remains readable")
+        .clone();
+    assert!(before.source.project_id.is_empty());
+    let mut parent = fixture
+        .app
+        .threads
+        .iter()
+        .find(|row| row.id == "thread-review")
+        .unwrap()
+        .clone();
+    parent.id = "unloaded-parent".into();
+    fixture.app.threads.push(parent);
+    fixture.app.populate_surface(&mut surface);
+    let after = surface
+        .contents
+        .iter()
+        .find(|item| item.key == before.key)
+        .unwrap();
+    assert_eq!(after.source.project_id, "project-a");
+    assert_eq!(
+        (&after.revision, &after.markdown),
+        (&before.revision, &before.markdown)
+    );
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn loaded_reports_are_independent_source_qualified_and_retrievable_after_tab_switch() {
+    use crate::context_store::{Query, Scope};
+    let mut fixture = Fixture::new(0);
+    fixture.open_thread(0, "thread-review");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert!(surface.questions.is_empty());
+    let report = surface
+        .contents
+        .iter()
+        .find(|item| item.source.environment == "native-0")
+        .expect("a report needs no pending question")
+        .clone();
+    assert_eq!(report.kind, "explanation");
+    assert_eq!(report.source.thread, "thread-review");
+    assert_eq!(report.source.project_id, "project-a");
+    assert!(report.markdown.contains("日本語 café 🙂"));
+    let title = surface.tabs[0].title.clone();
+    assert_eq!(title, "Finished refactor");
+    fixture.open_thread(1, "thread-fork");
+    let active = fixture.app.active.as_ref().unwrap();
+    let generation = active.generation;
+    let mut snapshot = active.projection.snapshot().unwrap().as_wire_value();
+    snapshot["revision"] = json!(snapshot["revision"].as_u64().unwrap() + 1);
+    let message = snapshot["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|row| row["kind"] == "assistant_message")
+        .unwrap();
+    message["text"] = json!(format!(
+        "## Guide\n{}\nFull-payload-needle",
+        "source evidence ".repeat(150)
+    ));
+    message["truncated"] = json!(true);
+    fixture
+        .app
+        .handle(Background::Packet {
+            generation,
+            packet: Packet::event("native-1", "view", snapshot),
+        })
+        .unwrap();
+    fixture.app.populate_surface(&mut surface);
+    assert!(
+        surface
+            .contents
+            .iter()
+            .any(|item| item.key == report.key && item.revision == report.revision)
+    );
+    let guide = surface
+        .contents
+        .iter()
+        .find(|item| item.source.environment == "native-1" && item.kind == "guide")
+        .unwrap();
+    assert!(guide.truncated && guide.markdown.ends_with("Full-payload-needle"));
+    assert_eq!(
+        surface.tabs[0].title, title,
+        "snapshot title survives absent metadata pages"
+    );
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while fixture.app.context_capture_inflight || !fixture.app.context_capture_pending.is_empty() {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("durable loaded evidence");
+        fixture.app.handle(event).unwrap();
+    }
+    let mut query = Query::new(Scope {
+        environment_id: "native-1".into(),
+        project_id: Some("project-a".into()),
+        thread_id: Some("thread-fork".into()),
+    });
+    query.text = "Full-payload-needle".into();
+    let pack = fixture.context_pack(query);
+    assert_eq!(
+        pack.eligible, 1,
+        "recall searches evidence beyond its compact summary"
+    );
+    assert_eq!(pack.rows[0].source.observed["truncated"], true);
+    assert!(pack.truncated, "an excerpt cannot become complete evidence");
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert!(
+        !fixture.native_states.iter().any(|path| path.exists()),
+        "content reads never dispatch native mutations"
+    );
+}
+
+#[test]
 fn changed_or_cancelled_request_preserves_fresh_unsaved_answer_on_its_original_source() {
     for cancelled in [false, true] {
         let mut fixture = Fixture::new(0);
@@ -1027,7 +2628,7 @@ fn obsolete_navigation_ack_cannot_unlock_the_current_live_transition() {
 
 #[test]
 fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
-    use crate::context_store::{Query, Scope, Store};
+    use crate::context_store::{Query, Scope};
     let mut fixture = Fixture::new(0);
     fixture.load_pages();
     fixture.open_thread(0, "thread-review");
@@ -1044,43 +2645,39 @@ fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
         .intent
         .clone();
     fixture.open_thread(1, "thread-review");
+    fixture.drain_context_work();
     fixture.app.dispatch(capture).unwrap();
-    let mut context_path = fixture.app.state.path().as_os_str().to_os_string();
-    context_path.push(".context");
-    let store = Store::open(Path::new(&context_path)).unwrap();
     let query = Query::new(Scope {
         environment_id: "native-0".into(),
         project_id: Some("project-a".into()),
         thread_id: Some("thread-review".into()),
     });
-    let pack = store.recall(&query).unwrap();
-    assert_eq!(pack.eligible, 1);
+    let pack = fixture.context_pack(query.clone());
+    assert!(pack.eligible >= 1);
     assert_eq!(pack.rows[0].source.environment_id, "native-0");
     assert_eq!(
         pack.rows[0].source.item_id.as_deref(),
         Some("thread-review-answer")
     );
-    let captured: Value =
-        serde_json::from_slice(&store.source(&pack.rows[0].id).unwrap().bytes).unwrap();
-    assert!(string(&captured, "text").contains("日本語 café 🙂"));
-    assert_eq!(
-        store
-            .recall(&Query::new(Scope {
-                environment_id: "native-1".into(),
-                ..query.scope.clone()
-            }))
-            .unwrap()
-            .eligible,
-        0
+    let other = fixture.context_pack(Query::new(Scope {
+        environment_id: "native-1".into(),
+        ..query.scope.clone()
+    }));
+    assert!(
+        other
+            .rows
+            .iter()
+            .all(|row| row.source.environment_id == "native-1")
     );
-    drop(store);
     fixture
         .app
-        .context_action(context::Action::Source(pack.rows[0].id.clone()))
+        .context_action(context::Action::Source(pack.rows[0].clone()))
         .unwrap();
+    fixture.drain_context_work();
     let detail = &fixture.app.dialog.as_ref().unwrap().detail;
     assert!(detail.contains("native-0") && detail.contains("project-a"));
     assert!(detail.contains("capturedItemOnly") && detail.contains("historical"));
+    assert!(detail.contains("日本語 café 🙂"));
     fixture.open_thread(0, "thread-review");
     fixture.app.replace_text("Unsent exact draft 日本語".into());
     fixture.app.flush_draft().unwrap();
@@ -1091,6 +2688,7 @@ fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
         .save_pending("native-0", false, pending.clone())
         .unwrap();
     fixture.app.command("resume").unwrap();
+    fixture.drain_context_work();
     let dialog = fixture.app.dialog.as_ref().unwrap();
     assert!(dialog.detail.contains("original-context-operation"));
     assert!(dialog.detail.contains("original-request-revision"));
@@ -1110,7 +2708,7 @@ fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
 fn source_inventory_keeps_empty_projects_and_rejects_malformed_replacement_atomically() {
     let mut fixture = Fixture::new(0);
     fixture.load_pages();
-    fixture.app.search_projects();
+    fixture.app.search_scopes();
     assert!(
         fixture
             .app
@@ -1849,4 +3447,933 @@ fn restore_shortcut_uses_retained_settled_summary_after_unpin_removes_the_row() 
     assert!(
         matches!(&event,Background::Mutation{context,fields,..} if context.profile==0 && fields["threadId"]=="thread-review" && fields["action"]=="unsettle")
     );
+}
+
+#[test]
+fn context_worker_io_barrier_leaves_controller_and_draft_saver_responsive() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let mut snapshot = live_snapshot(2);
+    snapshot["projectId"] = json!("project-a");
+    fixture
+        .app
+        .active
+        .as_mut()
+        .unwrap()
+        .projection
+        .apply_snapshot(snapshot, "thread-a")
+        .unwrap();
+    let (entered, waiting) = bounded(1);
+    let (release, barrier) = bounded(1);
+    fixture.app.context_test_barrier = Some(context::IoBarrier {
+        entered,
+        release: barrier,
+    });
+    let (ready, progress) = bounded(1);
+    let controller = thread::spawn(move || {
+        fixture.app.command("context").unwrap();
+        fixture
+            .app
+            .replace_text("Independent unsent draft 日本語\n  ".into());
+        fixture.app.schedule_save().unwrap();
+        while fixture.app.state.draft("native-0", "thread-a")
+            != "Independent unsent draft 日本語\n  "
+        {
+            let event = fixture.app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            fixture.app.handle(event).unwrap();
+        }
+        ready.send(()).unwrap();
+        fixture
+    });
+    waiting
+        .recv_timeout(Duration::from_secs(5))
+        .expect("store operation reached held I/O barrier");
+    let responsive = progress.recv_timeout(Duration::from_secs(1)).is_ok();
+    release.send(()).unwrap();
+    let _fixture = controller.join().unwrap();
+    assert!(
+        responsive,
+        "context I/O blocked controller input and its independent draft save behind the held store barrier"
+    );
+}
+
+#[test]
+fn context_worker_quit_drains_an_accepted_write_with_a_full_completion_queue() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let (entered, waiting) = bounded(1);
+    let (release, barrier) = bounded(1);
+    fixture.app.context_test_barrier = Some(context::IoBarrier {
+        entered,
+        release: barrier,
+    });
+    let input = crate::context_store::RecordInput {
+        source: crate::context_store::Source {
+            environment_id: "native-0".into(),
+            project_id: "project-a".into(),
+            thread_id: "thread-a".into(),
+            item_id: Some("accepted-item".into()),
+            request_id: None,
+            revision: "original-source-revision".into(),
+            observed: json!({"streaming":false}),
+        },
+        kind: crate::context_store::Kind::Evidence,
+        text: "Accepted capture".into(),
+        full_source: b"Original accepted source bytes".to_vec(),
+        supersedes: None,
+        revisit: None,
+    };
+    fixture
+        .app
+        .context_capture_pending
+        .insert("accepted-capture".into(), input);
+    fixture.app.schedule_context_capture().unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(fixture.app.context_capture_inflight);
+    while fixture
+        .app
+        .tx
+        .try_send(Background::Saved {
+            key: "unrelated".into(),
+            version: 0,
+            result: Ok(()),
+        })
+        .is_ok()
+    {}
+    assert_eq!(fixture.app.rx.len(), 128);
+    fixture.app.command("quit").unwrap();
+    let premature_quit = fixture.app.quit;
+    release.send(()).unwrap();
+    fixture.app.drain_context().unwrap();
+    assert!(!fixture.app.context_capture_inflight);
+    assert!(fixture.app.quit);
+    assert!(
+        !premature_quit,
+        "Quit returned before the accepted context write's completion was drained"
+    );
+}
+
+fn context_input(item: &str) -> crate::context_store::RecordInput {
+    crate::context_store::RecordInput {
+        source: crate::context_store::Source {
+            environment_id: "native-0".into(),
+            project_id: "project-a".into(),
+            thread_id: "thread-a".into(),
+            item_id: Some(item.into()),
+            request_id: None,
+            revision: format!("revision-{item}"),
+            observed: json!({"streaming":false}),
+        },
+        kind: crate::context_store::Kind::Evidence,
+        text: format!("Evidence {item}"),
+        full_source: format!("Exact original {item} 日本語\n  ").into_bytes(),
+        supersedes: None,
+        revisit: None,
+    }
+}
+
+fn context_scope() -> crate::context_store::Scope {
+    crate::context_store::Scope {
+        environment_id: "native-0".into(),
+        project_id: Some("project-a".into()),
+        thread_id: Some("thread-a".into()),
+    }
+}
+
+fn context_path(fixture: &Fixture) -> PathBuf {
+    let mut path = fixture.app.state.path().as_os_str().to_os_string();
+    path.push(".context");
+    path.into()
+}
+
+fn hold_context(fixture: &mut Fixture) -> (Receiver<()>, Sender<()>) {
+    let (entered, waiting) = bounded(1);
+    let (release, barrier) = bounded(1);
+    fixture.app.context_test_barrier = Some(context::IoBarrier {
+        entered,
+        release: barrier,
+    });
+    (waiting, release)
+}
+
+fn next_context(fixture: &mut Fixture) -> Background {
+    loop {
+        let event = fixture.app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        if matches!(event, Background::Context(_)) {
+            return event;
+        }
+        fixture.app.handle(event).unwrap();
+    }
+}
+
+#[test]
+fn context_worker_coalesces_reads_to_original_inflight_and_latest_desired() {
+    let mut fixture = Fixture::new(0);
+    let (waiting, release) = hold_context(&mut fixture);
+    fixture
+        .app
+        .context_recall(context_scope(), "first", false, 0)
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    for offset in 1..50 {
+        fixture
+            .app
+            .context_recall(context_scope(), &format!("query-{offset}"), true, offset)
+            .unwrap();
+    }
+    release.send(()).unwrap();
+    let first = next_context(&mut fixture);
+    assert!(
+        matches!(&first, Background::Context(context_worker::Event::Finished(done))
+        if matches!(&done.result, Ok(context_worker::Output::Pack(pack)) if pack.query == "first"))
+    );
+    fixture.app.handle(first).unwrap();
+    assert_eq!(
+        fixture.app.dialog.as_ref().unwrap().title,
+        "Context",
+        "superseded read replaced the pending view"
+    );
+    let latest = next_context(&mut fixture);
+    assert!(
+        matches!(&latest, Background::Context(context_worker::Event::Finished(done))
+        if matches!(&done.result, Ok(context_worker::Output::Pack(pack))
+            if pack.query == "query-49" && pack.offset == 49 && pack.history && pack.scope == context_scope()))
+    );
+    fixture.app.handle(latest).unwrap();
+    assert_eq!(
+        fixture.app.dialog.as_ref().unwrap().title,
+        "Context records"
+    );
+    assert!(!fixture.app.context_has_work());
+    assert!(
+        fixture.app.rx.is_empty(),
+        "intermediate reads were submitted"
+    );
+}
+
+#[test]
+fn context_worker_late_reads_cannot_reopen_closed_or_replaced_or_switched_views() {
+    for replacement in ["close", "palette", "detail", "tab"] {
+        let mut fixture = Fixture::new(0);
+        synthetic_attachment(&mut fixture.app);
+        let (waiting, release) = hold_context(&mut fixture);
+        fixture
+            .app
+            .context_recall(context_scope(), "old query", false, 0)
+            .unwrap();
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::default();
+        match replacement {
+            "close" => fixture
+                .app
+                .surface_action(crate::slt_ui::Action::CloseModal, &mut surface)
+                .unwrap(),
+            "palette" => fixture
+                .app
+                .surface_action(
+                    crate::slt_ui::Action::Command("palette".into()),
+                    &mut surface,
+                )
+                .unwrap(),
+            "detail" => fixture.app.detail("Other view", "Retained current content"),
+            "tab" => fixture.open(1),
+            _ => unreachable!(),
+        }
+        let current = fixture
+            .app
+            .dialog
+            .as_ref()
+            .map(|dialog| dialog.title.clone());
+        release.send(()).unwrap();
+        let old = next_context(&mut fixture);
+        fixture.app.handle(old).unwrap();
+        assert_eq!(
+            fixture
+                .app
+                .dialog
+                .as_ref()
+                .map(|dialog| dialog.title.clone()),
+            current,
+            "{replacement}"
+        );
+        fixture.drain_context_work();
+        let pack = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+        assert_eq!(
+            pack.scope,
+            context_scope(),
+            "new recall must use its original explicit scope"
+        );
+    }
+}
+
+#[test]
+fn context_worker_busy_write_retains_original_until_explicit_retry() {
+    let mut fixture = Fixture::new(0);
+    let (waiting, release) = hold_context(&mut fixture);
+    fixture
+        .app
+        .context_action(context::Action::Record(context_input("accepted")))
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(fixture.app.notice, "Saving context…");
+    let error = fixture
+        .app
+        .context_action(context::Action::Record(context_input("retained")))
+        .unwrap_err();
+    assert!(error.to_string().contains("Context busy"));
+    assert!(
+        fixture
+            .app
+            .context_action(context::Action::Record(context_input("replacement")))
+            .unwrap_err()
+            .to_string()
+            .contains("Original context write retained")
+    );
+    release.send(()).unwrap();
+    fixture.drain_context_work();
+    let before = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+    assert_eq!(before.eligible, 1);
+    fixture.app.command("quit").unwrap();
+    assert!(fixture.app.drain_context().is_err());
+    assert!(!fixture.app.quit, "Quit discarded a queue-rejected write");
+    fixture.app.command("quit").unwrap();
+    assert!(
+        !fixture.app.quit,
+        "Repeated Quit discarded the retained write"
+    );
+    fixture.app.command("context-retry").unwrap();
+    fixture.drain_context_work();
+    assert!(
+        !fixture.app.context_writes_blocked(),
+        "Retry failed: {}",
+        fixture.app.context_capture_status
+    );
+    let after = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+    assert_eq!(after.eligible, 2);
+    assert!(
+        after
+            .rows
+            .iter()
+            .any(|row| row.source.item_id.as_deref() == Some("retained"))
+    );
+    assert!(
+        !after
+            .rows
+            .iter()
+            .any(|row| row.source.item_id.as_deref() == Some("replacement"))
+    );
+    assert!(
+        fixture.app.command("context-retry").is_err(),
+        "accepted write must not replay"
+    );
+}
+
+#[test]
+fn context_worker_prepared_failure_retries_original_event_after_source_switch() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let original = context_input("prepared-original");
+    let path = context_path(&fixture);
+    let store = crate::context_store::Store::open(&path).unwrap();
+    let mut request = context_worker::Request::Write(context_worker::WriteRequest::new(
+        fixture.app.generation,
+        context_worker::Write::Record(original.clone()),
+    ));
+    let error = {
+        let fault = crate::context_store::tests::DirectorySyncFailure::arm(&path.join("log"));
+        let error = context_worker::execute(&store, &mut request).unwrap_err();
+        fault.assert_consumed();
+        error
+    };
+    let before = store
+        .recall(&crate::context_store::Query::new(context_scope()))
+        .unwrap();
+    let row = before
+        .rows
+        .iter()
+        .find(|row| row.source == original.source)
+        .unwrap()
+        .clone();
+    let event_path = path.join("log").join(format!("{}.jsonl", row.id));
+    let event_bytes = fs::read(&event_path).unwrap();
+    drop(store);
+    // Feed the real failed worker execution into the normal retained-request path.
+    fixture
+        .app
+        .handle(Background::Context(context_worker::Event::Finished(
+            Box::new(context_worker::Finished {
+                request,
+                result: Err(format!("{error:#}")),
+            }),
+        )))
+        .unwrap();
+    fixture.open(1);
+    let draft = "New source 日本語\n\tkeeps spaces  ";
+    fixture.app.replace_text(draft.into());
+    fixture.app.command("context-retry").unwrap();
+    fixture.app.notice = "Current source notice".into();
+    let event = next_context(&mut fixture);
+    fixture.app.handle(event).unwrap();
+    assert_eq!(fixture.app.notice, "Current source notice");
+    fixture.drain_context_work();
+    let after = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+    let recovered: Vec<_> = after
+        .rows
+        .iter()
+        .filter(|row| row.source == original.source)
+        .collect();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].id, row.id);
+    assert_eq!(fs::read(event_path).unwrap(), event_bytes);
+    assert_eq!(
+        fs::read(path.join(&row.source_ref)).unwrap(),
+        original.full_source
+    );
+    assert_eq!(fixture.app.composer.lines().join("\n"), draft);
+    assert!(
+        fixture.app.command("context-retry").is_err(),
+        "successful event must not replay"
+    );
+}
+
+#[test]
+fn context_worker_original_source_write_ack_survives_switch_without_foreign_success() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let (waiting, release) = hold_context(&mut fixture);
+    fixture
+        .app
+        .context_action(context::Action::Record(context_input("original")))
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    fixture.open(1);
+    fixture.app.notice = "Current source notice".into();
+    release.send(()).unwrap();
+    let event = next_context(&mut fixture);
+    let current_notice = fixture.app.notice.clone();
+    fixture.app.handle(event).unwrap();
+    assert_eq!(fixture.app.notice, current_notice);
+    fixture.drain_context_work();
+    let pack = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+    let row = pack
+        .rows
+        .iter()
+        .find(|row| row.source.item_id.as_deref() == Some("original"))
+        .unwrap()
+        .clone();
+    fixture
+        .app
+        .context_action(context::Action::Source(row))
+        .unwrap();
+    fixture.drain_context_work();
+    assert!(
+        fixture
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .detail
+            .contains("Exact original original 日本語\n  ")
+    );
+}
+
+#[test]
+fn context_worker_open_error_preserves_exact_write_and_quit_reports_failure() {
+    let mut fixture = Fixture::new(0);
+    let path = context_path(&fixture);
+    fs::write(&path, b"Not a context directory").unwrap();
+    let original = context_input("failed-original");
+    fixture
+        .app
+        .context_action(context::Action::Record(original.clone()))
+        .unwrap();
+    fixture.app.command("quit").unwrap();
+    let error = fixture.app.drain_context().unwrap_err().to_string();
+    assert!(error.contains("original context write retained"));
+    assert!(!fixture.app.quit);
+    assert!(fixture.app.notice.contains("context-retry"));
+    fs::remove_file(path).unwrap();
+    fixture.app.command("context-retry").unwrap();
+    fixture.drain_context_work();
+    let pack = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+    assert_eq!(pack.eligible, 1);
+    assert_eq!(pack.rows[0].source, original.source);
+    fixture
+        .app
+        .context_action(context::Action::Source(pack.rows[0].clone()))
+        .unwrap();
+    fixture.drain_context_work();
+    assert!(
+        fixture
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .detail
+            .contains("Exact original failed-original 日本語")
+    );
+}
+
+#[test]
+fn context_worker_failure_before_quit_survives_repeated_quit_and_retry() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let draft = "Unsent 日本語\n\twith trailing spaces  ";
+    fixture.app.replace_text(draft.into());
+    let path = context_path(&fixture);
+    fs::write(&path, b"Not a context directory").unwrap();
+    let original = context_input("failed-before-quit");
+    fixture
+        .app
+        .context_action(context::Action::Record(original.clone()))
+        .unwrap();
+    fixture.drain_context_work();
+    assert!(
+        fixture
+            .app
+            .notice
+            .contains("original context write retained")
+    );
+
+    for _ in 0..2 {
+        fixture.app.command("quit").unwrap();
+        let result = fixture.app.drain_context();
+        assert!(!fixture.app.quit, "Quit discarded an already-failed write");
+        assert!(result.unwrap_err().to_string().contains("context-retry"));
+        assert!(!fixture.app.context_io.draining);
+        assert!(fixture.app.notice.contains("context-retry"));
+    }
+
+    // A retry that fails again must retain the same original payload.
+    fixture.app.command("context-retry").unwrap();
+    fixture.drain_context_work();
+    fixture.app.command("quit").unwrap();
+    assert!(fixture.app.drain_context().is_err());
+    assert!(!fixture.app.quit);
+
+    fs::remove_file(path).unwrap();
+    fixture.app.command("context-retry").unwrap();
+    fixture.drain_context_work();
+    let pack = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+    assert_eq!(pack.eligible, 1);
+    assert_eq!(pack.rows[0].source, original.source);
+    assert_eq!(pack.rows[0].text, original.text);
+    fixture
+        .app
+        .context_action(context::Action::Source(pack.rows[0].clone()))
+        .unwrap();
+    fixture.drain_context_work();
+    assert!(
+        fixture
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .detail
+            .contains(std::str::from_utf8(&original.full_source).unwrap())
+    );
+    assert_eq!(fixture.app.composer.lines().join("\n"), draft);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+    assert!(fixture.app.command("context-retry").is_err());
+    fixture.app.command("quit").unwrap();
+    fixture.app.drain_context().unwrap();
+    assert!(
+        fixture.app.quit,
+        "Successful explicit retry should allow Quit"
+    );
+}
+
+#[test]
+fn context_worker_source_read_is_async_and_exact_provenance_is_required() {
+    let mut fixture = Fixture::new(0);
+    let row = {
+        let store = crate::context_store::Store::open(&context_path(&fixture)).unwrap();
+        store.record(&context_input("source")).unwrap();
+        store
+            .recall(&crate::context_store::Query::new(context_scope()))
+            .unwrap()
+            .rows
+            .remove(0)
+    };
+    let (waiting, release) = hold_context(&mut fixture);
+    fixture
+        .app
+        .context_action(context::Action::Source(row.clone()))
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    fixture.app.detail("New detail", "Still current");
+    release.send(()).unwrap();
+    fixture.drain_context_work();
+    assert_eq!(fixture.app.dialog.as_ref().unwrap().title, "New detail");
+    for changed in ["revision", "digest", "reference"] {
+        let mut foreign = row.clone();
+        match changed {
+            "revision" => foreign.source.revision = "other-revision".into(),
+            "digest" => foreign.source_sha256 = "0".repeat(64),
+            "reference" => foreign.source_ref = format!("sources/{}.bin", "0".repeat(64)),
+            _ => unreachable!(),
+        }
+        fixture
+            .app
+            .context_action(context::Action::Source(foreign))
+            .unwrap();
+        fixture.drain_context_work();
+        assert!(
+            fixture.app.notice.contains("source/revision changed"),
+            "changed original {changed} must not open source bytes"
+        );
+        assert_eq!(fixture.app.dialog.as_ref().unwrap().title, "Context");
+        assert!(
+            fixture
+                .app
+                .dialog
+                .as_ref()
+                .unwrap()
+                .description
+                .contains("source/revision changed")
+        );
+    }
+    fixture
+        .app
+        .context_action(context::Action::Source(row))
+        .unwrap();
+    fixture.drain_context_work();
+    assert_eq!(
+        fixture.app.dialog.as_ref().unwrap().title,
+        "Captured source"
+    );
+}
+
+#[test]
+fn context_worker_explicit_lifecycle_and_drafts_drain_with_full_completion_queue() {
+    for operation in ["record", "close", "revisit"] {
+        let mut fixture = Fixture::new(0);
+        synthetic_attachment(&mut fixture.app);
+        let mut snapshot = live_snapshot(2);
+        snapshot["projectId"] = json!("project-a");
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot, "thread-a")
+            .unwrap();
+        let original = context_input("lifecycle");
+        let row = {
+            let store = crate::context_store::Store::open(&context_path(&fixture)).unwrap();
+            store.record(&original).unwrap();
+            store
+                .recall(&crate::context_store::Query::new(context_scope()))
+                .unwrap()
+                .rows
+                .remove(0)
+        };
+        let (waiting, release) = hold_context(&mut fixture);
+        match operation {
+            "record" => fixture
+                .app
+                .context_action(context::Action::Record(context_input("accepted-record")))
+                .unwrap(),
+            "close" => fixture
+                .app
+                .context_action(context::Action::Close(row.clone()))
+                .unwrap(),
+            "revisit" => {
+                fixture
+                    .app
+                    .context_revisit_edited(&row, "Original condition")
+                    .unwrap();
+                fixture
+                    .app
+                    .context_revisit(&row, "Original condition")
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(fixture.app.notice, "Saving context…");
+        // Context I/O remains held while the independent draft worker commits.
+        fixture
+            .app
+            .replace_text("Independent exact draft 日本語\n  ".into());
+        fixture.app.schedule_save().unwrap();
+        loop {
+            let event = fixture.app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let saved = matches!(event, Background::Saved { .. });
+            fixture.app.handle(event).unwrap();
+            if saved {
+                break;
+            }
+        }
+        assert_eq!(
+            fixture.app.state.draft("native-0", "thread-a"),
+            "Independent exact draft 日本語\n  "
+        );
+        if operation == "revisit" {
+            fixture
+                .app
+                .context_revisit_edited(&row, "Newer unsent condition 日本語")
+                .unwrap();
+        }
+        fixture
+            .app
+            .context_capture_pending
+            .insert("never-admitted".into(), context_input("never-admitted"));
+        while fixture
+            .app
+            .tx
+            .try_send(Background::Saved {
+                key: "unrelated".into(),
+                version: 0,
+                result: Ok(()),
+            })
+            .is_ok()
+        {}
+        assert_eq!(fixture.app.rx.len(), 128);
+        fixture.app.command("quit").unwrap();
+        assert!(!fixture.app.quit);
+        release.send(()).unwrap();
+        fixture.app.drain_context().unwrap();
+        assert!(fixture.app.quit);
+        assert_eq!(
+            fixture.app.context_capture_pending.len(),
+            1,
+            "draining rescheduled capture"
+        );
+        // A successful second open establishes that Store ownership was released
+        // only after its accepted write completion and termination were consumed.
+        let store = crate::context_store::Store::open(&context_path(&fixture)).unwrap();
+        let mut query = crate::context_store::Query::new(context_scope());
+        query.history = true;
+        let pack = store.recall(&query).unwrap();
+        assert!(
+            !pack
+                .rows
+                .iter()
+                .any(|row| row.source.item_id.as_deref() == Some("never-admitted"))
+        );
+        match operation {
+            "record" => assert!(
+                pack.rows
+                    .iter()
+                    .any(|row| row.source.item_id.as_deref() == Some("accepted-record"))
+            ),
+            "close" => assert!(
+                pack.rows
+                    .iter()
+                    .any(|candidate| candidate.id == row.id && candidate.closed)
+            ),
+            "revisit" => {
+                assert!(pack.rows.iter().any(|candidate| candidate.id == row.id
+                    && candidate.revisit.as_deref() == Some("Original condition")));
+                assert_eq!(
+                    fixture
+                        .app
+                        .state
+                        .draft("native-0", &format!("context-revisit-{}", row.id)),
+                    "Newer unsent condition 日本語"
+                );
+                assert_ne!(fixture.app.notice, "Revisit saved");
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(store.source(&row.id).unwrap().bytes, original.full_source);
+    }
+}
+
+#[test]
+fn context_worker_real_slt_escape_cancels_pending_query_and_new_recall_remains_usable() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let draft = "  Unsent exact prompt 日本語 🙂\nnext line\n  ";
+    fixture.app.replace_text(draft.into());
+    fixture.app.flush_draft().unwrap();
+    let pending = json!({"id":"original-protected-operation","environmentId":"native-0","op":"answer", "threadId":"thread-a", "requestId":"original-request", "revision":"original-revision", "answers":{"answer":"Keep exact"}});
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    let source = fixture.app.source(0, "thread-a");
+    let generation = fixture.app.generation;
+    let caret = fixture.app.composer.cursor();
+    let (waiting, release) = hold_context(&mut fixture);
+    fixture
+        .app
+        .context_action(context::Action::Find(context_scope()))
+        .unwrap();
+    fixture.app.modal_editor = ui::editor("old pending query", &fixture.app.theme, "");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::ModalSubmit, &mut surface)
+        .unwrap();
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(fixture.app.dialog.as_ref().unwrap().title, "Context");
+    let mut backend = ::slt::TestBackend::new(110, 38)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    for _ in 0..3 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Esc)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    assert!(
+        fixture.app.dialog.is_none(),
+        "physical Esc path must close and invalidate the pending view"
+    );
+    release.send(()).unwrap();
+    fixture.drain_context_work();
+    assert!(
+        fixture.app.dialog.is_none(),
+        "old completion reopened the escaped view"
+    );
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+    assert_eq!(
+        fixture.app.state.pending("native-0", false),
+        Some(pending.clone())
+    );
+    assert_eq!(fixture.app.source(0, "thread-a"), source);
+    assert_eq!(fixture.app.active.as_ref().unwrap().profile, 0);
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-a");
+    assert_eq!(fixture.app.generation, generation);
+    fixture.open(1);
+    let mut other_scope = context_scope();
+    other_scope.environment_id = "native-1".into();
+    let pack = fixture.context_pack(crate::context_store::Query::new(other_scope.clone()));
+    assert_eq!(pack.scope, other_scope);
+    assert_eq!(
+        fixture.app.dialog.as_ref().unwrap().title,
+        "Context records"
+    );
+    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+    for path in &fixture.native_states {
+        if let Ok(bytes) = fs::read(path) {
+            let native: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(native["effects"].as_u64().unwrap_or(0), 0);
+        }
+    }
+}
+
+#[test]
+fn context_worker_retired_native_question_cannot_reopen_its_closed_read_view() {
+    for cancelled in [false, true] {
+        let mut fixture = Fixture::new(0);
+        synthetic_attachment(&mut fixture.app);
+        let original = json!({
+            "id":"original-question", "revision":"a".repeat(64),
+            "kind":"user_input_request", "supported":true,
+            "questions":[{"id":"choice", "question":"Keep the original answer?",
+                "allowCustomAnswer":true, "options":[{"label":"Continue"}]}]
+        });
+        let mut page = live_snapshot(2);
+        page["projectId"] = json!("project-a");
+        page["requests"] = json!([original.clone()]);
+        let generation = fixture.app.generation;
+        fixture
+            .app
+            .handle(Background::Packet {
+                generation,
+                packet: Packet::event("native-0", "view", page.clone()),
+            })
+            .unwrap();
+        let draft = "  Original unsent prompt 日本語 🙂\nlast line  ";
+        fixture.app.replace_text(draft.into());
+        fixture.app.flush_draft().unwrap();
+        let caret = fixture.app.composer.cursor();
+        let source = fixture.app.source(0, "thread-a");
+        let pending = json!({"id":"protected-retirement-operation", "op":"answer",
+            "environmentId":"native-1", "threadId":"other-thread", "requestId":"other-request",
+            "revision":"original-revision", "answers":{"choice":"Retain exact"}});
+        fixture
+            .app
+            .state
+            .save_pending("native-1", false, pending.clone())
+            .unwrap();
+        fixture.app.review_request(original.clone()).unwrap();
+        fixture.app.edit_field(InputTarget::Question).unwrap();
+        let freshest = "Fresh retained answer 日本語 🙂\n  unfinished ";
+        fixture.app.modal_editor = ui::editor(freshest, &fixture.app.theme, "");
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::ModalEditChanged, &mut surface)
+            .unwrap();
+        fixture
+            .app
+            .surface_action(crate::slt_ui::Action::CloseModal, &mut surface)
+            .unwrap();
+        assert!(fixture.app.request_edit.is_some());
+        let form = crate::attention::Form::from_request("native-0", "thread-a", &original).unwrap();
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            freshest
+        );
+        let (waiting, release) = hold_context(&mut fixture);
+        fixture
+            .app
+            .context_recall(context_scope(), "held original read", false, 0)
+            .unwrap();
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(fixture.app.dialog.as_ref().unwrap().title, "Context");
+        let mut replacement = original.clone();
+        replacement["revision"] = json!("b".repeat(64));
+        page["revision"] = json!(3);
+        page["requests"] = if cancelled {
+            json!([])
+        } else {
+            json!([replacement.clone()])
+        };
+        fixture
+            .app
+            .handle(Background::Packet {
+                generation,
+                packet: Packet::event("native-0", "view", page),
+            })
+            .unwrap();
+        assert!(fixture.app.request_edit.is_none() && fixture.app.dialog.is_none());
+        // Always release before asserting late completion behavior so a failed
+        // regression cannot strand the Store owner during fixture teardown.
+        release.send(()).unwrap();
+        fixture.drain_context_work();
+        assert!(
+            fixture.app.dialog.is_none(),
+            "retired native question reopened its old context view, cancelled={cancelled}"
+        );
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.generation, generation);
+        assert_eq!(fixture.app.source(0, "thread-a"), source);
+        assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+        assert_eq!(
+            fixture.app.state.pending("native-1", false),
+            Some(pending.clone())
+        );
+        assert_eq!(
+            form.load_draft(&fixture.app.state).unwrap().unwrap()["choice"],
+            freshest
+        );
+        assert!(
+            crate::attention::Form::from_request("native-0", "thread-a", &replacement)
+                .unwrap()
+                .load_draft(&fixture.app.state)
+                .unwrap()
+                .is_none()
+        );
+        let pack = fixture.context_pack(crate::context_store::Query::new(context_scope()));
+        assert_eq!(pack.scope, context_scope());
+        assert_eq!(
+            fixture.app.dialog.as_ref().unwrap().title,
+            "Context records"
+        );
+        assert_eq!(fixture.app.state.pending("native-1", false), Some(pending));
+        assert!(fixture.native_states.iter().all(|path| !path.exists()));
+    }
 }

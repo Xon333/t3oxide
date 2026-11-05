@@ -20,16 +20,32 @@ The reference baseline is t3oxide `e73caacd673d1a9bbceea8a7ed240b2a068ba5a7`. Th
 | `src/attention.rs` | Actual native question admission, stable controls, revision-bound drafts and receipt validation. |
 | `src/app/actions.rs`, `src/app/native.rs` | Action dispatch, model/request/launch forms, native capability checks and reviewed operations. |
 | `src/app/workspace.rs` | Local project/priority views, reading coordinates, loaded-content navigation and source copying. |
-| `src/ui.rs` | Pure presentation, responsive layouts, bounded Markdown reuse, editor styling and exact drawn hit targets. |
+| `src/ui.rs` | Shared presentation records and retained Ratatui editor/renderer compatibility helpers. |
 | `adapter/` | Existing verified native integration, bounded source projection and durable host receipts. |
 
 Developer and AgentBox are views over these same models. They share the active connection, draft, projection, requests, recovery and creation forms. Mode changes alter visual priority and default lanes; layouts alter pane space and focus. Neither creates a native session or a separate execution owner.
 
 ## Component decisions
 
-Ratatui 0.30.2 and Crossterm 0.29 provide the only terminal framework. Ratatui handles cell-buffer differences, clipping and layout; the application does not maintain a parallel ANSI renderer. `ratatui-textarea` 0.9.3 supplies Unicode editor movement, wrapping, selection, undo/redo and screen-to-data mouse mapping. `tui-markdown` 0.3.13 supplies Markdown rendering with optional syntax-highlighting dependencies disabled. `nucleo-matcher` 0.3.1 supplies fuzzy action scoring without its threaded application index.
+SuperLightTUI 0.26.0 owns the active terminal runtime, layout, focus, input and
+output. Its textarea state owns active editing, and its Markdown widgets render
+ordinary content. Ratatui 0.30.2, `ratatui-textarea` 0.9.3 and `tui-markdown`
+0.3.13 remain linked for shared editor conversion and retained compatibility
+helpers; their previous terminal loop is inactive. Crossterm supplies terminal
+events. `nucleo-matcher` 0.3.1 supplies fuzzy action scoring without its threaded
+application index. [Source decisions](rust-source-reuse.md) distinguishes live
+callers from retained paths.
 
-Ordinary threads and bounded Crossbeam channels are sufficient for this process/stdio transport. Separate pools handle two foreground reads, one metadata read per configured source (at most eight) and one storage task at a time, with bounded queues of 16, 16 and 4. Each metadata source has an available slot even when other hosts hang, and unavailable sources cannot occupy the workers needed to attach a conversation or save a draft; the UI receives typed background events. No async executor, HTTP proxy, terminal multiplexer, database, scheduler or second UI framework is introduced. Pingora does not address a missing transport need. Herdr and TUIOS supply useful interaction principles while their daemon and PTY ownership remain outside this client's scope. Restricted FrankenTUI code is not incorporated.
+Ordinary threads and bounded Crossbeam channels carry process/stdio work.
+Separate pools handle two foreground reads, one metadata read per configured
+source (at most eight) and one storage task at a time, with bounded queues of
+16, 16 and 4. Each metadata source has an available slot even when other hosts
+hang, and unavailable sources cannot occupy the workers needed to attach a
+conversation or save a draft. A current-thread Tokio runtime runs SLT's
+`run_async_with`; the worker bridge delivers typed background events through
+its wake-aware sender. There is one terminal owner. Herdr and TUIOS supply
+interaction references; their daemon and PTY ownership remain outside this
+client's scope. Restricted FrankenTUI code is not incorporated.
 
 Cargo.lock pins the complete dependency graph. `docs/dependencies.json` records source archives/checksums and `LICENSES/rust-third-party.txt` retains license texts. The MPL-covered fuzzy matcher is an unmodified library with its corresponding source link supplied; no covered source file is copied into t3oxide's own modules.
 
@@ -47,8 +63,8 @@ The active runtime is pinned `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbf
 | Form B3 | Exact environment/thread/request/revision draft | Every field edit/choice; current-offer validation; explicit Submit | Stable field/choice values; local completion never delivery |
 | Supporting content B3 | Existing native source items | Source/content revision and excerpt flags, geometry and renderer process inputs | Separate SLT Markdown + TermiFlow flowcharts; unsupported/overflow preserves original source |
 | Project graph B1 | Native inventory, stable project/question identities | Inventory/revision/geometry, previous displayed hit owners | ascii-dag scene adapted to clipped SLT cells, Tab/arrows/Enter/mouse; zero-question projects retained |
-| Context B3 | Explicitly owned local fael store | Immutable source-qualified events and verified full-source blobs | Explicit capture/recall/history/revisit/supersession; local close has no native effect |
-| Dependency synthesis B3 | Explicit admitted native question revisions and edge reasons | Edge/coverage revisions; stable dependency ordering and visible cycles | petgraph; native offers currently expose no edge/coverage capability, so Unknown remains visible |
+| Context B3 | Owned local fael store | Immutable source-qualified events and verified full-source blobs | Bounded observation of already-loaded evidence; explicit typed capture, full-source retrieval, history/revisit/supersession; local close has no native effect |
+| Dependency evidence B3 | Explicit admitted native question revisions and edge reasons | Qualified edges are required before synthesis | petgraph analysis is available but current native offers expose no edge/coverage source; the live queue preserves admission order |
 | Recovery S6 | Client pending records + host durable receipt journal | Explicit original-ID reconciliation only | Matched acknowledgement; independent Stop; no automatic retries |
 
 Read state, native run state and settlement are separate. Source-qualified observed events survive lifecycle-only shells and restart; evicting an observation also expires its read markers conservatively. Open verifies a live source before recording its event as read, and never settles it. Running includes running/needs-input/failed even after reading. Unread and Completed share view 1; Pins is independent and Settled is an on-demand explorer. Host pagination and local ordering use meaningful activity, excluding shell `updatedAt`/token/tool churn. The compact shell cannot expose unseen mid-run replies it omits; it cannot be treated as a full transcript. Actual subagent counts come from `knownChildCount`, never the loaded-page length. Project inventory is bounded to 200 entries / 48 KiB of record content, with explicit incompleteness; older helpers that omit inventory do not establish completeness.
@@ -117,14 +133,21 @@ Unsent launch forms use `rustLaunchForms`, keyed by canonical `[profileId, envir
 
 Local project scope, priority, reading anchor and review coordinates describe presentation only. Transcript anchors restore a wrapped offset only when the same source row and content digest remain on the loaded page; diff anchors require the same complete native source hashes. Exact source and content digests prevent an old coordinate or click from becoming a different native action. They neither schedule native work nor replace its state.
 
-## Explicit local context
+## Local source context
 
-`/context-save` captures a completed native source item only by explicit action.
-An excerpt cannot be silently promoted to complete source. The private store is
-an explicit state-sibling directory, not an auto-discovered repository journal.
+Completed assistant envelopes already loaded by the client are retained as
+evidence through one dedicated in-process context worker. Capture is revision-deduplicated,
+bounded and serialized; native truncation and page metadata accompany the exact
+captured envelope. An excerpt is never promoted to complete source.
+`/context-save` explicitly records a typed decision, evidence, journal or local
+open loop. Automatic observation does not infer those lifecycle choices.
+The private store is an explicit state-sibling directory, not an auto-discovered
+repository journal.
 fael-core supplies actual row, open/history, supersession and ranked query
 semantics; no hooks, crew, daemon or new orchestration is enabled. Full captured
 payloads are content-addressed separately from fael's 10 KiB row limit.
+`/context-find` uses fael matching across full retained payloads and compact rows;
+source-read failures remain explicit degradation.
 
 Each immutable event and source blob uses a private temporary file, file fsync,
 atomic no-clobber publication and directory fsync. Source blobs commit before
@@ -134,6 +157,31 @@ filesystem syscall boundary, not a hardware power-loss guarantee. Bounded
 structured packs retain exact known totals, omissions, source/content revisions,
 observation metadata and pack identity. `/resume` adds actual protected drafts,
 original pending operations and native requests; nothing is executed or resolved.
+
+The context worker lazily and exclusively owns Store and all its filesystem
+operations: ObserveLoaded, Record, Close, Revisit, Recall, Resume and Original
+source. It uses the existing crossbeam-channel dependency and a four-slot request
+queue; draft `storage_pool` remains independent. One read is submitted at a time,
+with one latest desired replacement. Exact serial/scope/app/view tokens prevent
+stale results from repainting closed or replaced dialogs. Pending reads use an
+existing compact Context modal so the real SLT Esc path invalidates their token.
+
+Source-bearing writes are limited to one accepted request and 16 MiB per source
+or observation batch, with a bounded pending observation set and one retained
+unaccepted explicit write. Admission failure distinguishes Full from Disconnected
+and returns the original payload. `/context-retry` is explicit; accepted failures
+also retain their original request. Write completion is handled for its original
+source, with source/generation and revisit edit-epoch/text checks before visible
+success. No native operation is dispatched or replayed by this worker.
+
+Normal Quit closes context admission and invalidates desired reads. It suppresses
+completion-triggered scheduling, drains accepted results through the worker's
+termination marker, and joins only after Store has been released. The bounded
+SLT bridge retains batches outside its wake-only channel and recovers queued and
+not-yet-forwarded packets when a terminal session closes. Final form/draft/UI
+flush remains independent; write errors remain visible. Context I/O runs outside
+the controller and draft worker, but whole-store scan duration remains unbounded;
+no latency/resource saving or hard cancellation deadline is claimed.
 
 ## Verification boundaries
 

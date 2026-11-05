@@ -2,12 +2,27 @@ use super::*;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 impl App {
+    fn preserve_dialog(&mut self) -> bool {
+        if self.dialog.is_none() {
+            return true;
+        }
+        if let Err(error) = self.preserve_open_form() {
+            self.error(error);
+            return false;
+        }
+        true
+    }
+
     pub(super) fn menu(
         &mut self,
         title: impl Into<String>,
         description: impl Into<String>,
         choices: Vec<Choice>,
     ) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         self.dialog = Some(Dialog {
             title: title.into(),
             description: description.into(),
@@ -21,6 +36,10 @@ impl App {
         self.dirty = true;
     }
     pub(super) fn detail(&mut self, title: impl Into<String>, text: impl Into<String>) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         let title = title.into();
         let text = text.into();
         self.capture_detail(&title, &text);
@@ -43,6 +62,10 @@ impl App {
         target: InputTarget,
         text: String,
     ) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         self.modal_editor = ui::editor(&text, &self.theme, "Type here…");
         self.dialog = Some(Dialog {
             title: title.into(),
@@ -57,6 +80,10 @@ impl App {
         self.dirty = true;
     }
     pub(super) fn palette(&mut self) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         self.modal_editor = ui::editor("", &self.theme, "Find an action…");
         self.dialog = Some(Dialog {
             title: "Commands".into(),
@@ -126,9 +153,18 @@ impl App {
     }
 
     pub(super) fn dispatch(&mut self, intent: Intent) -> Result<()> {
-        self.preserve_workspace_position()?;
-        self.dialog = None;
+        self.preserve_open_form()?;
+        self.invalidate_context_view();
+        let previous = self.dialog.take();
         self.dirty = true;
+        let result = self.dispatch_intent(intent);
+        if result.is_err() && self.dialog.is_none() {
+            self.dialog = previous;
+        }
+        result
+    }
+
+    fn dispatch_intent(&mut self, intent: Intent) -> Result<()> {
         match intent {
             Intent::Context(action) => self.context_action(action)?,
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
@@ -155,7 +191,10 @@ impl App {
                 }
                 ui::style_editor(&mut self.composer, &self.theme);
             }
-            Intent::Layout(layout) => self.layout = layout,
+            Intent::Layout(layout) => {
+                self.layout = layout;
+                self.save_ui()?;
+            }
             Intent::Open(profile, thread) => self.open(profile, thread)?,
             Intent::NewEnvironment(profile, purpose) => self.choose_project(profile, purpose)?,
             Intent::Project(profile, project, purpose) => {
@@ -321,7 +360,7 @@ impl App {
             ),
             "quit" => {
                 self.flush_draft()?;
-                self.quit = true;
+                self.begin_context_shutdown();
             },
             "mode" => {
                 ensure!(["", "dev", "developer", "agentbox"].contains(&args), "Workspace is Dev");
@@ -371,6 +410,7 @@ impl App {
                     self.refresh(false, true)?;
                 }
             },
+            "search-scope" => self.search_scopes(),
             "preview" => {
                 let selected = self.selected_thread().cloned().context("Select a conversation")?;
                 self.source_read(
@@ -469,11 +509,14 @@ impl App {
             "reviewed" | "settle" | "unreviewed" | "unsettle" | "snooze" | "unsnooze" | "pin" => self.thread_action(name)?,
             "model" | "settings" | "effort" | "speed" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
-                self.model_edit = None;
+                if name != "effort" {
+                    self.model_edit = None;
+                }
+                let scope = if args == "next" { ModelScope::Next } else { ModelScope::Current };
                 self.read(
                     "models",
                     json!({"threadId": a.thread}),
-                    ReadKind::Models(if args == "next" { ModelScope::Next } else { ModelScope::Current }),
+                    if name == "effort" { ReadKind::Effort(scope) } else { ReadKind::Models(scope) },
                 )?;
                 self.notice = "Reading native model catalog…".into();
             },
@@ -496,7 +539,7 @@ impl App {
                     serde_json::to_string_pretty(&m["providerIdentity"])?,
                 ));
             },
-            "recover" | "pending" | "retry" | "retry-launch" | "resolve" => self.recovery_menu()?,
+            "recovery" | "recover" | "pending" | "retry" | "retry-launch" | "resolve" => self.recovery_menu()?,
             "reconnect" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 let target = (a.profile, a.thread.clone());
@@ -525,6 +568,7 @@ impl App {
             ),
             "mouse" => {
                 self.mouse = !self.mouse;
+                self.save_ui()?;
                 self.notice = if self.mouse {
                     "Mouse enabled for next launch".into()
                 } else {

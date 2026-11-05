@@ -95,6 +95,35 @@ pub struct Modal {
     pub editor: bool,
     pub footer: String,
     pub action_stamp: u64,
+    /// Controller-derived model review phase, independent of provider labels.
+    pub model: Option<ModelDialog>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ModelDialog {
+    Configuration,
+    OptionValues { id: String },
+}
+
+/// Presentation roles retain the original modal choice indices and native identities.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ModalItemRole {
+    #[default]
+    Choice,
+    Model {
+        native_id: String,
+    },
+    ModelOption {
+        id: String,
+        label: String,
+        value: String,
+    },
+    ModelOptionValue {
+        id: String,
+    },
+    ModelApply,
+    ModelSave,
+    ModelClear,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -102,6 +131,11 @@ pub struct ModalItem {
     pub label: String,
     pub description: String,
     pub checked: bool,
+    /// Explicit form navigation or submission, separate from native answer choices.
+    pub action: bool,
+    pub role: ModalItemRole,
+    /// The native/default model configuration, separate from the staged checkmark.
+    pub applied: bool,
 }
 
 /// Editor rectangles are their actual widget areas, without decorative borders.
@@ -1518,6 +1552,8 @@ mod tests {
                     label: format!("Action {i}"),
                     description: "Native T3 action".into(),
                     checked: false,
+                    action: false,
+                    ..Default::default()
                 })
                 .collect(),
             footer: "Enter choose · Esc close".into(),

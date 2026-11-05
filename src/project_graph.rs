@@ -1,7 +1,8 @@
 //! Source-qualified project navigation through ascii-dag layout and SLT cells (B1).
 use anyhow::{Context as _, Result, ensure};
 use ascii_dag::{
-    BoxedNode, Direction, Graph, HitResult, RenderOptions, ScenePlanner, TerminalRenderer,
+    BoxedNode, Direction, Graph, HitResult, LayoutConfig, RenderOptions, ScenePlanner,
+    TerminalRenderer,
 };
 use slt::{Color, Context, KeyCode, Rect, Style};
 use std::{collections::HashMap, sync::Arc};
@@ -20,6 +21,12 @@ pub enum NodeId {
         project_id: String,
         thread_id: String,
         request_id: String,
+    },
+    Content {
+        environment_id: String,
+        project_id: String,
+        thread_id: String,
+        source_key: String,
     },
 }
 
@@ -73,6 +80,20 @@ impl Canvas {
                     thread_id,
                     request_id,
                 } => vec![environment_id, project_id, thread_id, request_id],
+                NodeId::Content {
+                    environment_id,
+                    project_id,
+                    thread_id,
+                    source_key,
+                } => {
+                    ensure!(
+                        !source_key.is_empty() && source_key.len() <= 16 * 1024,
+                        "content navigation needs a complete source key"
+                    );
+                    // Composite source keys are opaque and may contain the same
+                    // separators used by controller maps; they are never labels.
+                    vec![environment_id, project_id, thread_id]
+                }
             };
             ensure!(
                 fields.iter().all(|value| !value.is_empty()
@@ -109,10 +130,22 @@ impl Canvas {
                 .context("graph edge target is unavailable")?;
             graph.add_edge(*from, *to, None);
         }
-        let layout = graph.compute_layout();
+        // SLT cells are taller than they are wide. One row separates sibling
+        // boxes without spreading a sparse project selector down the viewport.
+        let mut config = LayoutConfig::standard();
+        config.direction = Direction::LeftRight;
+        config.node_spacing = 1;
+        let mut layout = graph.compute_layout_with_config(&config);
         let options = RenderOptions::plain();
         let mut planner = ScenePlanner::new();
-        let scene = planner.plan(&layout, &options.plan).quiet()?;
+        let mut scene = planner.plan(&layout, &options.plan).quiet()?;
+        // Preserve source ancestry instead of panning a wide parent off-screen
+        // merely to fit its selected child. Use the library's vertical layout.
+        if !edges.is_empty() && scene.width() > label_width + 4 {
+            config.direction = Direction::TopDown;
+            layout = graph.compute_layout_with_config(&config);
+            scene = planner.plan(&layout, &options.plan).quiet()?;
+        }
         let width = scene.width();
         let height = scene.height();
         let cells = width
@@ -229,7 +262,8 @@ impl ProjectGraph {
                 .cloned()
                 .or_else(|| nodes.first().map(|node| node.id.clone()));
         }
-        let focused = ctx.register_focusable_keyed("project-navigation");
+        let focused = ctx.register_focusable_named("project-navigation");
+        ctx.register_focusable();
         let mut activated = None;
         let mut moved = changed || selection_changed;
         if focused && !nodes.is_empty() {
@@ -262,7 +296,19 @@ impl ProjectGraph {
                 .iter()
                 .position(|node| Some(&node.id) == self.selected.as_ref())
         {
-            let bounds = canvas.bounds[index];
+            let mut bounds = canvas.bounds[index];
+            if let Some(parent) = edges.iter().find(|edge| edge.to == nodes[index].id)
+                && let Some(parent) = nodes.iter().position(|node| node.id == parent.from)
+            {
+                let ancestor = canvas.bounds[parent];
+                let x = bounds.x.min(ancestor.x);
+                let y = bounds.y.min(ancestor.y);
+                let right = (bounds.x + bounds.width).max(ancestor.x + ancestor.width);
+                let bottom = (bounds.y + bounds.height).max(ancestor.y + ancestor.height);
+                if right - x <= width && bottom - y <= height {
+                    bounds = Rect::new(x, y, right - x, bottom - y);
+                }
+            }
             self.left = reveal(
                 self.left,
                 bounds.x as usize,
@@ -447,6 +493,31 @@ mod tests {
             label: label.into(),
             color: slt::palette::tailwind::CYAN.c300,
         }
+    }
+
+    #[test]
+    fn sparse_projects_share_compact_paint_and_pointer_geometry() {
+        let nodes = [node("env", "a", "Alpha"), node("env", "b", "Beta")];
+        let mut graph = ProjectGraph::default();
+        let mut backend = TestBackend::new(30, 8);
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                graph.draw(ctx, &nodes, &[], None, 30, 8).unwrap();
+            });
+        }
+        let canvas = graph.canvas.as_ref().unwrap();
+        assert_eq!(
+            canvas.bounds[1].y - (canvas.bounds[0].y + canvas.bounds[0].height),
+            1
+        );
+        backend.assert_contains("Alpha");
+        backend.assert_contains("Beta");
+        let (x, y) = backend.find_text("Beta").unwrap();
+        let mut response = GraphResponse::default();
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            response = graph.draw(ctx, &nodes, &[], None, 30, 8).unwrap();
+        });
+        assert_eq!(response.activated, Some(nodes[1].id.clone()));
     }
 
     #[test]
