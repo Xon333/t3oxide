@@ -28,7 +28,7 @@ The revised presentation preferences live under `sltUi`; old presentation prefer
 
 ## Input
 
-Plain Enter inserts a newline. Typing `/` at the prompt opens completion; Enter selects the command. Esc retains unsent text, `//` stays literal, and pasted slash text stays literal. Cmd+Enter is preferred when delivered; Ctrl+Enter, Shift+Enter and Cmd+Shift+Enter are supported alternatives. An explicit Send button and portable Ctrl+] / Ctrl+\ path remain available. Ctrl+S is the independent Stop action. Native Rex delivery and pane-collision checks are separate acceptance work.
+Plain Enter inserts a newline. Typing `/` at the prompt opens completion; Enter selects the command. Esc retains unsent text, `//` stays literal, and pasted slash text stays literal. Cmd+Enter is preferred when delivered; Ctrl+Enter, Shift+Enter and Cmd+Shift+Enter are supported alternatives. An explicit Send button and portable Ctrl+] / Ctrl+\ path remain available. Ctrl+S is the independent Stop action. Physical Rex checks on M1 and the adopted M4 route verified one Ctrl+Enter send without creating a pane. Rex Cmd+Enter retains its pane action. On configured Rex clients, use the native **Enter T3oxide Editing** palette action for Mac selection/copy and Escape to leave its client-wide mode.
 
 See [shortcuts](docs/shortcuts.md), [content controls and examples](docs/content-controls.md), [architecture and flow map](docs/architecture.md), [source reuse](docs/rust-source-reuse.md) and [verification](docs/rust-verification.md).
 

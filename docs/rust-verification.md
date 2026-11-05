@@ -4,7 +4,8 @@ Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a5878
 and relevant later preserved UX behavior into the isolated SLT client. The
 active runtime is `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbfe7684397897fb`,
 v0.26.0, with maintained vendored patch `ordered-activation-v2`. The checked
-implementation at `dd11afc` includes persistent navigation Pins and exact
+implementation at `cb8decd` includes supported Env routing and accurate browsing
+notices, persistent navigation Pins and exact
 post-action metadata, retaining the `c0cee63` shutdown-lock correction and
 `529d9ec` submission/compact controls, `5941463` geometry/modal/provenance and
 `b58644d` search fixes. No installed
@@ -18,14 +19,14 @@ launcher, GUI, configuration or T3 service was changed by these checks.
 | Adapter/scripts | `scripts/check.sh`: **257 Node + 5 Python** passed, including syntax/compile checks |
 | Rust documentation | `RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps` passed |
 | Release | `cargo build --locked --release` passed on macOS ARM64 |
-| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **14 outcomes** passed |
+| Active SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary target/release/t3oxide`: **15 outcomes** passed |
 | Locked attribution | 290 upstream packages inventoried, including the local SLT base/patch and modified-file hashes; both upstream MIT notices retained; registry archives have Cargo checksums |
 
 Actual toolchain: Rust/Cargo **1.99.1**, Node **24.21.0**, PTY Python **3.12.15**.
 The manifest minimum is deliberately **1.92**, required by ascii-dag; this is not
 a claim that a 1.92 toolchain was tested. The release is **8,933,104 bytes**;
-SHA-256 `e2a6b6c087ac3a1820aa417e1c7da4fa4cd7cb3e7f59aee8a36ca0ea8eccf4f1`
-at `dd11afc`.
+SHA-256 `f057821d5957676a89b09ee21e83a45d5590c6da1f86f2babf20f94db6a2b4d2`
+at `cb8decd`.
 No current performance or resource-saving comparison is claimed.
 
 The first hosted Ubuntu run failed two immediate state-reopen tests because a
@@ -116,8 +117,8 @@ slash completion, one physical Ctrl+Return without a pane, and a fresh native B
 answer acknowledged by its original source. It reproduced one unresolved
 acceptance finding twice: settling a pinned disposable conversation clears its
 native pin, restore leaves it unpinned, and the client still shows Pins membership.
-The correction below is source-checked; native confirmation and M4 activation
-remain pending. No task-owned Failed lifecycle or exhaustive native generation
+The navigation-tag correction below subsequently passed focused native
+confirmation and installed M4 acceptance. No task-owned Failed lifecycle or exhaustive native generation
 coverage was completed; source checks remain the evidence for those paths.
 
 Navigation Pins now use the T3-owned `t3oxide:navigation-pin` tag. One explicit
@@ -152,7 +153,10 @@ settle/restore and restart, native shelf separation, explicit Unpin and exact
 absent-page targeting. It exposed Ctrl+T choosing Settle after settled Unpin
 removed the displayed source from Pins. The shortcut now reads the same retained
 active-source summary as mutation dispatch; its focused regression verifies
-Unsettle when the source is absent from loaded rows. Native retesting is pending.
+Unsettle when the source is absent from loaded rows. The frozen `61dc5d0` M1
+retest passed: one physical composer Ctrl+T produced exactly one native Unsettle,
+with no extra Settle, and retained tags, shelf fields, draft, reading anchor,
+query and scope. Its disposable fixture was restored and task client exited0.
 
 The journal also accepts a validated legacy decorated ACK with the same stable
 acceptance fields. It checks the original operation/payload binding and any
@@ -166,14 +170,49 @@ keyboard/mouse/Unicode/clipping, TermiFlow drawing and context provenance,
 reopen/history/budgets/degradation/recovery inputs. No performance or latency
 budget is inferred from these regressions.
 
-Independent consequential Sol review cleared `741d4c2`; the narrow shutdown-lock
-fix has its deterministic regression and passing hosted checks. The navigation-pin
-correction needs its consequential review, current-head hosted checks and focused
-native confirmation; finished-client M4 adoption remains pending. The PTYs are
+Independent consequential Sol review cleared `741d4c2` and the final pin, refresh
+and compatible-receipt changes at `61dc5d0`; all three hosted checks passed on
+`61dc5d0`. The narrow shutdown-lock fix has its deterministic regression and
+passing hosted checks. Later Env routing and notice corrections retain those
+unchanged source results and have focused release-PTY coverage. The PTYs are
 synthetic endpoint evidence; they never use a provider or certify a native Rex
 chord. Internal tabs are supported. A supported draft-safe
 native pop-out has not been established; no bridge or global pane binding is
 introduced here.
+
+Installed M4 acceptance used the normal launcher and original profiles through
+both execution-host routes. Frozen `61dc5d0` passed A/B source navigation,
+Markdown/flowcharts, opaque modals, native question-draft/acknowledged-answer,
+physical manual-mode Unicode copy/paste, newline, slash-command Enter, one
+Ctrl+Return dispatch without a pane, mouse Send, search/source reopening,
+independent drafts and a no-flags normal restart. Ordinary inactive terminal
+copy and the existing Cmd+Enter pane action also passed. Each send/answer has
+its original durable native receipt; the disposable fixture completed with no
+pending requests or operations.
+
+That trial exposed the sidebar Env action naming an unsupported command.
+`1b63b95` routes it to the existing environment-scope action. The exact old
+release failed the new click-to-dialog PTY regression; the correction passes.
+Physical normal/compact Env checks then passed on M1, and the normal adopted M4
+client correctly filtered both hosts and All while retaining its attached source
+and draft. The test noticed a stale footer saying All sources after an individual
+host selection. `cb8decd` refreshes that notice after the effective scope changes;
+the release PTY now selects a host and checks its actual name. Native filtering
+was already correct. This last wording correction has source/PTY evidence,
+without a separate physical retest.
+
+M4's normal release pointer was explicitly swapped only after M1 acceptance;
+previous releases remain available. The final `cb8decd` wording-only executable
+was subsequently published through that pointer with its exact hash verified;
+its adapter and native behavior are unchanged from the physically checked build. Eight drafts and 26 reading positions,
+including all seven original drafts and 24 original positions, are preserved.
+The bounded recall list rotated four old entries during test sends; after all
+test clients closed, a guarded selective cleanup restored the exact original
+24-entry history and retained the test history, original snapshots and native
+ACKs separately. No unrelated fields were restored over newer state. All task
+clients exited0, owned tabs closed, and clipboard, focus, bounds and input methods
+were restored. Protected sessions and power guards remained untouched. Separate
+Rex/configurator deployment owns later terminal/network configuration changes.
 
 Precise limits:
 

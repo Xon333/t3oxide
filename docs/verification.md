@@ -1,6 +1,6 @@
 # Current revised Rust/SLT contract
 
-The active source direction is now Rust with pinned SLT v0.26.0. See [current verification](rust-verification.md) for the affected source checks and explicit remaining native acceptance. Historical Go, Swift and Ratatui results below certify only their original identified inputs; they do not establish SLT input delivery, installed adoption or resource savings.
+The active source direction is now Rust with pinned SLT v0.26.0. See [current verification](rust-verification.md) for the source checks, M1/M4 native results and their exact limits. Historical Go, Swift and Ratatui results below certify only their original identified inputs; they do not establish SLT input delivery, installed adoption or resource savings.
 
 # Historical verification
 

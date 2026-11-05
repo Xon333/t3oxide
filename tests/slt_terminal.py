@@ -78,7 +78,7 @@ def commands_pointer_and_copy(binary, directory):
         terminal.wait("Fixture host")
         assert "Unknown action" not in terminal.text
         assert not native_payloads(paths), "environment browsing cannot dispatch a mutation"
-        click(terminal, "Fixture host", last=True)
+        click(terminal, "[ Fixture host ]")
         terminal.wait("Browsing Fixture host")
         terminal.send(b"\x10help\r")
         terminal.wait("Input and focus")
