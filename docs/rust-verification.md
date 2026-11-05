@@ -28,6 +28,32 @@ native bytes before Apply, exact pending/acknowledgement identity, one native
 effect and the Unicode draft/caret. The independent review predates these fixes;
 their subsequent validation was run by the implementer.
 
+A subsequent focused regression passed through production SLT rendering and
+App action dispatch: pointer-opened Model belongs to `composer-tools`, and Space
+on the settled × restores that invoking owner. One deliberate Shift+F6 returns
+to the composer without moving its actual rendered caret; typed `<caret>` lands
+at the original interior position and removal restores the exact Unicode draft.
+The original uncertain operation, other-source draft and native bytes remain
+unchanged. The Python harness now makes that explicit keyboard return only
+before its post-close, outer-Escape and applied caret probes. All 192 current
+assertions (including the 152 in the 18 unchanged functions), generic helpers
+and the pending-context gate are preserved. The source passed **260 Rust tests**,
+workspace/vendor formatting and both Clippy checks. No new minimum-version APIs
+were introduced; the prior 1.92.0 compile evidence is reused, not rerun.
+
+One minimal 70×22 production-entry PTY diagnostic reused the frozen R5 binary
+(SHA-256 `05a4b938cb27a4c5b645c76f8f707abebf70e278a76ba553c0f5c202cbd22283`).
+It reproduced the absent editor caret while the invoking tools owned focus,
+then passed coordinate equality and actual marker insertion/removal after
+Shift+F6. During the caret proof, full durable state, Unicode drafts, the original
+uncertain pending record, native bytes/mode and journal remained exact; effects
+and payloads stayed zero. Normal exit persisted only the tab’s previously absent
+display title, preserving its source identity. The single product child exited
+with status 0. The earlier compact Model group failure remains retained. That
+PTY group, its Apply/acknowledgement and restart/resize cases, and the full-29
+recheck were not run in this lane; installed, physical and visual acceptance
+remain separate.
+
 The correction pass is still in progress. The second frozen release (R2) is
 `t3oxide 0.11.0 · Rust / SLT`, SHA-256
 `99bbe9f5738c3927cb62e5c677422f13b08eb2b66347139e1086e7215e565e57`,

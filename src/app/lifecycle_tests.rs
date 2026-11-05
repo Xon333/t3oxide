@@ -2160,6 +2160,150 @@ fn slt_model_close_focus_survives_settle_and_space_closes_once() {
 }
 
 #[test]
+fn slt_model_pointer_close_restores_tools_then_keyboard_returns_preserved_caret() {
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["persistInitialState"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.open(0);
+    let draft = "Tail 日本語 café e\u{301} 👩\u{200d}💻  \nold tail  \n";
+    fixture.app.composer = ui::editor(draft, &fixture.app.theme, "");
+    fixture.app.flush_draft().unwrap();
+    let other = "Other source 日本語  \n";
+    fixture
+        .app
+        .state
+        .set_draft("native-0", "thread-review", other)
+        .unwrap();
+    let pending = json!({"id":"model-preserved-operation","environmentId":"native-0",
+        "threadId":"thread-review","op":"send","message":"Existing uncertain intent"});
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    let native_before = fs::read(&fixture.native_states[0]).unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend = ::slt::TestBackend::new(70, 22)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    assert_eq!(
+        model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new()).as_deref(),
+        Some("composer")
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Up)
+            .key_code(::slt::KeyCode::End)
+            .key_code(::slt::KeyCode::Left)
+            .key_code(::slt::KeyCode::Left)
+            .build(),
+    );
+    backend.assert_contains("old tail▎");
+    let caret = backend.find_text("▎").expect("actual interior SLT caret");
+    let (x, y) = backend
+        .find_text("Model")
+        .expect("painted composer Model control");
+    assert_eq!(
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().click(x, y).build(),
+        )
+        .as_deref(),
+        Some("composer-tools"),
+        "pointer activation gives the invoking action bar ownership"
+    );
+    while fixture.app.model_edit.is_none() {
+        let event = fixture.app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    assert_eq!(
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::BackTab)
+                .build(),
+        )
+        .as_deref(),
+        Some("model-close")
+    );
+    assert_eq!(
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().key(' ').build(),
+        )
+        .as_deref(),
+        Some("composer-tools"),
+        "close restores the original invoking owner"
+    );
+    assert!(fixture.app.modal().is_none());
+    assert_eq!(fixture.slt_closes, 1);
+    backend.assert_not_contains("▎");
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(
+        fixture.app.state.pending("native-0", false),
+        Some(pending.clone())
+    );
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    assert_eq!(
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_with(::slt::KeyCode::F(6), ::slt::KeyModifiers::SHIFT)
+                .build(),
+        )
+        .as_deref(),
+        Some("composer")
+    );
+    assert_eq!(backend.find_text("▎"), Some(caret));
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key('<')
+            .key('c')
+            .key('a')
+            .key('r')
+            .key('e')
+            .key('t')
+            .key('>')
+            .build(),
+    );
+    assert_eq!(
+        fixture.app.text(),
+        draft.replace("old tail  \n", "old tail<caret>  \n")
+    );
+    backend.assert_contains("old tail<caret>▎");
+    let mut restore = ::slt::EventBuilder::new();
+    for _ in 0.."<caret>".len() {
+        restore = restore.key_code(::slt::KeyCode::Backspace);
+    }
+    model_tail_input(&mut backend, &mut fixture, &mut surface, restore.build());
+    fixture.app.flush_draft().unwrap();
+    assert_eq!(backend.find_text("▎"), Some(caret));
+    assert_eq!(backend.to_string_trimmed().matches('▎').count(), 1);
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-review"), other);
+    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+    assert_eq!(fixture.app.state.pending_records().len(), 1);
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+}
+
+#[test]
 fn surface_effort_next_edits_the_existing_override_without_native_write() {
     let mut fixture = Fixture::new(0);
     fixture.open(0);

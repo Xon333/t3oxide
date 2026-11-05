@@ -866,11 +866,17 @@ def compact_model_interactions(binary, directory):
                 retain("focused-close")
                 send("space-close", b" ")
                 assert title not in terminal.text and "Filter…" not in terminal.text, terminal.text
+                # Model was invoked by composer-tools; return by keyboard so the
+                # preserved textarea caret is inspected without a pointer move.
+                send("close-focus-return-to-composer", PREVIOUS_PANE)
                 prove_caret("close-focus-caret")
                 unchanged("close-focus")
                 open_model()
                 send("outer-escape", escape)
                 assert title not in terminal.text, terminal.text
+                # Model was invoked by composer-tools; return by keyboard so the
+                # preserved textarea caret is inspected without a pointer move.
+                send("outer-escape-return-to-composer", PREVIOUS_PANE)
                 prove_caret("outer-escape-caret")
                 unchanged("outer-escape")
             else:
@@ -927,6 +933,9 @@ def compact_model_interactions(binary, directory):
                 # Close the review if still present before inspecting the textarea.
                 if title in terminal.text:
                     send("close-after-apply", escape)
+                # Model was invoked by composer-tools; return by keyboard so the
+                # preserved textarea caret is inspected without a pointer move.
+                send("applied-return-to-composer", PREVIOUS_PANE)
                 prove_caret("applied-caret")
             # A real geometry round trip must retain draft/caret, not just durable bytes.
             terminal.resize(140, 38)
