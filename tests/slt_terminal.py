@@ -671,6 +671,316 @@ def library_without_questions(binary, directory):
     return ["zero-question project exposes independent Library report/diagram and opens the original source in A without dispatch"]
 
 
+def compact_model_interactions(binary, directory):
+    """One result group, with an occupied recovery lane and four clean Apply cases."""
+    evidence = Path(tempfile.mkdtemp(prefix="t3oxide-model-evidence-"))
+    private_json(directory / "compact-model-evidence.json", {"directory": str(evidence)})
+    title, escape = "Model · current conversation", b"\x1b[27u"
+    draft = "Tail 日本語 café e\u0301 👩\u200d💻  \nold tail  \n"
+    other = "Other source 日本語  \n"
+    original = {"instanceId": "fixture-provider", "model": "fixture-model",
+                "options": [{"id": "reasoningEffort", "value": "medium"}]}
+    model_only = {"instanceId": "fixture-provider", "model": "fixture-fast"}
+    staged = {**model_only, "options": [{"id": "reasoningEffort", "value": "high"},
+                                       {"id": "serviceTier", "value": "fast"}]}
+    pending = {"id": "model-preserved-operation", "environmentId": "fixture-env",
+               "threadId": "thread-review", "op": "send", "message": "Existing uncertain intent"}
+    methods = [("tab", TAB), ("backtab", BACKTAB), ("escape", escape), ("pointer", None)]
+    completed = []
+    private_json(evidence / "group.json", {"status": "RUNNING", "binary": str(binary),
+                 "binarySha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                 "cases": ["guarded"] + [name for name, _ in methods]})
+    for case, dismissal in [("guarded", None)] + methods:
+        guarded = case == "guarded"
+        paths = fixture(evidence / case / "fixture", stream=False,
+                        persistInitialState=True, ackDelayMs=1200)
+        private_json(paths["state"], {"drafts": {"fixture-env/thread-a": draft,
+                     "fixture-env/thread-review": other},
+                     "pending": {"fixture-env": pending} if guarded else {}, "pendingStops": {}})
+        case_dir = evidence / case
+        terminal, child, actions = None, 0, []
+
+        def snapshot(label):
+            journal = paths["state"].parent / "operations-v1"
+            value = {"state": json.loads(paths["state"].read_text()),
+                     "native": json.loads(paths["native"].read_text()),
+                     "nativeSha256": hashlib.sha256(paths["native"].read_bytes()).hexdigest(),
+                     "nativeMode": oct(paths["native"].stat().st_mode & 0o777),
+                     "journal": {"exists": journal.exists(), "entries": {
+                         str(path.relative_to(journal)): {
+                             "mode": oct(path.stat().st_mode & 0o777),
+                             "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None}
+                         for path in sorted([journal, *journal.rglob("*")]) if path.exists()}},
+                     "payloads": native_payloads(paths)}
+            private_json(case_dir / f"{len(actions):03d}-{label}.json", value)
+            return value
+
+        def retain(label):
+            prefix = case_dir / f"child-{child}-{len(actions):03d}-{label}"
+            prefix.with_suffix(".raw").write_bytes(terminal.raw)
+            prefix.with_suffix(".txt").write_text(terminal.text)
+            private_json(prefix.with_suffix(".json"), {"child": child,
+                         "pid": terminal.process.pid, "argv": terminal.process.args,
+                         "config": str(paths["config"]), "state": str(paths["state"]),
+                         "geometry": [terminal.columns, terminal.rows],
+                         "exit": terminal.process.poll(), "actions": actions})
+
+        def send(label, data):
+            actions.append({"label": label, "child": child,
+                            "seconds": time.monotonic(), "bytesHex": data.hex()})
+            private_json(case_dir / "actions.json", actions)
+            terminal.send(data)
+            retain(label)
+
+        def pointer(label, text):
+            points = targets(terminal, text)
+            x, y = points[-1]
+            send(label, f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode())
+
+        def configuration():
+            terminal.wait(title)
+            terminal.pump(0.2)
+            assert "Filter…" not in terminal.text, terminal.text
+            return dialog_text(terminal, title)
+
+        def unchanged(label):
+            actual = snapshot(label)
+            assert actual["state"] == expected_state, f"{case}/{label}: durable state changed"
+            for key in ["native", "nativeSha256", "nativeMode", "journal", "payloads"]:
+                assert actual[key] == baseline[key], f"{case}/{label}: {key} changed"
+            return actual
+
+        def caret():
+            x, y = targets(terminal, "╭─Prompt")[-1]
+            cells = terminal.screen.buffer
+            right = next(c for c in range(x, terminal.columns) if cells[y - 1][c].data == "╮")
+            bottom = next(r for r in range(y, terminal.rows) if cells[r][x - 1].data == "╰")
+            points = [(c, r) for r in range(y, bottom) for c in range(x, right)
+                      if cells[r][c].data == "▎"]
+            assert len(points) == 1, f"Expected actual prompt caret\n{terminal.text}"
+            return points[0]
+
+        def prove_caret(label):
+            assert caret() == original_caret, f"{case}/{label}: caret moved"
+            marker = "<caret>"
+            send(label + "-insert", marker.encode())
+            draft_is(terminal, paths, draft.replace("old tail  \n", "old tail<caret>  \n"))
+            send(label + "-restore", b"\x7f" * len(marker))
+            draft_is(terminal, paths, draft)
+            assert caret() == original_caret
+
+        def open_model():
+            pointer("open-model", "Model")
+            configuration()
+
+        def open_local():
+            pointer("expand-local-model", "Fixture fast")
+            terminal.wait("✓ Fixture fast")
+            terminal.wait("Filter…")
+
+        def dismiss(label, key, tail):
+            if key is None:
+                x, y = targets(terminal, "Apply ↵")[-1]
+                data = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
+            else:
+                data = key
+            # Esc is CSI-u, so this SAME write cannot become Alt+Enter.
+            send(label, data + (ENTER if tail else b""))
+            text = configuration()
+            assert "· Fixture fast ▾" in text, text
+            unchanged(label)
+
+        try:
+            terminal = Terminal(binary, paths["config"], paths["state"],
+                                columns=70, rows=22, environment=PTY_ENV)
+            terminal.wait("Ready for review")
+            focus_prompt(terminal)
+            send("interior-caret", UP * 3 + b"\x1b[H" + DOWN + END + b"\x1b[D" * 2)
+            send("bookmark-help", b"\x1bOP")
+            terminal.wait("Input and focus")
+            send("bookmark-close", escape)
+            terminal.pump(0.2)
+            original_caret = caret()
+            draft_is(terminal, paths, draft)
+            baseline = snapshot("baseline")
+            expected_state = baseline["state"]
+            assert expected_state["pending"] == ({"fixture-env": pending} if guarded else {})
+            assert expected_state["drafts"]["fixture-env/thread-review"] == other
+            assert baseline["native"]["projections"]["thread-a"]["thread"]["modelSelection"] == original
+            assert baseline["native"]["effects"] == 0 and not baseline["payloads"]
+            open_model()
+            send("accept-original-model", b" " + ENTER)
+            configuration()
+            unchanged("same-value-model")
+            send("stage-fast-model", b" " + DOWN + ENTER)
+            assert "· Fixture fast ▾" in configuration(), terminal.text
+            unchanged("staged-fast-model")
+            if guarded:
+                for name, key in methods:
+                    open_local()
+                    dismiss("local-" + name + "-queued-enter", key, True)
+                for name, key in methods:
+                    pointer("expand-reasoning-" + name, "Reasoning")
+                    terminal.wait("Native default")
+                    dismiss("option-" + name + "-queued-enter", key, True)
+                for label, value in [("Reasoning", "high"), ("Speed", "fast")]:
+                    pointer("expand-" + label.lower(), label)
+                    terminal.wait("Native default")
+                    send("stage-" + label.lower(), END + ENTER)
+                    text = configuration()
+                    assert any(label in line and value in line for line in text.splitlines()), text
+                    unchanged("staged-" + label.lower())
+                    pointer("reopen-" + label.lower(), label)
+                    terminal.wait("✓ " + ("High" if label == "Reasoning" else "Fast"))
+                    send("same-value-" + label.lower(), ENTER)
+                    configuration()
+                    unchanged("same-value-" + label.lower())
+                for keyboard, name in [(True, "Keyboard model fixture"), (False, "Pointer model fixture")]:
+                    if keyboard:
+                        # Speed -> Apply -> Save. Space acts on Save; Enter applies.
+                        send("focused-save-space", TAB + TAB + b" ")
+                    else:
+                        pointer("pointer-save", "Save favorite")
+                    terminal.wait("Save model favorite")
+                    unchanged("favorite-editor-local")
+                    send("favorite-name", b"\x1b[200~" + name.encode() + b"\x1b[201~")
+                    pointer("save-favorite-continue", "Continue")
+                    configuration()
+                    saved = wait_file(terminal, paths["state"], lambda state:
+                                      any(row.get("name") == name for row in
+                                          state.get("modelPresets", {}).get("fixture-env", [])))
+                    expected = json.loads(json.dumps(expected_state))
+                    expected.setdefault("modelPresets", {}).setdefault("fixture-env", []).append(
+                        {"name": name, "selection": staged})
+                    assert saved == expected, "Save may add only the reviewed local favorite"
+                    expected_state = expected
+                    unchanged("favorite-saved")
+                # Return ownership to the real Model field before cycling to ×.
+                open_local()
+                send("retain-staged-model-before-close", ENTER)
+                configuration()
+                unchanged("before-close-focus")
+                send("focus-close", BACKTAB)
+                terminal.pump(0.2)  # Preserve the actual × keyboard owner across idle settling.
+                targets(terminal, "×")
+                retain("focused-close")
+                send("space-close", b" ")
+                assert title not in terminal.text and "Filter…" not in terminal.text, terminal.text
+                prove_caret("close-focus-caret")
+                unchanged("close-focus")
+                open_model()
+                send("outer-escape", escape)
+                assert title not in terminal.text, terminal.text
+                prove_caret("outer-escape-caret")
+                unchanged("outer-escape")
+            else:
+                open_local()
+                dismiss("local-queued-enter", dismissal, True)
+                open_local()
+                dismiss("local-no-tail", dismissal, False)
+                # Input-free settling must expire dismissal ownership. No Apply retry.
+                terminal.pump(0.25)
+                unchanged("idle-before-apply")
+                send("deliberate-apply-once", ENTER)
+                saved = wait_file(terminal, paths["state"], lambda state: bool(state.get("pending")))
+                assert set(saved["pending"]) == {"fixture-env"}
+                operation = saved["pending"]["fixture-env"]
+                assert operation["id"] and operation["op"] == "select-model"
+                assert operation["environmentId"] == "fixture-env" and operation["threadId"] == "thread-a"
+                assert operation["modelSelection"] == model_only
+                assert operation["expectedModelSelection"] == original
+                private_json(case_dir / "observed-pending.json", saved)
+                wait_file(terminal, paths["native"], lambda value: value["effects"] == 1)
+                snapshot("exact-pending")
+                saved = wait_file(terminal, paths["state"], lambda state: not state.get("pending"))
+                payloads = native_payloads(paths)
+                assert payloads == [{"type": "thread.model-selection.set", "commandId": operation["id"],
+                                     "threadId": "thread-a", "modelSelection": model_only}], payloads
+                # expectedModelSelection is a preflight guard, not a native payload field.
+                accepted = snapshot("acknowledged")
+                assert accepted["native"]["effects"] == 1
+                assert accepted["native"]["projections"]["thread-a"]["thread"]["modelSelection"] == model_only
+                assert saved["drafts"] == expected_state["drafts"]
+                assert saved["pendingStops"] == expected_state["pendingStops"]
+                assert saved["sltUi"]["tabs"] == expected_state["sltUi"]["tabs"]
+                journal = paths["state"].parent / "operations-v1"
+                records = [(path, json.loads(path.read_text())) for path in journal.glob("*.json")]
+                assert len(records) == 1, records
+                path, receipt = records[0]
+                assert receipt["payload"] == payloads[0] and receipt["tag"] == "orchestration.dispatchCommand"
+                ack = wait_file(terminal, Path(str(path) + ".ack"), lambda value:
+                                value.get("payloadHash") == receipt["payloadHash"])
+                assert all(ack[key] == receipt[key] for key in ["key", "scope", "fingerprint", "payloadHash"])
+                native_receipt = accepted["native"]["receipts"][operation["id"]]
+                assert ack["result"] == native_receipt["result"]
+                assert ack["result"]["sequence"] == accepted["native"]["sequence"]
+                assert accepted["native"]["sequence"] == baseline["native"]["sequence"] + 1
+                assert native_receipt["fingerprint"] == receipt["payloadHash"]
+                expected_native = json.loads(json.dumps(baseline["native"]))
+                expected_native["effects"] = 1
+                expected_native["sequence"] += 1
+                expected_native["receipts"][operation["id"]] = native_receipt
+                thread = expected_native["projections"]["thread-a"]["thread"]
+                thread["modelSelection"] = model_only
+                thread["updatedAt"] = accepted["native"]["projections"]["thread-a"]["thread"]["updatedAt"]
+                assert accepted["native"] == expected_native, "Apply may change only its original native source/receipt"
+                # Close the review if still present before inspecting the textarea.
+                if title in terminal.text:
+                    send("close-after-apply", escape)
+                prove_caret("applied-caret")
+            # A real geometry round trip must retain draft/caret, not just durable bytes.
+            terminal.resize(140, 38)
+            actions.append({"label": "resize-wide", "child": child, "geometry": [140, 38]})
+            draft_is(terminal, paths, draft)
+            retain("resize-wide")
+            terminal.resize(70, 22)
+            actions.append({"label": "resize-restore", "child": child, "geometry": [70, 22]})
+            prove_caret("resize-caret")
+            if guarded:
+                unchanged("resized")
+            before_restart = snapshot("before-restart")
+            assert terminal.close() == 0
+            retain("closed")
+            terminal = None
+            child = 1
+            terminal = Terminal(binary, paths["config"], paths["state"],
+                                columns=70, rows=22, environment=PTY_ENV)
+            terminal.wait("Ready for review")
+            draft_is(terminal, paths, draft)
+            terminal.pump(0.2)
+            restarted = snapshot("restarted")
+            assert restarted == before_restart, "restart cannot change state/native/journal or replay"
+            assert len(restarted["payloads"]) == (0 if guarded else 1)
+            assert terminal.close() == 0
+            retain("restart-closed")
+            completed.append(case)
+            private_json(case_dir / "result.json", {"status": "PASS", "case": case,
+                         "children": [0, 1], "subcases": [row["label"] for row in actions]})
+        except BaseException as error:
+            private_json(case_dir / "result.json", {"status": "FAIL", "case": case,
+                         "error": repr(error), "actions": actions})
+            private_json(evidence / "result.json", {"status": "FAIL", "completed": completed,
+                         "failedCase": case, "error": repr(error)})
+            if terminal is not None:
+                try:
+                    retain("failure")
+                    if paths["state"].exists() and paths["native"].exists():
+                        snapshot("failure")
+                except BaseException as capture_error:
+                    private_json(case_dir / "failure-capture.json", {"error": repr(capture_error),
+                                 "originalError": repr(error)})
+            print(f"Compact Model failure evidence retained at {evidence}", file=sys.stderr)
+            raise
+        finally:
+            if terminal is not None:
+                terminal.close()
+                retain("final")
+    assert completed == ["guarded", "tab", "backtab", "escape", "pointer"]
+    private_json(evidence / "result.json", {"status": "PASS", "completed": completed,
+                 "scope": "one compact Model group; five fixtures, ten production children; synthetic PTY"})
+    return ["compact Model preserves guarded drafts/recovery while staging, dismissing queued input and saving local favorites; each clean dismissal case admits exactly one later deliberate Apply and never replays"]
+
+
 def navigator_lane_pointer(binary, directory):
     """The native Unread tab must activate even when its cursor already is zero."""
     draft = "\n Lane café 日本語 e\u0301 👩\u200d💻  \n"
@@ -699,8 +1009,9 @@ def navigator_lane_pointer(binary, directory):
             while time.monotonic() < deadline:
                 terminal.pump()
                 try:
-                    # The native lane tab lies inside the actual Navigator border.
-                    pane = dialog_text(terminal, "Unread")
+                    # Quiet lane tabs contain internal │ separators. The tools
+                    # row has the same outer Navigator border and no separators.
+                    pane = dialog_text(terminal, "Project")
                 except (ValueError, StopIteration):
                     continue
                 if all(label in pane for label in present) and all(label not in pane for label in absent):
@@ -1040,6 +1351,7 @@ def main():
         checks.extend(commands_pointer_and_copy(args.binary.resolve(), Path(directory)))
         checks.extend(focus_and_panes(args.binary.resolve(), Path(directory)))
         checks.extend(library_without_questions(args.binary.resolve(), Path(directory)))
+        checks.extend(compact_model_interactions(args.binary.resolve(), Path(directory)))
         checks.extend(navigator_lane_pointer(args.binary.resolve(), Path(directory)))
     if args.context_gate:
         checks.extend(context_pending_read(args.binary.resolve(), args.context_gate_evidence.resolve(), args.context_gate.resolve()))
