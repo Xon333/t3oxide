@@ -281,6 +281,7 @@ impl App {
                     "Favorite belongs to another native provider instance"
                 );
                 self.model_edit = Some(ModelEdit {
+                    option_origin: None,
                     environment_id: self.environments[a.profile].environment_id.clone(),
                     scope,
                     original: value["current"].clone(),
@@ -724,6 +725,7 @@ impl App {
     pub(super) fn launch_models(&mut self) -> Result<()> {
         let l = self.launch.as_ref().context("Launch review expired")?;
         self.model_edit = Some(ModelEdit {
+            option_origin: None,
             environment_id: self.environments[l.profile].environment_id.clone(),
             scope: ModelScope::Launch,
             catalog: l.defaults["catalog"].clone(),
@@ -733,6 +735,9 @@ impl App {
         self.model_menu()
     }
     pub(super) fn model_menu(&mut self) -> Result<()> {
+        if let Some(edit) = &mut self.model_edit {
+            edit.option_origin = None;
+        }
         let edit = self.model_edit.as_ref().context("Model review expired")?;
         let selected = string(&edit.selection, "model");
         let mut choices = Vec::new();
@@ -844,6 +849,10 @@ impl App {
             });
         if let Some(id) = id {
             self.choose_option(&id)?;
+            self.model_edit
+                .as_mut()
+                .context("Model review expired")?
+                .option_origin = Some(ModelOptionOrigin::Direct);
         } else {
             self.menu(
                 "Effort unavailable",
@@ -899,6 +908,10 @@ impl App {
             string(option, "description"),
             choices,
         );
+        self.model_edit
+            .as_mut()
+            .context("Model review expired")?
+            .option_origin = Some(ModelOptionOrigin::Configuration);
         Ok(())
     }
     pub(super) fn apply_model(&mut self) -> Result<()> {

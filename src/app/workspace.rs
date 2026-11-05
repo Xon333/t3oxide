@@ -612,6 +612,7 @@ impl App {
             } => {
                 source.check(self)?;
                 self.model_edit = Some(ModelEdit {
+                    option_origin: None,
                     environment_id: source.environment.clone(),
                     scope,
                     catalog: Value::Null,

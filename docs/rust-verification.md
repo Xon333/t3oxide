@@ -74,6 +74,35 @@ archive. The strict 195 Python assertions and all runtime inputs are unchanged.
 The retained R5 PTY failure remains unresolved at the binary acceptance boundary:
 this lane ran no release build, product/PTY group, installed, physical or visual
 check. The parent must build the corrected source before the next focused runtime.
+The R6 strict full-suite attempt subsequently failed at the original
+`focus_and_panes` assertion: Escape from direct Effort invented an unopened
+Model configuration, so F3 remained confined to a modal. A production SLT/App
+regression reproduced that return-path failure before the controller repair.
+An explicit option-origin fact now distinguishes direct entry from a real Model
+child without duplicating staged selection. Direct cancellation restores its
+invoking controls; a real child still returns one level to its staged Model.
+A source-bound direct dismissal tail retains one deferred Enter through SLT's
+close/focus activation frame, then expires after settling. It neither reopens a
+catalog read nor applies or sends. The original pane sequence, literal draft,
+actual keyboard caret return, complete durable state, uncertain operation,
+native bytes/mode and absent journal are checked. Direct Escape/Tab/BackTab/
+pointer plus Enter, unchanged-value acceptance into Apply review, and a later
+real child return are covered. Nested child Escape and outside-pointer
+dismissals also retain their queued Enter across the return to the exact saved
+configuration. The existing real SLT/App regression fails before that repair
+and passes afterward, including Escape+Enter and pointer+Enter, while preserving
+its selected native values and single later deliberate Apply. A changed source
+or configuration stamp clears that retained input ownership.
+
+This source passed **263 Rust tests** (248 library and 15 integration),
+workspace/vendor formatting, both Clippy checks, `git diff --check`, and the
+Rust/Cargo **1.92.0** locked all-target/all-feature compile check. The strict
+195 Python assertions and all runtime inputs remain exact. The nested-child
+failure and its contemporaneous source archive remain preserved.
+The prior focused runtime pass qualifies only its old binary; R6 full-suite
+acceptance remains **FAIL/PARTIAL**. No new binary, PTY/full-suite, native,
+graph, physical, visual or M4 acceptance was run. The parent owns a fresh build
+and strict runtime validation.
 
 The correction pass is still in progress. The second frozen release (R2) is
 `t3oxide 0.11.0 · Rust / SLT`, SHA-256

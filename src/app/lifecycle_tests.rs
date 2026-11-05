@@ -1433,6 +1433,7 @@ fn model_modal_roles_preserve_native_indices_and_cancel_only_the_child() {
         {"id":"native-effort","value":"high"}
     ]});
     fixture.app.model_edit = Some(ModelEdit {
+        option_origin: None,
         environment_id: "native-0".into(),
         scope: ModelScope::Next,
         catalog: json!({"models":[
@@ -1574,6 +1575,7 @@ fn option_checked_value_is_independent_of_keyboard_selection_and_defaults() {
         ("effort", Value::Null, "Native default"),
     ] {
         fixture.app.model_edit = Some(ModelEdit {
+            option_origin: None,
             environment_id: "native-0".into(),
             catalog: catalog.clone(),
             scope: ModelScope::Current,
@@ -1816,12 +1818,15 @@ fn slt_model_picker_commits_only_the_reviewed_native_selection() {
             click(&mut backend, &mut fixture, &mut surface, "Reasoning");
             assert!(matches!(fixture.app.modal().unwrap().model,
                 Some(ui::ModelDialog::OptionValues { ref id }) if id == "reasoningEffort"));
-            let followed_by_enter = key != ::slt::KeyCode::Esc;
-            let mut events = ::slt::EventBuilder::new().key_code(key);
-            if followed_by_enter {
-                events = events.key_code(::slt::KeyCode::Enter);
-            }
-            input(&mut backend, &mut fixture, &mut surface, events.build());
+            input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(key)
+                    .key_code(::slt::KeyCode::Enter)
+                    .build(),
+            );
             assert_eq!(
                 fixture.app.modal().unwrap().model,
                 Some(ui::ModelDialog::Configuration)
@@ -1874,7 +1879,16 @@ fn slt_model_picker_commits_only_the_reviewed_native_selection() {
         input(&mut backend, &mut fixture, &mut surface, Vec::new());
 
         click(&mut backend, &mut fixture, &mut surface, "Speed");
-        click(&mut backend, &mut fixture, &mut surface, "Apply ↵");
+        let (x, y) = backend.find_text("Apply ↵").unwrap();
+        input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .click(x, y)
+                .key_code(::slt::KeyCode::Enter)
+                .build(),
+        );
         assert_eq!(
             fixture.app.modal().unwrap().model,
             Some(ui::ModelDialog::Configuration)
@@ -2301,6 +2315,325 @@ fn slt_model_pointer_close_restores_tools_then_keyboard_returns_preserved_caret(
     assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
     assert_eq!(fixture.app.state.pending_records().len(), 1);
     assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+}
+
+#[test]
+fn slt_direct_effort_cancel_restores_invoker_and_panes_without_phantom_model() {
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["persistInitialState"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.load_pages();
+    fixture.open(0);
+    fixture.drain_pages();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend = ::slt::TestBackend::new(140, 38)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    let (x, y) = backend.find_text("Prompt").unwrap();
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .click(x + 1, y + 1)
+            .paste("focus-draft")
+            .build(),
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Tab)
+            .key_code(::slt::KeyCode::BackTab)
+            .build(),
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().paste("+tab").build(),
+    );
+    assert_eq!(fixture.app.text(), "focus-draft+tab");
+    fixture.app.flush_draft().unwrap();
+    let draft = fixture.app.text();
+    let caret = fixture.app.composer.cursor();
+    fixture
+        .app
+        .state
+        .set_draft("native-0", "thread-review", "Other 日本語 draft")
+        .unwrap();
+    let pending = json!({"id":"effort-preserved-operation","environmentId":"native-0",
+        "threadId":"thread-review","op":"send","message":"Existing uncertain intent"});
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    fixture.app.preserve_workspace_position().unwrap();
+    let state = fixture.app.state.snapshot();
+    let native = fs::read(&fixture.native_states[0]).unwrap();
+    let mode = fs::metadata(&fixture.native_states[0])
+        .unwrap()
+        .permissions()
+        .mode();
+    let journal = fixture.directory.path().join("host-0/operations-v1");
+    assert!(!journal.exists());
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Tab)
+            .build(),
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Right)
+            .build(),
+    );
+    assert_eq!(
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Enter)
+                .build()
+        )
+        .as_deref(),
+        Some("composer-tools")
+    );
+    fixture.finish_effort_read();
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    backend.assert_contains("Reasoning");
+    backend.assert_contains("Native default");
+    backend.assert_contains("Medium");
+    backend.assert_contains("High");
+    backend.assert_not_contains("Model configuration");
+    let staged = fixture.app.model_edit.as_ref().unwrap().selection.clone();
+    let returned_focus = model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Esc)
+            .build(),
+    );
+    assert!(
+        fixture.app.modal().is_none(),
+        "direct Effort cancellation must not invent a Model parent"
+    );
+    assert_eq!(returned_focus.as_deref(), Some("composer-tools"));
+    backend.assert_not_contains("Model configuration");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(3))
+            .build(),
+    );
+    backend.assert_not_contains("Unread");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(3))
+            .build(),
+    );
+    backend.assert_contains("Unread");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(4))
+            .build(),
+    );
+    backend.assert_contains("Copy ID");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(4))
+            .build(),
+    );
+    backend.assert_not_contains("Copy ID");
+    assert_eq!(
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_with(::slt::KeyCode::F(6), ::slt::KeyModifiers::SHIFT)
+                .build()
+        )
+        .as_deref(),
+        Some("composer")
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().paste("日本語").build(),
+    );
+    assert_eq!(fixture.app.text(), format!("{draft}日本語"));
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Backspace)
+            .key_code(::slt::KeyCode::Backspace)
+            .key_code(::slt::KeyCode::Backspace)
+            .build(),
+    );
+    fixture.app.flush_draft().unwrap();
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, staged);
+    assert_eq!(fixture.app.state.snapshot(), state);
+    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native);
+    assert_eq!(
+        fs::metadata(&fixture.native_states[0])
+            .unwrap()
+            .permissions()
+            .mode(),
+        mode
+    );
+    assert!(!journal.exists());
+}
+
+#[test]
+fn slt_direct_effort_dismissal_owns_queued_enter_without_applying_or_sending() {
+    for key in [
+        Some(::slt::KeyCode::Esc),
+        Some(::slt::KeyCode::Tab),
+        Some(::slt::KeyCode::BackTab),
+        None,
+    ] {
+        let mut fixture = Fixture::new(0);
+        let config_path = &fixture.app.environments[0].host_config;
+        let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+        config["fixture"]["persistInitialState"] = json!(true);
+        fs::write(config_path, config.to_string()).unwrap();
+        fixture.open(0);
+        fixture.app.composer = ui::editor("Unsent 日本語 draft", &fixture.app.theme, "");
+        fixture.app.flush_draft().unwrap();
+        let draft = fixture.app.text();
+        let caret = fixture.app.composer.cursor();
+        let native = fs::read(&fixture.native_states[0]).unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend = ::slt::TestBackend::new(140, 38)
+            .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+        model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        let (x, y) = backend.find_text("Effort").unwrap();
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().click(x, y).build(),
+        );
+        fixture.finish_effort_read();
+        model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        backend.assert_contains("Reasoning");
+        let selection = fixture.app.model_edit.as_ref().unwrap().selection.clone();
+        let read_serial = fixture.app.serial;
+        let events = if let Some(key) = key.clone() {
+            ::slt::EventBuilder::new()
+                .key_code(key)
+                .key_code(::slt::KeyCode::Enter)
+                .build()
+        } else {
+            ::slt::EventBuilder::new()
+                .click(1, 1)
+                .key_code(::slt::KeyCode::Enter)
+                .build()
+        };
+        model_tail_input(&mut backend, &mut fixture, &mut surface, events);
+        assert!(
+            fixture.app.modal().is_none(),
+            "direct dismissal {key:?} must close without reopening a modal"
+        );
+        assert_eq!(
+            fixture.app.serial,
+            read_serial.wrapping_add(1),
+            "dismissal cannot reopen a native catalog read"
+        );
+        assert_eq!(
+            fixture.app.model_edit.as_ref().unwrap().selection,
+            selection
+        );
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native);
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        if key == Some(::slt::KeyCode::Esc) {
+            // Accepting the unchanged direct value still opens explicit Apply review.
+            let (x, y) = backend.find_text("Effort").unwrap();
+            model_tail_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().click(x, y).build(),
+            );
+            fixture.finish_effort_read();
+            model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            model_tail_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Enter)
+                    .build(),
+            );
+            assert_eq!(
+                fixture.app.modal().unwrap().model,
+                Some(ui::ModelDialog::Configuration)
+            );
+            assert_eq!(
+                fixture.app.model_edit.as_ref().unwrap().selection,
+                selection
+            );
+            // The next real child must own Configuration, not the prior direct origin.
+            let (x, y) = backend.find_text("Reasoning").unwrap();
+            model_tail_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().click(x, y).build(),
+            );
+            model_tail_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Esc)
+                    .build(),
+            );
+            assert_eq!(
+                fixture.app.modal().unwrap().model,
+                Some(ui::ModelDialog::Configuration)
+            );
+            assert_eq!(
+                fixture.app.model_edit.as_ref().unwrap().selection,
+                selection
+            );
+            assert!(fixture.app.state.pending_records().is_empty());
+            assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native);
+            assert_eq!(fixture.app.text(), draft);
+            assert_eq!(fixture.app.composer.cursor(), caret);
+        }
+    }
 }
 
 #[test]

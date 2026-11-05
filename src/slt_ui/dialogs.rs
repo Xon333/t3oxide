@@ -20,6 +20,7 @@ pub(super) struct State {
     detail: ScrollState,
     choice_detail: ScrollState,
     model: ModelPicker,
+    direct_dismiss_tail: Option<(String, DismissalTail)>,
     reports: reports::Cache,
 }
 
@@ -114,6 +115,37 @@ fn reset_model_values(picker: &mut ModelPicker, modal: &ui::Modal) {
     }
 }
 
+// Only a directly dismissed native option owns this one deferred activation.
+pub(super) fn direct_dismissal_tail(ctx: &mut Context, state: &mut SurfaceState, modal: bool) {
+    let Some((source, mut tail)) = state.dialog.direct_dismiss_tail.take() else {
+        return;
+    };
+    if modal || source != state.active_key || ctx.is_disabled() {
+        return;
+    }
+    if ctx.raw_events().next().is_none() {
+        tail = match tail {
+            DismissalTail::ActivationSettle => DismissalTail::Input,
+            _ => DismissalTail::None,
+        };
+    } else {
+        let enter = ctx
+            .key_presses_when(true)
+            .find(|(_, key)| key.code == KeyCode::Enter && key.modifiers == slt::KeyModifiers::NONE)
+            .map(|(index, _)| index);
+        if let Some(index) = enter {
+            ctx.consume_event(index);
+            tail = DismissalTail::None;
+        } else if ctx.key_presses_when(true).next().is_some() {
+            tail = DismissalTail::None;
+        }
+    }
+    if tail != DismissalTail::None {
+        state.dialog.direct_dismiss_tail = Some((source, tail));
+        ctx.request_frame();
+    }
+}
+
 fn draw_model(
     ctx: &mut Context,
     modal: &ui::Modal,
@@ -136,9 +168,18 @@ fn draw_model(
         _ => None,
     };
     if changed {
-        picker.dismiss_tail = DismissalTail::None;
         let returning =
             matches!(picker.phase, Some(ui::ModelDialog::OptionValues { .. })) && option.is_none();
+        // A child dismissal owns its deferred activation only when returning
+        // to the exact configuration; changed sources or offers reset it.
+        if !returning
+            || picker
+                .configuration
+                .as_ref()
+                .is_none_or(|parent| parent.action_stamp != modal.action_stamp)
+        {
+            picker.dismiss_tail = DismissalTail::None;
+        }
         picker.expanded = option.is_some();
         if let Some(id) = &option {
             picker.focus = format!("model-field:option:{id}");
@@ -278,6 +319,11 @@ fn draw_model(
                     if picker.expanded && option.is_some() {
                         actions.push(Action::CloseModal);
                         dispatched = true;
+                        picker.dismiss_tail = DismissalTail::Input;
+                        if state.direct_effort_option {
+                            state.dialog.direct_dismiss_tail =
+                                Some((state.active_key.clone(), DismissalTail::Input));
+                        }
                     } else if picker.expanded {
                         picker.dismiss_tail = DismissalTail::Input;
                     }
@@ -314,6 +360,13 @@ fn draw_model(
                             if option.is_some() {
                                 actions.push(Action::CloseModal);
                                 dispatched = true;
+                                picker.dismiss_tail = DismissalTail::ActivationSettle;
+                                if state.direct_effort_option {
+                                    state.dialog.direct_dismiss_tail = Some((
+                                        state.active_key.clone(),
+                                        DismissalTail::ActivationSettle,
+                                    ));
+                                }
                             } else {
                                 picker.dismiss_tail = DismissalTail::ActivationSettle;
                             }
@@ -457,6 +510,13 @@ fn draw_model(
                         if option.is_some() {
                             actions.push(Action::CloseModal);
                             dispatched = true;
+                            picker.dismiss_tail = DismissalTail::ActivationSettle;
+                            if state.direct_effort_option {
+                                state.dialog.direct_dismiss_tail = Some((
+                                    state.active_key.clone(),
+                                    DismissalTail::ActivationSettle,
+                                ));
+                            }
                         } else {
                             picker.dismiss_tail = DismissalTail::ActivationSettle;
                         }

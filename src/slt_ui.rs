@@ -101,6 +101,7 @@ pub struct SurfaceState {
     pub answer_delivery: BTreeMap<String, String>,
     pub contents: Vec<ContentItem>,
     pub dependency_status: String,
+    pub(crate) direct_effort_option: bool,
     pub attention_mode: bool,
     pub internal_tabs: bool,
     pub show_context: bool,
@@ -164,6 +165,7 @@ pub fn draw(
     state: &mut SurfaceState,
 ) -> Vec<Action> {
     let mut actions = Vec::new();
+    dialogs::direct_dismissal_tail(ctx, state, modal.is_some());
     let geometry = (ctx.width(), ctx.height());
     let resized = state
         .viewport

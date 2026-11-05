@@ -392,6 +392,10 @@ impl App {
     }
 
     pub(super) fn populate_surface(&mut self, surface: &mut SurfaceState) {
+        surface.direct_effort_option = self
+            .model_edit
+            .as_ref()
+            .is_some_and(|edit| edit.option_origin == Some(ModelOptionOrigin::Direct));
         surface.answer_delivery = self
             .answer_deliveries
             .iter()
@@ -865,9 +869,14 @@ impl App {
                 if matches!(
                     self.modal().and_then(|modal| modal.model),
                     Some(ui::ModelDialog::OptionValues { .. })
-                ) {
+                ) && self.model_edit.as_ref().is_some_and(|edit| {
+                    edit.option_origin == Some(ModelOptionOrigin::Configuration)
+                }) {
                     self.model_menu()?;
                 } else {
+                    if let Some(edit) = &mut self.model_edit {
+                        edit.option_origin = None;
+                    }
                     self.dialog = None;
                     self.cancel_modal_read();
                 }

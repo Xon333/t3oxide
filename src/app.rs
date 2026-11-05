@@ -241,10 +241,17 @@ pub(super) struct Launch {
     workspace: Option<String>,
     batch: Option<(String, String)>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ModelOptionOrigin {
+    Direct,
+    Configuration,
+}
 #[derive(Clone, Debug)]
 pub(super) struct ModelEdit {
     environment_id: String,
     scope: ModelScope,
+    // Only the open native option layer owns this return fact; selection stays here.
+    option_origin: Option<ModelOptionOrigin>,
     catalog: Value,
     original: Value,
     selection: Value,
