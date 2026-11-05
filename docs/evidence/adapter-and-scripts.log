@@ -1,0 +1,1440 @@
+TAP version 13
+# Subtest: concurrent same-ID Stop joins the pending operation before its preflight completes
+ok 1 - concurrent same-ID Stop joins the pending operation before its preflight completes
+  ---
+  duration_ms: 8.192663
+  type: 'test'
+  ...
+# Subtest: uncertain Stop retries its original payload after the active run has stopped
+ok 2 - uncertain Stop retries its original payload after the active run has stopped
+  ---
+  duration_ms: 0.877558
+  type: 'test'
+  ...
+# Subtest: a retry connection failure cannot erase an earlier uncertain outcome
+ok 3 - a retry connection failure cannot erase an earlier uncertain outcome
+  ---
+  duration_ms: 0.836486
+  type: 'test'
+  ...
+# Subtest: ported t3term argument and nested output extraction retain structured tool meaning
+ok 4 - ported t3term argument and nested output extraction retain structured tool meaning
+  ---
+  duration_ms: 1.669909
+  type: 'test'
+  ...
+# Subtest: activity never consumes message slots, changes readable history or fetches output
+ok 5 - activity never consumes message slots, changes readable history or fetches output
+  ---
+  duration_ms: 5.323541
+  type: 'test'
+  ...
+# Subtest: activity IDs retain inherited source identity and an oversized identity fails explicitly
+ok 6 - activity IDs retain inherited source identity and an oversized identity fails explicitly
+  ---
+  duration_ms: 0.714386
+  type: 'test'
+  ...
+# Subtest: streaming activity summaries retain bounded metadata
+ok 7 - streaming activity summaries retain bounded metadata
+  ---
+  duration_ms: 1.415403
+  type: 'test'
+  ...
+# Subtest: activity details are source-bound, size-bounded and revision-honest
+ok 8 - activity details are source-bound, size-bounded and revision-honest
+  ---
+  duration_ms: 1.100347
+  type: 'test'
+  ...
+# Subtest: escaped detail payloads fit the encoded frame budget without rewriting identities
+ok 9 - escaped detail payloads fit the encoded frame budget without rewriting identities
+  ---
+  duration_ms: 6.650002
+  type: 'test'
+  ...
+# Subtest: file changes and tasks do not claim absent patches or hide truncation
+ok 10 - file changes and tasks do not claim absent patches or hide truncation
+  ---
+  duration_ms: 0.665163
+  type: 'test'
+  ...
+# Subtest: activity reads use HTTP only, keep existing attachment and use activity history scope
+ok 11 - activity reads use HTTP only, keep existing attachment and use activity history scope
+  ---
+  duration_ms: 1.263288
+  type: 'test'
+  ...
+# Subtest: single item inspection is read-only and does not start a thread subscription
+ok 12 - single item inspection is read-only and does not start a thread subscription
+  ---
+  duration_ms: 0.801515
+  type: 'test'
+  ...
+# Subtest: UI inspector rejects invented source and revision before reading
+ok 13 - UI inspector rejects invented source and revision before reading
+  ---
+  duration_ms: 0.751962
+  type: 'test'
+  ...
+# Subtest: navigation cancels an outstanding UI detail read without producing uncertain write state
+ok 14 - navigation cancels an outstanding UI detail read without producing uncertain write state
+  ---
+  duration_ms: 6.956264
+  type: 'test'
+  ...
+# Subtest: unavailable or malformed detail reads remain explicit and never become cached success
+ok 15 - unavailable or malformed detail reads remain explicit and never become cached success
+  ---
+  duration_ms: 0.523975
+  type: 'test'
+  ...
+# Subtest: known tool status updates patch bounded metadata without another snapshot read
+ok 16 - known tool status updates patch bounded metadata without another snapshot read
+  ---
+  duration_ms: 0.898408
+  type: 'test'
+  ...
+# Subtest: optional activity never makes a previously fitting transcript and exact requests overflow
+ok 17 - optional activity never makes a previously fitting transcript and exact requests overflow
+  ---
+  duration_ms: 25.909988
+  type: 'test'
+  ...
+# Subtest: UTF-8 clipping never splits a scalar
+ok 18 - UTF-8 clipping never splits a scalar
+  ---
+  duration_ms: 1.937695
+  type: 'test'
+  ...
+# Subtest: view bounds text bytes AND row count, including live growth
+ok 19 - view bounds text bytes AND row count, including live growth
+  ---
+  duration_ms: 3.732208
+  type: 'test'
+  ...
+# Subtest: host identity and wire version are enforced
+ok 20 - host identity and wire version are enforced
+  ---
+  duration_ms: 0.792091
+  type: 'test'
+  ...
+# Subtest: send uses human path and server delivery selection
+ok 21 - send uses human path and server delivery selection
+  ---
+  duration_ms: 0.9229
+  type: 'test'
+  ...
+# Subtest: Stop targets reviewed active run and holds queue
+ok 22 - Stop targets reviewed active run and holds queue
+  ---
+  duration_ms: 0.218203
+  type: 'test'
+  ...
+# Subtest: approval requires current complete request and offered decision
+ok 23 - approval requires current complete request and offered decision
+  ---
+  duration_ms: 3.90913
+  type: 'test'
+  ...
+# Subtest: unknown or nonresumable request cannot become an approval
+ok 24 - unknown or nonresumable request cannot become an approval
+  ---
+  duration_ms: 3.873392
+  type: 'test'
+  ...
+# Subtest: new thread preserves selected project and workspace without copying history
+ok 25 - new thread preserves selected project and workspace without copying history
+  ---
+  duration_ms: 0.261696
+  type: 'test'
+  ...
+# Subtest: view workspace is the exact launch binding or root; malformed paths are never clipped or relabelled
+ok 26 - view workspace is the exact launch binding or root; malformed paths are never clipped or relabelled
+  ---
+  duration_ms: 0.438318
+  type: 'test'
+  ...
+# Subtest: probe advertises launch selection additively with the native writable command capability
+ok 27 - probe advertises launch selection additively with the native writable command capability
+  ---
+  duration_ms: 5.78943
+  type: 'test'
+  ...
+# Subtest: canonical fingerprints tolerate JSON key order, not changed content
+ok 28 - canonical fingerprints tolerate JSON key order, not changed content
+  ---
+  duration_ms: 0.266264
+  type: 'test'
+  ...
+# Subtest: RPC correlates requests, acknowledges chunks, cancels owned stream
+ok 29 - RPC correlates requests, acknowledges chunks, cancels owned stream
+  ---
+  duration_ms: 24.189385
+  type: 'test'
+  ...
+# Subtest: socket loss marks unacknowledged operation uncertain
+ok 30 - socket loss marks unacknowledged operation uncertain
+  ---
+  duration_ms: 0.519328
+  type: 'test'
+  ...
+# Subtest: host token and config must be private, not symlinks
+ok 31 - host token and config must be private, not symlinks
+  ---
+  duration_ms: 18.947058
+  type: 'test'
+  ...
+# Subtest: accepted same-ID action is not duplicated; changed content is rejected
+ok 32 - accepted same-ID action is not duplicated; changed content is rejected
+  ---
+  duration_ms: 1.218231
+  type: 'test'
+  ...
+# Subtest: history replaces the bounded page, stops live stream, never mutates server
+ok 33 - history replaces the bounded page, stops live stream, never mutates server
+  ---
+  duration_ms: 1.224981
+  type: 'test'
+  ...
+# Subtest: streaming updates are coalesced and bounded without full projection retention
+ok 34 - streaming updates are coalesced and bounded without full projection retention
+  ---
+  duration_ms: 44.301771
+  type: 'test'
+  ...
+# Subtest: HTTP response budget is enforced before JSON decoding; redirects refused
+ok 35 - HTTP response budget is enforced before JSON decoding; redirects refused
+  ---
+  duration_ms: 2.240493
+  type: 'test'
+  ...
+# Subtest: readable rows preserve native run identity for causal send receipts
+ok 36 - readable rows preserve native run identity for causal send receipts
+  ---
+  duration_ms: 0.316698
+  type: 'test'
+  ...
+# Subtest: quiet default excludes settled/finished children but explicit lifecycle discovers them
+ok 37 - quiet default excludes settled/finished children but explicit lifecycle discovers them
+  ---
+  duration_ms: 12.796435
+  type: 'test'
+  ...
+# Subtest: search counts include displayed finished children and paging cannot crowd them out
+ok 38 - search counts include displayed finished children and paging cannot crowd them out
+  ---
+  duration_ms: 20.194843
+  type: 'test'
+  ...
+# Subtest: native child status correlates provider turns without granting app-run Stop
+ok 39 - native child status correlates provider turns without granting app-run Stop
+  ---
+  duration_ms: 2.05632
+  type: 'test'
+  ...
+# Subtest: list scope and cursors fail closed on malformed values
+ok 40 - list scope and cursors fail closed on malformed values
+  ---
+  duration_ms: 0.308286
+  type: 'test'
+  ...
+# Subtest: quiet presentation has no recurring view or snapshot work
+ok 41 - quiet presentation has no recurring view or snapshot work
+  ---
+  duration_ms: 10.631204
+  type: 'test'
+  ...
+# Subtest: continuous text updates publish useful latest frames at bounded cadence without a snapshot read
+ok 42 - continuous text updates publish useful latest frames at bounded cadence without a snapshot read
+  ---
+  duration_ms: 7.165104
+  type: 'test'
+  ...
+# Subtest: a first structural change reaches presentation within the two explicit scheduling windows
+ok 43 - a first structural change reaches presentation within the two explicit scheduling windows
+  ---
+  duration_ms: 3.864413
+  type: 'test'
+  ...
+# Subtest: sustained structural events are rate bounded rather than a new snapshot per frame
+ok 44 - sustained structural events are rate bounded rather than a new snapshot per frame
+  ---
+  duration_ms: 5.04583
+  type: 'test'
+  ...
+# Subtest: a slow structural read admits only one follow-up and preserves newer text
+ok 45 - a slow structural read admits only one follow-up and preserves newer text
+  ---
+  duration_ms: 3.031072
+  type: 'test'
+  ...
+# Subtest: closing cancels scheduled frames and reads and ignores late emit requests
+ok 46 - closing cancels scheduled frames and reads and ignores late emit requests
+  ---
+  duration_ms: 1.091404
+  type: 'test'
+  ...
+# Subtest: superseded structural read cannot install or reschedule an old page
+ok 47 - superseded structural read cannot install or reschedule an old page
+  ---
+  duration_ms: 1.086587
+  type: 'test'
+  ...
+# Subtest: host installer includes additive modules, preserves journals/config, and installed probe runs
+ok 48 - host installer includes additive modules, preserves journals/config, and installed probe runs
+  ---
+  duration_ms: 476.351778
+  type: 'test'
+  ...
+# Subtest: installer rejects changed release content without overwriting rollback or config
+ok 49 - installer rejects changed release content without overwriting rollback or config
+  ---
+  duration_ms: 308.678472
+  type: 'test'
+  ...
+# Subtest: installer refuses an existing install lock without touching its owner or configuration
+ok 50 - installer refuses an existing install lock without touching its owner or configuration
+  ---
+  duration_ms: 64.129746
+  type: 'test'
+  ...
+# Subtest: failed descriptor verification removes owned staging and preserves config and journals
+ok 51 - failed descriptor verification removes owned staging and preserves config and journals
+  ---
+  duration_ms: 118.120231
+  type: 'test'
+  ...
+# Subtest: installer rejects invalid arguments before reading host configuration or contacting T3
+ok 52 - installer rejects invalid arguments before reading host configuration or contacting T3
+  ---
+  duration_ms: 293.014948
+  type: 'test'
+  ...
+# Subtest: installer preserves a symlink configuration and its original target
+ok 53 - installer preserves a symlink configuration and its original target
+  ---
+  duration_ms: 57.788315
+  type: 'test'
+  ...
+# Subtest: restart replays prepared exact Stop, never derives a new run from fresh state
+ok 54 - restart replays prepared exact Stop, never derives a new run from fresh state
+  ---
+  duration_ms: 15.95553
+  type: 'test'
+  ...
+# Subtest: durable accepted answer survives restart without redispatch or new control validation
+ok 55 - durable accepted answer survives restart without redispatch or new control validation
+  ---
+  duration_ms: 12.335048
+  type: 'test'
+  ...
+# Subtest: unacknowledged answer retry preserves exact answers and request after helper replacement
+ok 56 - unacknowledged answer retry preserves exact answers and request after helper replacement
+  ---
+  duration_ms: 6.556494
+  type: 'test'
+  ...
+# Subtest: ack journal failure cannot return success and next helper recovers original upstream receipt
+ok 57 - ack journal failure cannot return success and next helper recovers original upstream receipt
+  ---
+  duration_ms: 7.031376
+  type: 'test'
+  ...
+# Subtest: private permissions, symlinks, corrupt records and environment/account mismatch fail closed
+ok 58 - private permissions, symlinks, corrupt records and environment/account mismatch fail closed
+  ---
+  duration_ms: 8.029422
+  type: 'test'
+  ...
+# Subtest: full journal preserves pending and accepted IDs and permits only their exact retries
+ok 59 - full journal preserves pending and accepted IDs and permits only their exact retries
+  ---
+  duration_ms: 7.236789
+  type: 'test'
+  ...
+# Subtest: renewed signed session preserves principal scope; changed principal/environment/opaque token cannot inherit it
+ok 60 - renewed signed session preserves principal scope; changed principal/environment/opaque token cannot inherit it
+  ---
+  duration_ms: 0.877538
+  type: 'test'
+  ...
+# Subtest: parallel helper processes publish one original payload, converge on a receipt and reject conflicts
+ok 61 - parallel helper processes publish one original payload, converge on a receipt and reject conflicts
+  ---
+  duration_ms: 149.105703
+  type: 'test'
+  ...
+# Subtest: journal creation/storage failure prevents the first dispatch
+ok 62 - journal creation/storage failure prevents the first dispatch
+  ---
+  duration_ms: 3.518803
+  type: 'test'
+  ...
+# Subtest: fresh-helper authentication failure preserves prior uncertainty without returning its cached success
+ok 63 - fresh-helper authentication failure preserves prior uncertainty without returning its cached success
+  ---
+  duration_ms: 7.739182
+  type: 'test'
+  ...
+# Subtest: canonical model options accept legacy maps without inventing values
+ok 64 - canonical model options accept legacy maps without inventing values
+  ---
+  duration_ms: 10.134093
+  type: 'test'
+  ...
+# Subtest: model identities, option types, duplicates, controls and byte budgets fail closed
+    # Subtest: missing
+    ok 1 - missing
+      ---
+      duration_ms: 0.32442
+      type: 'test'
+      ...
+    # Subtest: number
+    ok 2 - number
+      ---
+      duration_ms: 0.117885
+      type: 'test'
+      ...
+    # Subtest: nested
+    ok 3 - nested
+      ---
+      duration_ms: 0.133187
+      type: 'test'
+      ...
+    # Subtest: duplicate
+    ok 4 - duplicate
+      ---
+      duration_ms: 0.137894
+      type: 'test'
+      ...
+    # Subtest: control
+    ok 5 - control
+      ---
+      duration_ms: 0.115811
+      type: 'test'
+      ...
+    # Subtest: whitespace
+    ok 6 - whitespace
+      ---
+      duration_ms: 0.156872
+      type: 'test'
+      ...
+    # Subtest: unicodeBytes
+    ok 7 - unicodeBytes
+      ---
+      duration_ms: 0.094971
+      type: 'test'
+      ...
+    # Subtest: nullOptions
+    ok 8 - nullOptions
+      ---
+      duration_ms: 0.174628
+      type: 'test'
+      ...
+    # Subtest: blankOption
+    ok 9 - blankOption
+      ---
+      duration_ms: 0.193616
+      type: 'test'
+      ...
+    # Subtest: spacedOption
+    ok 10 - spacedOption
+      ---
+      duration_ms: 0.150583
+      type: 'test'
+      ...
+    # Subtest: spacedValue
+    ok 11 - spacedValue
+      ---
+      duration_ms: 0.144554
+      type: 'test'
+      ...
+    # Subtest: spacedProvider
+    ok 12 - spacedProvider
+      ---
+      duration_ms: 0.065908
+      type: 'test'
+      ...
+    # Subtest: tooMany
+    ok 13 - tooMany
+      ---
+      duration_ms: 0.05363
+      type: 'test'
+      ...
+    # Subtest: total
+    ok 14 - total
+      ---
+      duration_ms: 0.369517
+      type: 'test'
+      ...
+    1..14
+ok 65 - model identities, option types, duplicates, controls and byte budgets fail closed
+  ---
+  duration_ms: 4.276924
+  type: 'test'
+  ...
+# Subtest: catalog exposes only current provider descriptors and no config/auth payload
+ok 66 - catalog exposes only current provider descriptors and no config/auth payload
+  ---
+  duration_ms: 1.665733
+  type: 'test'
+  ...
+# Subtest: catalog keeps unsupported future controls hidden and marks malformed models omitted
+ok 67 - catalog keeps unsupported future controls hidden and marks malformed models omitted
+  ---
+  duration_ms: 0.377158
+  type: 'test'
+  ...
+# Subtest: catalog honors provider display identity, disabled and uninstalled states
+ok 68 - catalog honors provider display identity, disabled and uninstalled states
+  ---
+  duration_ms: 1.178653
+  type: 'test'
+  ...
+# Subtest: provider model-change restriction rejects both saved and one-dispatch changes
+ok 69 - provider model-change restriction rejects both saved and one-dispatch changes
+  ---
+  duration_ms: 1.26507
+  type: 'test'
+  ...
+# Subtest: catalog is bounded in entries and bytes, never truncates a selectable identity
+ok 70 - catalog is bounded in entries and bytes, never truncates a selectable identity
+  ---
+  duration_ms: 6.658735
+  type: 'test'
+  ...
+# Subtest: choices are provider-specific and validated against current catalog, not a universal effort list
+    # Subtest: unknownModel
+    ok 1 - unknownModel
+      ---
+      duration_ms: 0.124775
+      type: 'test'
+      ...
+    # Subtest: otherProvider
+    ok 2 - otherProvider
+      ---
+      duration_ms: 0.059569
+      type: 'test'
+      ...
+    # Subtest: unsupportedEffort
+    ok 3 - unsupportedEffort
+      ---
+      duration_ms: 0.102802
+      type: 'test'
+      ...
+    # Subtest: wrongType
+    ok 4 - wrongType
+      ---
+      duration_ms: 0.125996
+      type: 'test'
+      ...
+    # Subtest: wrongModel
+    ok 5 - wrongModel
+      ---
+      duration_ms: 0.06094
+      type: 'test'
+      ...
+    # Subtest: booleanString
+    ok 6 - booleanString
+      ---
+      duration_ms: 0.161079
+      type: 'test'
+      ...
+    1..6
+ok 71 - choices are provider-specific and validated against current catalog, not a universal effort list
+  ---
+  duration_ms: 3.37499
+  type: 'test'
+  ...
+# Subtest: unchanged provider-specific options survive same-model effort edits
+ok 72 - unchanged provider-specific options survive same-model effort edits
+  ---
+  duration_ms: 0.293384
+  type: 'test'
+  ...
+# Subtest: model mutation has exact upstream command, stale preflight rejection and original send provenance
+ok 73 - model mutation has exact upstream command, stale preflight rejection and original send provenance
+  ---
+  duration_ms: 0.505458
+  type: 'test'
+  ...
+# Subtest: runtime separates saved, run-requested, provider-reported and session-only evidence
+ok 74 - runtime separates saved, run-requested, provider-reported and session-only evidence
+  ---
+  duration_ms: 1.252462
+  type: 'test'
+  ...
+# Subtest: missing provider telemetry is unreported, not copied from saved settings
+ok 75 - missing provider telemetry is unreported, not copied from saved settings
+  ---
+  duration_ms: 0.163352
+  type: 'test'
+  ...
+# Subtest: run message identity comes only from the selected native run, never a queued user row
+ok 76 - run message identity comes only from the selected native run, never a queued user row
+  ---
+  duration_ms: 1.121037
+  type: 'test'
+  ...
+# Subtest: launch validation permits new-thread-only models but rejects stale options even when inherited
+ok 77 - launch validation permits new-thread-only models but rejects stale options even when inherited
+  ---
+  duration_ms: 0.627959
+  type: 'test'
+  ...
+# Subtest: uncertain model receipt survives helper restart and bypasses stale catalog on explicit retry
+ok 78 - uncertain model receipt survives helper restart and bypasses stale catalog on explicit retry
+  ---
+  duration_ms: 31.415849
+  type: 'test'
+  ...
+# Subtest: accepted model receipt survives helper restart without redispatch
+ok 79 - accepted model receipt survives helper restart without redispatch
+  ---
+  duration_ms: 11.33618
+  type: 'test'
+  ...
+# Subtest: one-dispatch model override remains exact through uncertain retry
+ok 80 - one-dispatch model override remains exact through uncertain retry
+  ---
+  duration_ms: 6.376498
+  type: 'test'
+  ...
+# Subtest: model acknowledgment storage failure remains uncertain, recoverable and never auto-replayed
+ok 81 - model acknowledgment storage failure remains uncertain, recoverable and never auto-replayed
+  ---
+  duration_ms: 6.674378
+  type: 'test'
+  ...
+# Subtest: launch dispatches selected model once with exact source account/worktree/modes and no source configuration
+ok 82 - launch dispatches selected model once with exact source account/worktree/modes and no source configuration
+  ---
+  duration_ms: 5.863549
+  type: 'test'
+  ...
+# Subtest: inherited launch stays compatible without catalog reads and preserves root binding
+ok 83 - inherited launch stays compatible without catalog reads and preserves root binding
+  ---
+  duration_ms: 6.19534
+  type: 'test'
+  ...
+# Subtest: fresh launch rejects missing model, stale options, changed account, and unavailable provider without a mutation
+    # Subtest: model
+    ok 1 - model
+      ---
+      duration_ms: 2.14417
+      type: 'test'
+      ...
+    # Subtest: option
+    ok 2 - option
+      ---
+      duration_ms: 2.221555
+      type: 'test'
+      ...
+    # Subtest: value
+    ok 3 - value
+      ---
+      duration_ms: 2.121988
+      type: 'test'
+      ...
+    # Subtest: account
+    ok 4 - account
+      ---
+      duration_ms: 1.984394
+      type: 'test'
+      ...
+    # Subtest: unavailable
+    ok 5 - unavailable
+      ---
+      duration_ms: 2.339073
+      type: 'test'
+      ...
+    # Subtest: archived
+    ok 6 - archived
+      ---
+      duration_ms: 2.155056
+      type: 'test'
+      ...
+    1..6
+ok 84 - fresh launch rejects missing model, stale options, changed account, and unavailable provider without a mutation
+  ---
+  duration_ms: 13.789042
+  type: 'test'
+  ...
+# Subtest: uncertain legacy launch restart reconciles exact journalled native identity without replay or changed source catalog
+ok 85 - uncertain legacy launch restart reconciles exact journalled native identity without replay or changed source catalog
+  ---
+  duration_ms: 9.923432
+  type: 'test'
+  ...
+# Subtest: read-only launch selection refuses all reads and writes
+ok 86 - read-only launch selection refuses all reads and writes
+  ---
+  duration_ms: 6.299534
+  type: 'test'
+  ...
+# Subtest: native projects enumerate the first-thread project with bounded paging and exact roots
+ok 87 - native projects enumerate the first-thread project with bounded paging and exact roots
+  ---
+  duration_ms: 2.223388
+  type: 'test'
+  ...
+# Subtest: new native defaults use project/environment settings and never hostile source-thread fields
+ok 88 - new native defaults use project/environment settings and never hostile source-thread fields
+  ---
+  duration_ms: 1.477334
+  type: 'test'
+  ...
+# Subtest: native workspace tiers honor t3.json and first-thread scaffold exception
+ok 89 - native workspace tiers honor t3.json and first-thread scaffold exception
+  ---
+  duration_ms: 0.434222
+  type: 'test'
+  ...
+# Subtest: native t3.json JSONC parsing validates known schema without interpreting script text
+ok 90 - native t3.json JSONC parsing validates known schema without interpreting script text
+  ---
+  duration_ms: 0.836707
+  type: 'test'
+  ...
+# Subtest: actual defaults read JSONC when a null project override defers environment mode; configured disabled account never falls back
+ok 91 - actual defaults read JSONC when a null project override defers environment mode; configured disabled account never falls back
+  ---
+  duration_ms: 2.37376
+  type: 'test'
+  ...
+# Subtest: native optional project-file read permits absence without hiding permission or transport failures
+ok 92 - native optional project-file read permits absence without hiding permission or transport failures
+  ---
+  duration_ms: 1.516642
+  type: 'test'
+  ...
+# Subtest: untouched native option defaults retained; edited invalid options and stale defaults rejected
+ok 93 - untouched native option defaults retained; edited invalid options and stale defaults rejected
+  ---
+  duration_ms: 9.450123
+  type: 'test'
+  ...
+# Subtest: native metadata preserves exact thread/project/run and native pending request summary
+ok 94 - native metadata preserves exact thread/project/run and native pending request summary
+  ---
+  duration_ms: 2.608827
+  type: 'test'
+  ...
+# Subtest: review bounds escaped diff and long file metadata in the actual encoded reply budget
+ok 95 - review bounds escaped diff and long file metadata in the actual encoded reply budget
+  ---
+  duration_ms: 16.973565
+  type: 'test'
+  ...
+# Subtest: native review/visibility never answers requests or hides active work, and rejects stale revision
+ok 96 - native review/visibility never answers requests or hides active work, and rejects stale revision
+  ---
+  duration_ms: 1.31913
+  type: 'test'
+  ...
+# Subtest: actual T3 adapter reads default project and launches isolated native worktree once without source attachment
+ok 97 - actual T3 adapter reads default project and launches isolated native worktree once without source attachment
+  ---
+  duration_ms: 1.537223
+  type: 'test'
+  ...
+# Subtest: lost launch response reconciles same native thread/message after helper restart without redispatch
+ok 98 - lost launch response reconciles same native thread/message after helper restart without redispatch
+  ---
+  duration_ms: 16.275984
+  type: 'test'
+  ...
+# Subtest: lost launch with missing authoritative thread stays uncertain; no retry or new defaults
+ok 99 - lost launch with missing authoritative thread stays uncertain; no retry or new defaults
+  ---
+  duration_ms: 0.754185
+  type: 'test'
+  ...
+# Subtest: actual adapter action journal uses native dispatch and returns post-action revision; review is read-only and bounded
+ok 100 - actual adapter action journal uses native dispatch and returns post-action revision; review is read-only and bounded
+  ---
+  duration_ms: 2.038795
+  type: 'test'
+  ...
+# Subtest: thread types derive solely from explicit lineage, never titles or fork presence
+ok 101 - thread types derive solely from explicit lineage, never titles or fork presence
+  ---
+  duration_ms: 1.065255
+  type: 'test'
+  ...
+# Subtest: main threads first; collapsed subagents; forks remain separate roots
+ok 102 - main threads first; collapsed subagents; forks remain separate roots
+  ---
+  duration_ms: 9.87451
+  type: 'test'
+  ...
+# Subtest: nested subagents expand independently without conflating forks
+ok 103 - nested subagents expand independently without conflating forks
+  ---
+  duration_ms: 0.992227
+  type: 'test'
+  ...
+# Subtest: all four filters preserve authoritative classification and status values
+ok 104 - all four filters preserve authoritative classification and status values
+  ---
+  duration_ms: 0.932789
+  type: 'test'
+  ...
+# Subtest: search finds collapsed children and includes parent context without changing filter semantics
+ok 105 - search finds collapsed children and includes parent context without changing filter semantics
+  ---
+  duration_ms: 0.483825
+  type: 'test'
+  ...
+# Subtest: grouping precedes the 200-row limit and reserves roots against subagent flooding
+ok 106 - grouping precedes the 200-row limit and reserves roots against subagent flooding
+  ---
+  duration_ms: 14.083282
+  type: 'test'
+  ...
+# Subtest: legacy ungrouped list keeps recency order and old shape fields
+ok 107 - legacy ungrouped list keeps recency order and old shape fields
+  ---
+  duration_ms: 0.472388
+  type: 'test'
+  ...
+# Subtest: list includes exact optional project identity without deriving it from display labels
+ok 108 - list includes exact optional project identity without deriving it from display labels
+  ---
+  duration_ms: 1.102009
+  type: 'test'
+  ...
+# Subtest: orphan and cyclic lineages remain bounded and never fabricate a main classification
+ok 109 - orphan and cyclic lineages remain bounded and never fabricate a main classification
+  ---
+  duration_ms: 0.517145
+  type: 'test'
+  ...
+# Subtest: archived/deleted parents do not hide an available child; archived rows are excluded
+ok 110 - archived/deleted parents do not hide an available child; archived rows are excluded
+  ---
+  duration_ms: 0.399561
+  type: 'test'
+  ...
+# Subtest: malformed options, duplicate IDs and oversized expansion sets fail closed
+ok 111 - malformed options, duplicate IDs and oversized expansion sets fail closed
+  ---
+  duration_ms: 0.37159
+  type: 'test'
+  ...
+# Subtest: cycle fallbacks cannot exceed the row limit after roots consume most slots
+ok 112 - cycle fallbacks cannot exceed the row limit after roots consume most slots
+  ---
+  duration_ms: 6.634839
+  type: 'test'
+  ...
+# Subtest: deep collapsed family and search stay bounded without losing ancestor identity
+ok 113 - deep collapsed family and search stay bounded without losing ancestor identity
+  ---
+  duration_ms: 32.970247
+  type: 'test'
+  ...
+# Subtest: unfamiliar approval without offered options cannot fabricate consent
+ok 114 - unfamiliar approval without offered options cannot fabricate consent
+  ---
+  duration_ms: 2.51573
+  type: 'test'
+  ...
+# Subtest: malformed channel data preserves uncertain write outcome
+ok 115 - malformed channel data preserves uncertain write outcome
+  ---
+  duration_ms: 19.764712
+  type: 'test'
+  ...
+# Subtest: non-domain failure is not a definite command rejection
+ok 116 - non-domain failure is not a definite command rejection
+  ---
+  duration_ms: 0.562792
+  type: 'test'
+  ...
+# Subtest: out-of-order or replayed message update cannot restore older text
+ok 117 - out-of-order or replayed message update cannot restore older text
+  ---
+  duration_ms: 2.006577
+  type: 'test'
+  ...
+# Subtest: refresh preserves newer streaming text and schedules structural catch-up
+ok 118 - refresh preserves newer streaming text and schedules structural catch-up
+  ---
+  duration_ms: 1.389925
+  type: 'test'
+  ...
+# Subtest: initial verified hello/watch consumes one descriptor and publishes bounded then live without text delay
+ok 119 - initial verified hello/watch consumes one descriptor and publishes bounded then live without text delay
+  ---
+  duration_ms: 31.026693
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on expiry
+ok 120 - one-use verification revalidates on expiry
+  ---
+  duration_ms: 1.438827
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on credential
+ok 121 - one-use verification revalidates on credential
+  ---
+  duration_ms: 1.599064
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on identity
+ok 122 - one-use verification revalidates on identity
+  ---
+  duration_ms: 1.004735
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on url
+ok 123 - one-use verification revalidates on url
+  ---
+  duration_ms: 1.011956
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on write-setting
+ok 124 - one-use verification revalidates on write-setting
+  ---
+  duration_ms: 0.672174
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on generation
+ok 125 - one-use verification revalidates on generation
+  ---
+  duration_ms: 0.534149
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on clock-regression
+ok 126 - one-use verification revalidates on clock-regression
+  ---
+  duration_ms: 0.647527
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on failed-ticket
+ok 127 - one-use verification revalidates on failed-ticket
+  ---
+  duration_ms: 2.597941
+  type: 'test'
+  ...
+# Subtest: one-use verification revalidates on disconnect
+ok 128 - one-use verification revalidates on disconnect
+  ---
+  duration_ms: 0.929524
+  type: 'test'
+  ...
+# Subtest: first bounded snapshot publishes at readiness 0ms, marker still owns authority
+ok 129 - first bounded snapshot publishes at readiness 0ms, marker still owns authority
+  ---
+  duration_ms: 7.079587
+  type: 'test'
+  ...
+# Subtest: first bounded snapshot publishes at readiness 30ms, marker still owns authority
+ok 130 - first bounded snapshot publishes at readiness 30ms, marker still owns authority
+  ---
+  duration_ms: 0.988531
+  type: 'test'
+  ...
+# Subtest: first bounded snapshot publishes at readiness 100ms, marker still owns authority
+ok 131 - first bounded snapshot publishes at readiness 100ms, marker still owns authority
+  ---
+  duration_ms: 1.039076
+  type: 'test'
+  ...
+# Subtest: request burst upgrades structural cadence to one urgent read and one follow-up, preserving newer text
+ok 132 - request burst upgrades structural cadence to one urgent read and one follow-up, preserving newer text
+  ---
+  duration_ms: 2.882501
+  type: 'test'
+  ...
+# Subtest: one-shot preview retains attachment and has no socket, subscription, request or journal authority
+ok 133 - one-shot preview retains attachment and has no socket, subscription, request or journal authority
+  ---
+  duration_ms: 1.844888
+  type: 'test'
+  ...
+# Subtest: projection serialization reuses exact immutable rows without losing controls, unknown fields, or numeric values
+ok 134 - projection serialization reuses exact immutable rows without losing controls, unknown fields, or numeric values
+  ---
+  duration_ms: 0.915764
+  type: 'test'
+  ...
+# Subtest: native defaults preserve exact unavailable selection, per-field source and inherited value without issuing any write
+ok 135 - native defaults preserve exact unavailable selection, per-field source and inherited value without issuing any write
+  ---
+  duration_ms: 0.948763
+  type: 'test'
+  ...
+# Subtest: provider identity stays exact and unreported until an explicit native label is available
+ok 136 - provider identity stays exact and unreported until an explicit native label is available
+  ---
+  duration_ms: 2.455751
+  type: 'test'
+  ...
+# Subtest: opt-in opening trace records stage timing and counters without user or credential payloads
+ok 137 - opt-in opening trace records stage timing and counters without user or credential payloads
+  ---
+  duration_ms: 1.21748
+  type: 'test'
+  ...
+# Subtest: native Working membership separates background waits, failure, plan review and request attention
+ok 138 - native Working membership separates background waits, failure, plan review and request attention
+  ---
+  duration_ms: 0.156491
+  type: 'test'
+  ...
+# Subtest: only live native-managed child approvals change the parent Working membership
+ok 139 - only live native-managed child approvals change the parent Working membership
+  ---
+  duration_ms: 1.980318
+  type: 'test'
+  ...
+# Subtest: server search uses one bounded native RPC, exact shell identity and explicit incompleteness
+ok 140 - server search uses one bounded native RPC, exact shell identity and explicit incompleteness
+  ---
+  duration_ms: 1.096
+  type: 'test'
+  ...
+# Subtest: Rust terminal fixture uses real companion projections, streams, requests, history and catalogs
+ok 141 - Rust terminal fixture uses real companion projections, streams, requests, history and catalogs
+  ---
+  duration_ms: 507.574393
+  type: 'test'
+  ...
+# Subtest: Rust fixture persists native effects and journals exact retries after lost acknowledgement and restart
+ok 142 - Rust fixture persists native effects and journals exact retries after lost acknowledgement and restart
+  ---
+  duration_ms: 14.398124
+  type: 'test'
+  ...
+# Subtest: Rust fixture performs a first-thread launch from native project defaults
+ok 143 - Rust fixture performs a first-thread launch from native project defaults
+  ---
+  duration_ms: 9.884723
+  type: 'test'
+  ...
+# Subtest: inclusive summary listing exposes collapsed children without changing legacy expansion
+ok 144 - inclusive summary listing exposes collapsed children without changing legacy expansion
+  ---
+  duration_ms: 11.057827
+  type: 'test'
+  ...
+# Subtest: inclusive summary listing stays bounded and preserves native type/lifecycle constraints
+ok 145 - inclusive summary listing stays bounded and preserves native type/lifecycle constraints
+  ---
+  duration_ms: 1.398458
+  type: 'test'
+  ...
+# Subtest: inclusive list negotiates capability and reads shell only, without a transcript subscription
+ok 146 - inclusive list negotiates capability and reads shell only, without a transcript subscription
+  ---
+  duration_ms: 1.827612
+  type: 'test'
+  ...
+# Subtest: run routes Stop around a stalled read, retaining protocol and operation IDs
+ok 147 - run routes Stop around a stalled read, retaining protocol and operation IDs
+  ---
+  duration_ms: 14.869398
+  type: 'test'
+  ...
+# Subtest: optional output instrumentation reports bounded queue and callback stages without packet content
+ok 148 - optional output instrumentation reports bounded queue and callback stages without packet content
+  ---
+  duration_ms: 8.371265
+  type: 'test'
+  ...
+# Subtest: run with durable T3 act dispatches Stop before a stalled send ACK; other mutations stay ordered
+ok 149 - run with durable T3 act dispatches Stop before a stalled send ACK; other mutations stay ordered
+  ---
+  duration_ms: 29.741648
+  type: 'test'
+  ...
+# Subtest: NDJSON launch selection reaches one journalled native launch and returns its exact receipt
+ok 150 - NDJSON launch selection reaches one journalled native launch and returns its exact receipt
+  ---
+  duration_ms: 9.448278
+  type: 'test'
+  ...
+# Subtest: admission bounds total work and reserves Stop capacity even when normal queue is full
+ok 151 - admission bounds total work and reserves Stop capacity even when normal queue is full
+  ---
+  duration_ms: 3.742683
+  type: 'test'
+  ...
+# Subtest: superseding navigation aborts active work at admission and never starts a queued stale page
+ok 152 - superseding navigation aborts active work at admission and never starts a queued stale page
+  ---
+  duration_ms: 3.078331
+  type: 'test'
+  ...
+# Subtest: superseded navigation cannot return an empty successful result after late completion
+ok 153 - superseded navigation cannot return an empty successful result after late completion
+  ---
+  duration_ms: 4.469402
+  type: 'test'
+  ...
+# Subtest: Latest cancels an active history read while preserving independent Stop work
+ok 154 - Latest cancels an active history read while preserving independent Stop work
+  ---
+  duration_ms: 4.181758
+  type: 'test'
+  ...
+# Subtest: invalid navigation identity and rejected admission do not cancel accepted navigation
+ok 155 - invalid navigation identity and rejected admission do not cancel accepted navigation
+  ---
+  duration_ms: 3.74802
+  type: 'test'
+  ...
+# Subtest: backpressured stdout preserves snapshots, deltas and replies in exact emission order
+ok 156 - backpressured stdout preserves snapshots, deltas and replies in exact emission order
+  ---
+  duration_ms: 2.657638
+  type: 'test'
+  ...
+# Subtest: output frames overflow closes explicitly instead of dropping a delta
+ok 157 - output frames overflow closes explicitly instead of dropping a delta
+  ---
+  duration_ms: 2.216297
+  type: 'test'
+  ...
+# Subtest: output bytes overflow closes explicitly instead of dropping a delta
+ok 158 - output bytes overflow closes explicitly instead of dropping a delta
+  ---
+  duration_ms: 13.207169
+  type: 'test'
+  ...
+# Subtest: a single oversized output frame closes the pipe without emitting a partial frame
+ok 159 - a single oversized output frame closes the pipe without emitting a partial frame
+  ---
+  duration_ms: 4.522906
+  type: 'test'
+  ...
+# Subtest: input framing accepts split lines and closes on an oversized unterminated request
+ok 160 - input framing accepts split lines and closes on an oversized unterminated request
+  ---
+  duration_ms: 2.201384
+  type: 'test'
+  ...
+# Subtest: installed current symlink invokes the adapter entrypoint
+ok 161 - installed current symlink invokes the adapter entrypoint
+  ---
+  duration_ms: 54.522512
+  type: 'test'
+  ...
+# Subtest: negotiated read cancellation skips queued reads, aborts active reads and ignores mutation/stale IDs
+ok 162 - negotiated read cancellation skips queued reads, aborts active reads and ignores mutation/stale IDs
+  ---
+  duration_ms: 3.633031
+  type: 'test'
+  ...
+# Subtest: T3 read scope aborts HTTP and interrupts unary RPC without cancelling later reads
+ok 163 - T3 read scope aborts HTTP and interrupts unary RPC without cancelling later reads
+  ---
+  duration_ms: 1.510653
+  type: 'test'
+  ...
+# Subtest: read cancellation emits exact native Interrupt and late RPC exit is harmless
+ok 164 - read cancellation emits exact native Interrupt and late RPC exit is harmless
+  ---
+  duration_ms: 17.401505
+  type: 'test'
+  ...
+# Subtest: read cancellation leaves shared connection bootstrap available to Stop
+ok 165 - read cancellation leaves shared connection bootstrap available to Stop
+  ---
+  duration_ms: 1.615608
+  type: 'test'
+  ...
+# Subtest: ordinary old-host snapshot retains exact contents
+ok 166 - ordinary old-host snapshot retains exact contents
+  ---
+  duration_ms: 1.98855
+  type: 'test'
+  ...
+# Subtest: exact restoration preserves inherited rows, full bodies, requests and cursors
+ok 167 - exact restoration preserves inherited rows, full bodies, requests and cursors
+  ---
+  duration_ms: 0.711161
+  type: 'test'
+  ...
+# Subtest: malformed ID tables and missing or marked body sources fail closed
+ok 168 - malformed ID tables and missing or marked body sources fail closed
+  ---
+  duration_ms: 0.920411
+  type: 'test'
+  ...
+# Subtest: inherited items never acquire a local record body
+ok 169 - inherited items never acquire a local record body
+  ---
+  duration_ms: 0.181739
+  type: 'test'
+  ...
+# Subtest: bounded decodes before identity checks and retains old-host response compatibility
+ok 170 - bounded decodes before identity checks and retains old-host response compatibility
+  ---
+  duration_ms: 0.857918
+  type: 'test'
+  ...
+# Subtest: restored wrong source identity is rejected before projection
+ok 171 - restored wrong source identity is rejected before projection
+  ---
+  duration_ms: 0.364629
+  type: 'test'
+  ...
+# Subtest: legacy snapshots without turnItems remain unchanged
+ok 172 - legacy snapshots without turnItems remain unchanged
+  ---
+  duration_ms: 0.196781
+  type: 'test'
+  ...
+# Subtest: ID lists expand only at record boundaries; stale body record IDs reject
+ok 173 - ID lists expand only at record boundaries; stale body record IDs reject
+  ---
+  duration_ms: 0.358691
+  type: 'test'
+  ...
+# Subtest: native nested request identities remain intact beyond 256 bytes
+ok 174 - native nested request identities remain intact beyond 256 bytes
+  ---
+  duration_ms: 2.851215
+  type: 'test'
+  ...
+# Subtest: one update among 60 rows emits one upsert and reconstructs the exact view
+ok 175 - one update among 60 rows emits one upsert and reconstructs the exact view
+  ---
+  duration_ms: 4.723513
+  type: 'test'
+  ...
+# Subtest: 100 readable rows remain reachable after the 24-row initial trim; Earlier retains its old bounds
+ok 176 - 100 readable rows remain reachable after the 24-row initial trim; Earlier retains its old bounds
+  ---
+  duration_ms: 1.94143
+  type: 'test'
+  ...
+# Subtest: Earlier pages retain 80-row bounds through flush; Latest restores the reduced tail
+ok 177 - Earlier pages retain 80-row bounds through flush; Latest restores the reduced tail
+  ---
+  duration_ms: 3.412726
+  type: 'test'
+  ...
+# Subtest: byte trimming on initial and history pages leaves every readable row reachable
+ok 178 - byte trimming on initial and history pages leaves every readable row reachable
+  ---
+  duration_ms: 24.995901
+  type: 'test'
+  ...
+# Subtest: streaming growth removes bounded rows with a continuation before the retained anchor
+ok 179 - streaming growth removes bounded rows with a continuation before the retained anchor
+  ---
+  duration_ms: 3.550408
+  type: 'test'
+  ...
+# Subtest: failed history is unavailable and historical; reconnect does not jump to Latest
+ok 180 - failed history is unavailable and historical; reconnect does not jump to Latest
+  ---
+  duration_ms: 14.16466
+  type: 'test'
+  ...
+# Subtest: Latest failure preserves historical intent and subscription failure emits unavailable
+ok 181 - Latest failure preserves historical intent and subscription failure emits unavailable
+  ---
+  duration_ms: 3.203106
+  type: 'test'
+  ...
+# Subtest: cancelNavigation aborts the in-flight HTTP body but not independent control reads
+ok 182 - cancelNavigation aborts the in-flight HTTP body but not independent control reads
+  ---
+  duration_ms: 22.183153
+  type: 'test'
+  ...
+# Subtest: superseded history completion cannot overwrite a newer watched thread
+ok 183 - superseded history completion cannot overwrite a newer watched thread
+  ---
+  duration_ms: 1.104132
+  type: 'test'
+  ...
+# Subtest: reconnect live view takes a new snapshot and waits for synchronization
+ok 184 - reconnect live view takes a new snapshot and waits for synchronization
+  ---
+  duration_ms: 12.961977
+  type: 'test'
+  ...
+# Subtest: escaped text still admits a bounded readable row and continues paging
+ok 185 - escaped text still admits a bounded readable row and continues paging
+  ---
+  duration_ms: 9.439914
+  type: 'test'
+  ...
+# Subtest: single long escaped row keeps its existing text cap even above the latest page target
+ok 186 - single long escaped row keeps its existing text cap even above the latest page target
+  ---
+  duration_ms: 2.96998
+  type: 'test'
+  ...
+# Subtest: one over-target row has no invented Earlier cursor when no older rows exist
+ok 187 - one over-target row has no invented Earlier cursor when no older rows exist
+  ---
+  duration_ms: 0.504846
+  type: 'test'
+  ...
+# Subtest: delayed reconnect cannot restart a newer navigation
+ok 188 - delayed reconnect cannot restart a newer navigation
+  ---
+  duration_ms: 15.666024
+  type: 'test'
+  ...
+# Subtest: failed refresh emits unavailable and cannot leave live controls on screen
+ok 189 - failed refresh emits unavailable and cannot leave live controls on screen
+  ---
+  duration_ms: 1.378748
+  type: 'test'
+  ...
+# Subtest: a newer stream reset cannot be overwritten by an older pending HTTP refresh
+ok 190 - a newer stream reset cannot be overwritten by an older pending HTTP refresh
+  ---
+  duration_ms: 0.736368
+  type: 'test'
+  ...
+# Subtest: successful refresh recovers live only while the subscription is synchronized
+ok 191 - successful refresh recovers live only while the subscription is synchronized
+  ---
+  duration_ms: 1.730848
+  type: 'test'
+  ...
+# Subtest: connection loss during Latest from history retains historical reconnect intent
+ok 192 - connection loss during Latest from history retains historical reconnect intent
+  ---
+  duration_ms: 2.232411
+  type: 'test'
+  ...
+# Subtest: stream updates carry provided native run identity without changing row identity
+ok 193 - stream updates carry provided native run identity without changing row identity
+  ---
+  duration_ms: 0.600968
+  type: 'test'
+  ...
+# Subtest: application Ping receives Pong and a synchronized idle subscription stays healthy
+ok 194 - application Ping receives Pong and a synchronized idle subscription stays healthy
+  ---
+  duration_ms: 22.680589
+  type: 'test'
+  ...
+# Subtest: no-frame stall closes promptly, reports once, and preserves uncertain writes
+ok 195 - no-frame stall closes promptly, reports once, and preserves uncertain writes
+  ---
+  duration_ms: 1.042611
+  type: 'test'
+  ...
+# Subtest: ordinary incoming frames keep a busy server alive without Pong
+ok 196 - ordinary incoming frames keep a busy server alive without Pong
+  ---
+  duration_ms: 1.709287
+  type: 'test'
+  ...
+# Subtest: Pong and replay events cannot extend the initial synchronization deadline
+ok 197 - Pong and replay events cannot extend the initial synchronization deadline
+  ---
+  duration_ms: 0.726814
+  type: 'test'
+  ...
+# Subtest: synchronization clears only its own deadline, not another subscription
+ok 198 - synchronization clears only its own deadline, not another subscription
+  ---
+  duration_ms: 1.659023
+  type: 'test'
+  ...
+# Subtest: cancellation settles once, clears deadline, and ignores late stream frames
+ok 199 - cancellation settles once, clears deadline, and ignores late stream frames
+  ---
+  duration_ms: 0.63531
+  type: 'test'
+  ...
+# Subtest: unexpected successful stream Exit reconnects before synchronization
+ok 200 - unexpected successful stream Exit reconnects before synchronization
+  ---
+  duration_ms: 0.591124
+  type: 'test'
+  ...
+# Subtest: unexpected successful stream Exit reconnects after synchronization
+ok 201 - unexpected successful stream Exit reconnects after synchronization
+  ---
+  duration_ms: 0.70379
+  type: 'test'
+  ...
+# Subtest: failed stream Exit notifies reconnect and does not reject unrelated writes definitively
+ok 202 - failed stream Exit notifies reconnect and does not reject unrelated writes definitively
+  ---
+  duration_ms: 0.477205
+  type: 'test'
+  ...
+# Subtest: socket close deterministically clears listeners, heartbeat, and requests
+ok 203 - socket close deterministically clears listeners, heartbeat, and requests
+  ---
+  duration_ms: 0.536073
+  type: 'test'
+  ...
+# Subtest: socket error deterministically clears listeners, heartbeat, and requests
+ok 204 - socket error deterministically clears listeners, heartbeat, and requests
+  ---
+  duration_ms: 0.35834
+  type: 'test'
+  ...
+# Subtest: explicit close settles pending work and rejects subsequent calls without leaking timers
+ok 205 - explicit close settles pending work and rejects subsequent calls without leaking timers
+  ---
+  duration_ms: 0.371419
+  type: 'test'
+  ...
+# Subtest: Ping send failure retires channel without waiting for a close event
+ok 206 - Ping send failure retires channel without waiting for a close event
+  ---
+  duration_ms: 0.283139
+  type: 'test'
+  ...
+# Subtest: unary acknowledgement timeout remains independent of healthy Pong traffic
+ok 207 - unary acknowledgement timeout remains independent of healthy Pong traffic
+  ---
+  duration_ms: 0.296638
+  type: 'test'
+  ...
+# Subtest: connection opening close cleans temporary handlers and timer
+ok 208 - connection opening close cleans temporary handlers and timer
+  ---
+  duration_ms: 0.385861
+  type: 'test'
+  ...
+# Subtest: connection opening error cleans temporary handlers and timer
+ok 209 - connection opening error cleans temporary handlers and timer
+  ---
+  duration_ms: 0.136221
+  type: 'test'
+  ...
+# Subtest: connection opening timeout cleans temporary handlers and timer
+ok 210 - connection opening timeout cleans temporary handlers and timer
+  ---
+  duration_ms: 0.275697
+  type: 'test'
+  ...
+# Subtest: connection open installs RPC listeners without leaving opening handlers behind
+ok 211 - connection open installs RPC listeners without leaving opening handlers behind
+  ---
+  duration_ms: 0.397978
+  type: 'test'
+  ...
+1..211
+# tests 237
+# suites 0
+# pass 237
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4388.792699
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.005s
+
+OK

@@ -1,7 +1,7 @@
 // Bounded thread navigation, derived only from T3's authoritative lineage.
 import { clip, identifier, LIMIT, requireThat } from './core.mjs';
 import { lineage, providerIdentity } from './models.mjs';
-import { inboxMetadata } from './native.mjs';
+import { inboxMetadata, meaningfulActivity, navigationPinned } from './native.mjs';
 
 export function threadType(thread) {
   const l = lineage(thread.lineage);
@@ -64,7 +64,7 @@ export function threadList(shell, query = '', options = {}) {
   const rootLimit = scoped ? Number.MAX_SAFE_INTEGER : LIMIT.threads;
   const rowLimit = scoped ? Number.MAX_SAFE_INTEGER : LIMIT.threads;
   const working = t => ['preparing', 'queued', 'starting', 'running', 'waiting'].includes(t.activityRunStatus ?? t.status);
-  const available = shell.threads.filter(t => !t.deletedAt && !t.archivedAt && (!scoped ||
+  const available = shell.threads.filter(t => !t.deletedAt && !t.archivedAt && (!scoped || options.navigationPinsOnly===true ||
     lifecycle === 'all' || lifecycle === 'active' && t.settledOverride !== 'settled' ||
     ['completed','failed'].includes(lifecycle) && (t.activityRunStatus ?? t.status) === lifecycle));
   // Count working children without loading them into the default navigation
@@ -78,9 +78,9 @@ export function threadList(shell, query = '', options = {}) {
       if (working(t)) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
     }
   }
-  const eligible = available.filter(t => !scoped || threadType(t) !== 'subagent' ||
+  const eligible = available.filter(t => !scoped || options.navigationPinsOnly===true || options.includeChildren === true || threadType(t) !== 'subagent' ||
     ((q || lifecycle !== 'active' || working(t)) && (q || filter === 'subagents' || open.has(lineage(t.lineage)?.parentThreadId))))
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
+    .sort((a, b) => meaningfulActivity(b).at.localeCompare(meaningfulActivity(a).at) || String(a.id).localeCompare(String(b.id)));
   const all = new Map(), children = new Map();
   const positions = new Map(eligible.map((t,i) => [t.id,i]));
   for (const t of eligible) {
@@ -93,7 +93,10 @@ export function threadList(shell, query = '', options = {}) {
     }
   }
   const matchesType = t => filter === 'all' || threadType(t) === ({main:'main',subagents:'subagent',forks:'fork'}[filter]);
-  const matches = eligible.filter(t => matchesType(t) && (!q || `${t.title} ${projects.get(t.projectId) ?? ''}`.toLocaleLowerCase().includes(q)));
+  // Apply exact-source and navigation membership before page limits, including
+  // settled threads and children from the untrimmed shell.
+  const matches = eligible.filter(t => (!options.threadId || t.id===options.threadId) &&
+    (options.navigationPinsOnly!==true || navigationPinned(t)) && matchesType(t) && (!q || `${t.title} ${projects.get(t.projectId) ?? ''}`.toLocaleLowerCase().includes(q)));
   const found = new Set(matches.map(t => t.id));
   const grouped = options.grouped === true && filter === 'all';
   const included = new Set(found);
@@ -171,7 +174,30 @@ export function threadList(shell, query = '', options = {}) {
     if (bytes+cost > 288*1024) { more = true; break; }
     rows.push(row); bytes += cost;
   }
-  return { observedAt: new Date().toISOString(), more, threads: rows,
+  // Project navigation includes empty projects without loading transcript bodies.
+  const inventory = []; let inventoryBytes = 0;
+  const activeProjects = shell.projects.filter(project => !project.deletedAt);
+  const projectIDs = new Set();
+  for (const project of activeProjects) {
+    identifier(project.id, 'project id');
+    requireThat(!projectIDs.has(project.id), 'Duplicate native project identity.', 'incompatible');
+    projectIDs.add(project.id);
+    const item = {id:project.id,title:clip(project.title,512).text};
+    const cost = Buffer.byteLength(JSON.stringify(item));
+    if (inventory.length >= 200 || inventoryBytes + cost > 48*1024) break;
+    inventory.push(item); inventoryBytes += cost;
+  }
+  return { observedAt: new Date().toISOString(), more, threads: rows, navigationPinsOnly:options.navigationPinsOnly===true,
+    projects:inventory, projectsMore:inventory.length < activeProjects.length,
     ...(scoped ? {lifecycle, cursor, limit: requestedLimit, nextCursor: cursor + rows.length < nodes.length ? cursor + rows.length : null} : {}),
     typeFilter: filter, grouped, matched: matches.length };
+}
+
+// Reuse the complete row projection, not a partial inbox overlay. Exact target
+// filtering happens before pagination; family counts still use the whole shell.
+export function threadSummary(shell, threadId, providerIdentities) {
+  const page = threadList(shell, '', {threadId,providerIdentities,lifecycle:'all',includeChildren:true,limit:1});
+  requireThat(page.threads.length===1 && page.threads[0].id===threadId,
+    'Affected thread metadata is unavailable.', 'unavailable');
+  return {row:page.threads[0],observedAt:page.observedAt};
 }

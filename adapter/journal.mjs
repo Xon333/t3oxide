@@ -12,6 +12,18 @@ const HEX = /^[a-f0-9]{64}$/;
 const privateOwner = s => (s.mode & 0o077) === 0 && (!process.getuid || s.uid === process.getuid());
 function fault() { return new Fault('journal', 'The private operation journal is unavailable or invalid. Preserve it and repair host storage before retrying.', true); }
 
+function stableAcknowledgement(record, result) {
+  const type=record.payload.type;
+  if (record.tag!=='orchestration.dispatchCommand' ||
+      !/^thread\.(settle|unsettle|snooze|unsnooze|pin|unpin|tag\.set)$/.test(type)) return result;
+  // Older helpers persisted presentation metadata with the same native ACK.
+  // Validate any optional target/action before ignoring only that decoration.
+  const {metadata,nativeRevision,threadId,action,...stable}=result;
+  const actions=type==='thread.tag.set' ? (record.payload.tagged ? ['pin','navigation-pin'] : ['unpin','navigation-unpin']) : [type.slice(7)];
+  if (threadId!==undefined && threadId!==record.payload.threadId || action!==undefined && !actions.includes(action)) throw fault();
+  return stable;
+}
+
 // Receipt results and replay are allowed only after this exact token authenticates
 // against the verified environment. Failure handling may check for local evidence
 // of uncertainty earlier. Installed T3 signs these claims; decoding is NOT authentication.
@@ -135,11 +147,14 @@ export class Journal {
   acknowledge(record, result) {
     let fd;
     try {
+      this.validate(record);
+      requireThat(record.scope===this.scope, 'This operation belongs to a different account or environment.', 'identity_mismatch');
       fd = this.directoryFd(); this.cleanup();
       this.publish(record.path + '.ack', { v: 1, key: record.key, scope: record.scope,
         fingerprint: record.fingerprint, payloadHash: record.payloadHash, result }, fd);
-      const saved = this.read(record.path + '.ack');
-      if (hash(saved?.result) !== hash(result)) throw fault();
+      const saved = this.access(record.payload.commandId,record.fingerprint);
+      if (saved?.path!==record.path || saved.payloadHash!==record.payloadHash ||
+          hash(stableAcknowledgement(record,saved.result))!==hash(stableAcknowledgement(record,result))) throw fault();
     } catch (e) { if (e instanceof Fault) throw e; throw fault(); }
     finally { if (fd !== undefined) closeSync(fd); }
   }

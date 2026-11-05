@@ -1,0 +1,1 @@
+Loopback fixture passed: real HTTP/WS/stdio plus SIGKILL before dispatch, before upstream ACK, after upstream ACK, and after durable ACK for Stop/approval/question; exact fresh-helper retries, conflict rejection, no new-run/request effect, no token output.

@@ -1,108 +1,45 @@
-<h1 align="center">t3oxide</h1>
+# t3oxide
 
-<p align="center">A terminal workspace for your existing T3 Code conversations and tasks.</p>
+A Rust terminal client for existing T3 Code environments. SLT v0.26.0 owns the terminal runtime, focus, editing and output. The retained Node adapter supplies native data, requests and durable operation receipts; T3 owns execution and orchestration.
 
-![Developer conversation browser in the violet theme](docs/screenshots/native-violet-developer.png)
-
-## Overview
-
-Browse conversations across your configured [T3 Code](https://github.com/pingdotgg/t3code) environments, open a thread, and keep working from your terminal. **Developer** gives you a unified conversation browser. **AgentBox** turns those same threads into a task inbox.
-
-T3 owns execution, permissions, threads, worktrees and queues. t3oxide connects through an on-demand Node adapter; closing the client leaves native work running. The active client uses Go, Bubble Tea v2, Bubbles, Lip Gloss and Glamour. The deprecated Swift/AppKit files are retained without ongoing development or checks.
-
-```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#20232B", "primaryColor": "#2A2F3A", "primaryTextColor": "#E6E9F0", "primaryBorderColor": "#BBA5FA", "lineColor": "#A7ADBF", "edgeLabelBackground": "#20232B"}}}%%
-flowchart LR
-  C["t3oxide<br/>One workspace · multiple environments"] -->|"Local stdio"| A["On-demand adapter"]
-  C -->|"SSH"| B["On-demand adapter"]
-  A --> L["Local T3 environment<br/>Threads · runs · workspaces"]
-  B --> R["Remote T3 environment<br/>Threads · runs · workspaces"]
-  classDef client fill:#2A2F3A,stroke:#BBA5FA,color:#E6E9F0
-  classDef adapter fill:#2A2F3A,stroke:#84D7E4,color:#E6E9F0
-  classDef native fill:#2A2F3A,stroke:#C1D99B,color:#E6E9F0
-  class C client
-  class A,B adapter
-  class L,R native
-```
-
-## Features
-
-### Find the right conversation
-
-See configured environments together, ordered by recent native activity. Hide reviewed conversations through native review state; restore them from All conversations. Filter the list, then open the exact conversation with Enter or a click. Browsing does not subscribe to transcripts, and an unavailable host leaves healthy rows usable.
-
-### Work with the conversation in view
-
-Read streaming Markdown, compose a reply, inspect tools and changes, or answer a native request. Conversation and Info sidebars keep context close. Drafts, pending requests and operation identities survive supported returns; uncertain mutations require an explicit retry.
-
-### Review tasks in AgentBox
-
-Start with **Inbox**, then move between Working, Queued, Later, Reviewed, All and Unknown. **Completed** describes a run; **Reviewed** describes the native review disposition. File work into an existing project, launch with native defaults, reply in its source conversation, and inspect native diffs and linked PRs. AgentBox defaults to native isolated worktrees.
-
-Priorities organize the client view; they do not schedule work after exit. Existing native runs and accepted message queues continue independently. See the [AgentBox guide](docs/agentbox.md) for the full workflow.
-
-![AgentBox Needs you view with a public task](docs/screenshots/native-violet-agentbox-inbox.png)
-
-### Switch modes without losing context
-
-Open Commands to move between Developer and AgentBox. Both views use the same native conversations and drafts.
-
-![AgentBox Commands palette showing the mode actions](docs/screenshots/native-violet-agentbox-commands.png)
-
-### Make the workspace yours
-
-Use `/theme` or **Settings → Appearance** to choose an environment's theme. Violet, cyan and lime provide fixed palettes; Terminal follows your terminal's colours. Profile-specific choices persist without changing terminal settings. See [appearance and configuration](NATIVE-GO.md) for theme roles and launch overrides.
-
-![Appearance picker with Electric violet highlighted](docs/screenshots/native-violet-theme-picker.png)
-
-
-## Installation
-
-Download [0.9.0 for Apple Silicon](https://github.com/Xon333/t3oxide/releases/tag/v0.9.0), or build from source:
-
-Requirements: **Go 1.26.10+**, **Node 22.4+** on each adapter host, and an existing T3 instance. Remote profiles use your existing OpenSSH configuration.
+## Build and connect
 
 ```sh
-git clone https://github.com/Xon333/t3oxide.git
-cd t3oxide
-bash scripts/build-go.sh
-./dist/t3oxide envs
-./dist/t3oxide
+cargo build --locked --release
+./target/release/t3oxide envs
+./target/release/t3oxide
+./target/release/t3oxide --env desk --thread THREAD_ID
+./target/release/t3oxide --mode b
 ```
 
-Follow [installation](NATIVE.md) to configure host adapters and environment profiles, then [Go setup](NATIVE-GO.md) for executable installation and appearance. Preserve existing profiles and drafts when updating.
+Use a current stable Rust toolchain (declared minimum 1.92), existing environment profiles and Node 22.4+ on adapter hosts. Remote profiles use existing OpenSSH routes. See [installation](NATIVE.md). Building does not install a client or restart T3.
 
-Building the client does not install or restart T3. See [verification](docs/verification.md) for tested versions and known limits, and [native contracts](docs/native-workflows.md) for the adapter boundary.
+## Conversations and human questions
 
-## Usage
+**A** combines Unread and Completed, with unread first. Completed means opened, inactive and unsettled. Running contains active work, needs input and failures; read state remains independent. Pins and the on-demand Settled explorer retain their native identity. Ordering follows meaningful native activity rather than token/tool churn. Context shows the actual native direct-subagent count when available.
 
-Developer is the default for a new settings file. Open **Commands → AgentBox** or enter `/mode agentbox` for the task inbox; `/mode developer` returns to conversation browsing.
+Search starts with a project and supports environment/name/native-content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
 
-| Action | Portable default |
-| --- | --- |
-| Commands | Ctrl+Space; Ctrl+P fallback |
-| Conversations / Info | Ctrl+O / Ctrl+L |
-| Newline / Send | Enter / Ctrl+] |
-| Literal send | Ctrl+\ |
-| Stop with native queue hold | Ctrl+S, including over dialogs |
-| Move focus / dismiss / exit | Tab or Shift+Tab / Esc / Ctrl+Q |
-| AgentBox navigation | J/K or arrows, Enter, R reply, N file, V views |
+**B** groups actual native human questions by project. Its persistent project-navigation region changes level in place; returning globally retains the selected project and content. Supporting Markdown and supported Mermaid flowcharts remain separate from navigation; unsupported diagram types retain their source. Open in A retains source identity. Answers autosave against the exact source/request revision, validate native values, and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID.
 
-Enter in the composer inserts a newline. Delivered Command equivalents are available on macOS; terminals and the OS may intercept them. The [complete shortcut reference](docs/shortcuts.md) covers context-specific controls, steering, distinct Enter combinations and the optional shortcut file.
+Explicit `/context-save` captures a source-qualified decision, evidence, journal or local open loop. `/context` recalls those records; `/resume` adds protected drafts, original operations and native questions without executing them. [Context controls](docs/context-controls.md) describe durability, provenance, totals and degradation. Dependency synthesis requires explicit native evidence; current native offers leave coverage unknown.
 
-## Development
+The revised presentation preferences live under `sltUi`; old presentation preferences remain recoverable without overriding this contract. Existing accounts, manual names, drafts and uncertain operations are preserved. Internal tabs are always available, including inside Rex.
+
+## Input
+
+Plain Enter inserts a newline. Typing `/` at the prompt opens completion; Enter selects the command. Esc retains unsent text, `//` stays literal, and pasted slash text stays literal. Cmd+Enter is preferred when delivered; Ctrl+Enter, Shift+Enter and Cmd+Shift+Enter are supported alternatives. An explicit Send button and portable Ctrl+] / Ctrl+\ path remain available. Ctrl+S is the independent Stop action. Physical Rex checks on M1 and the adopted M4 route verified one Ctrl+Enter send without creating a pane. Rex Cmd+Enter retains its pane action. On configured Rex clients, use the native **Enter T3oxide Editing** palette action for Mac selection/copy and Escape to leave its client-wide mode.
+
+See [shortcuts](docs/shortcuts.md), [content controls and examples](docs/content-controls.md), [architecture and flow map](docs/architecture.md), [source reuse](docs/rust-source-reuse.md) and [verification](docs/rust-verification.md).
+
+## Durable operations
+
+Drafts and journals remain in the client state file. Every mutation is saved with its exact operation ID and payload before dispatch. Disconnects never replay writes. Recover reconciles the original identity explicitly; an uncertain ordinary operation does not block Stop. Acknowledgement clears only the matching operation and submitted text, preserving newer edits. Exit detaches the client while native work continues.
 
 ```sh
-bash scripts/check-go.sh
-bash scripts/check.sh
-bash scripts/check-security.sh
-bash scripts/build-go.sh
+scripts/check-rust.sh
+scripts/check.sh
+scripts/build-rust.sh
 ```
 
-The Go checks cover formatting, tests, vet and race detection. Shared checks cover the Node adapter, scripts and Python measurement tests. Run the checks affected by your change; documentation changes need no app build.
-
-Read [architecture](docs/architecture.md) for the protocol boundary, [state and recovery](docs/state-recovery.md) before changing persistence, and [verification](docs/verification.md) for portable tests versus installed-instance evidence. Remaining native acceptance is tracked in [native remainder](NATIVE-REMAINDER.md).
-
-Third-party attribution is in [NOTICE](NOTICE) and [LICENSES/](LICENSES/). This repository has no top-level license grant; third-party notices do not establish a blanket license for t3oxide.
-
-The visual feature walkthrough follows the layout of [LazyGit's README](https://github.com/jesseduffield/lazygit#readme), with original t3oxide prose.
+[NOTICE](NOTICE), [dependency notices](LICENSES/rust-third-party.txt) and [locked inventory](docs/dependencies.json) retain source attribution. Restricted selected-source integrations and any replacement work are identified explicitly in the source-reuse record; basic SLT Markdown is not a claim of Mermaid rendering.

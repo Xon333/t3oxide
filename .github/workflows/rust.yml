@@ -1,0 +1,68 @@
+name: t3oxide checks
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'vendor/**'
+      - 'adapter/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'config/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'LICENSES/**'
+      - 'NOTICE'
+      - '*.md'
+      - 'docs/**'
+      - '.github/workflows/rust.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: t3oxide-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust:
+    name: Rust / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Format, lint and test
+        run: bash scripts/check-rust.sh
+      - name: Build release
+        run: bash scripts/build-rust.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3oxide-${{ runner.os }}-${{ runner.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+  adapter:
+    name: Native adapter and scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Adapter and script checks
+        run: bash scripts/check.sh
+      - name: Archive exact source
+        run: git archive --format=zip --prefix=t3oxide/ HEAD > /tmp/t3oxide-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3oxide-source
+          path: /tmp/t3oxide-source.zip
+          retention-days: 14

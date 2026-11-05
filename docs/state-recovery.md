@@ -1,111 +1,137 @@
-# State, migration and recovery
+# State and recovery
 
-The integrated client preserves the existing Go and Swift ownership boundary. Native T3 owns threads, runs, requests, execution, worktrees, review/snooze state and authentic receipts. Local files retain human input, client mutation recovery and a small amount of presentation preference.
+T3 owns conversations, runs, requests, execution, permissions, queues, worktrees
+and native inbox disposition. The Rust client stores human input, unresolved
+client operation identities and bounded presentation preferences. It does not
+persist a second transcript, execution queue or task scheduler.
 
-## Files and versions
+## Files and ownership
 
-| Owner | State | Compatibility |
-| --- | --- | --- |
-| Native T3 | Conversations, runs, requests, queues, worktrees, settled/snoozed state, PR metadata | Never copied into a second client database. |
-| Go State | `go-drafts.json`: source-bound drafts, complete launch forms, next-send options and normal/Stop pending records | Existing versioned owner and exclusive writer lock remain. New launch-project records are explicitly validated. Older clients may refuse new records; preserve them instead of resetting state. |
-| Prompt recall | `go-drafts.json.prompts.json` | Existing bounded source-bound history; no transcript archive. |
-| Adapter | Host `operations-v1/` journal | Existing original operation/payload fingerprints and durable receipts. Never delete to resolve uncertainty. |
-| Presentation ranks | `go-drafts.json.inbox-v1.json` | Version 1; 256 KiB, at most 1,000 task priorities and 200 project ranks. Exact JSON-array environment/project/thread keys. Revision compare-and-swap rejects stale updates/undo. Unknown/malformed input is preserved and reported. |
-| Appearance/mode | `terminal.json` | Optional mode, navigation and existing theme fields. Missing mode means Developer. Other appearance values are preserved on mode changes. |
-| Shortcut file | `shortcuts.json` beside terminal settings | Optional version 1; startup-only validated context/action overrides. Remove it to restore defaults. No watcher or UI editor. |
-| Swift rollback | Separate `drafts.json` and existing legacy app/state | No new Go write targets the Swift file. Do not expect Swift to import new Go pending records. |
+The client reads the existing version 1 `environments.json` profile file. Its
+state file defaults to `~/.config/t3oxide/rust-state.json`; `--state` selects an
+explicit alternative. The existing profile format and exact `environmentId`
+binding remain unchanged. A single writer holds a file lock for each Rust state
+path. State is written to a private temporary file, fsynced, renamed atomically
+and followed by directory fsync. The whole file is limited to 2 MiB, and a human
+draft to 64 KiB. Capacity failures preserve the prior state and report an error.
 
-Batch filing retains remaining human input through the existing source-bound draft/checkpoint owner. It is not a task database or scheduler. Acknowledged items are retired only after their exact native receipt; unresolved launch identity remains in the normal recovery lane. Finishing local input is not a promise to dispatch future tasks after exit.
+When the Rust file is absent, the client can import the adjacent `go-drafts.json`
+and its prompt-recall and inbox-preference sidecars. It takes the previous
+client's lock during import, validates identities and known records, preserves
+unknown fields and writes only the new Rust state. Invalid or ambiguous input
+fails closed. An existing Rust file always wins, including an intentionally
+empty one. Original files are never overwritten or used as an ongoing second
+state owner. All migration tests use temporary fixtures.
 
-No automatic live-state migration or installation is performed by this source return. Before native adoption, preserve existing files, absences, lock ownership, release pointers and host journals using that host's established process. Do not replace current user state with test fixtures or an earlier snapshot.
+The on-demand host adapter retains its existing `operations-v1/` journal beside
+its host configuration. That journal contains original operation fingerprints
+and durable native receipts. It is recovery state, not disposable cache. Neither
+client startup nor reconnect deletes it or replays writes.
 
-## Native-default launch migration
+## Human input
 
-New resolves the creation target independently of the active thread: explicit `--env`, the exact saved creation environment/project pin, a profile's optional `defaultForNew: true`, a single configured environment, or an explicit choice. At most one enabled profile may set `defaultForNew`. An unavailable saved pin requires correction instead of silently selecting another target. The client does not infer a default from the newest row or last attachment.
+Ordinary drafts are qualified by exact native environment and thread. Launch
+forms are also bound to their profile, native environment and project. Changing
+a browsing scope does not change a draft's destination or the creation pin.
+Developer and AgentBox share the same composer and active connection.
 
-Existing legacy launch drafts and uncertain records remain source-bound. New native project launch forms use a separate project-launch scope. Restored form text, title and options stay exact. If the native defaults revision changed, the review requires explicit Defaults before Create. This avoids silently rebasing a saved draft onto new model/workspace policy.
+Typing and bracketed paste schedule a 200 ms durable save. Source changes,
+explicit actions, focus loss and orderly exit flush relevant input. Storage has
+its own bounded worker, so an unavailable host cannot occupy the draft-saving
+queue. Failed saves stay visible; sending requires a successful draft checkpoint.
+A hard process kill before the debounce expires can lose the last unsaved edit;
+no client can promise persistence before it writes.
+
+A send captures the draft's edit generation as well as its exact bytes. Its
+acknowledgement clears only that submitted generation. A newer draft, even one
+with identical text, is retained in the same atomic transaction that retires the
+operation, records sent-prompt recall and consumes the matching one-message
+model override. This closes the crash window between acknowledging a message
+and restoring newer human input. Late acknowledgements remain bound to their
+original source and cannot clear another environment's equal thread ID.
+
+Prompt recall retains human-authored input with source identity and outcome. It
+is not a transcript archive. Restoring or clearing a draft never sends it. A
+source-qualified editor cache preserves caret, selection and undo within a
+running client only when its bytes still equal the canonical draft. Durable
+reading anchors use the native row identity and text digest; changed or absent
+rows do not restore a misleading offset. Native diff reading positions also
+require matching source and content evidence and never imply review completion.
+
+External editing uses `VISUAL`, then `EDITOR`, then `vi`, with an argument parser
+and no local shell. The terminal is restored while the editor runs; background
+native events continue to drain. Text returns to the original source without
+sending. Invalid UTF-8, oversized edits or unsuccessful editor exits preserve a
+private recovery file and report its path.
+
+## Mutation admission and receipts
+
+Every mutation is saved before dispatch with its exact operation ID, original
+payload, native environment and target. There is one ordinary pending lane and
+one independent Stop lane per environment. Stop targets the reviewed native run
+and requests native queue hold. A stalled ordinary action cannot consume Stop
+admission. Requests can be answered only against the exact currently offered ID,
+revision and decision schema; a generic reply or Reviewed action is not approval.
+
+Ordinary conversation mutations require a verified writable connection and a
+current live projection. History navigation disables them immediately. A fresh
+snapshot and the matching navigation acknowledgement must establish the new
+view before writes become available. Temporary dialogs do not cancel this
+attachment acknowledgement. A sequence gap triggers fresh synchronization.
+
+Host acknowledgement is distinct from an observed message, a provider response
+and completed work. The receipt display correlates native message and run
+identities before changing those labels. Thread visibility actions retain the
+adapter's expected-revision preflight. The current native API does not provide
+atomic compare-and-swap for visibility changes: another native client can still
+race after that preflight. No stronger guarantee is claimed.
 
 ## Lost acknowledgements
 
-A send/answer/selection/Stop or native visibility action can succeed remotely while its response is lost. The original operation remains saved until its existing explicit recovery path establishes an authentic result or the user reviews resolution. Reconnect and startup never silently retry mutations. Ordinary and Stop lanes remain independent, so a pending ordinary action cannot consume Stop admission.
+A connection can fail after T3 accepted an operation. The original remains
+pending. Startup and Reconnect perform reads only. Recover presents the exact
+source, operation ID and payload before an explicit same-ID reconciliation.
+A removed environment can be inspected but cannot silently use another profile.
+A negative retry response does not prove the original attempt was rejected.
 
-A native project launch additionally records the new native thread ID before dispatch. `/retry-launch` selects an original saved launch, opens its exact environment, and reuses its persisted operation/payload identity for reconciliation. The adapter reads that native thread and checks project, model/options, modes, workspace placement and original initial-message identity when present. Matching evidence acknowledges the original effect without creating another thread. Absent, inaccessible, partial or mismatched evidence leaves it uncertain; do not use a fresh Create as a retry.
+A definite first-attempt rejection may retire an operation that never took
+effect. An uncertain result remains saved. Clearing a recovery record requires
+explicit review and confirmation; it does not resend, undo or cancel native work,
+and it preserves the human draft. Clearing never invents an acknowledged receipt.
 
-A durable host receipt already acknowledges its exact fingerprint. A successful-looking current run, a matching title, or an empty pending-request list does not prove that an arbitrary earlier operation succeeded. No UI label upgrades acknowledgement into response or completion. Receipt correlation still requires the native initiating message and run identity.
+A native launch records its new thread ID and complete reviewed defaults before
+dispatch. Reconciliation uses that same ID and original payload. Matching native
+evidence or the adapter's durable matching receipt establishes acceptance; a
+matching title alone does not. A late launch acknowledgement retires only its
+matching saved form. It cannot erase a newer form, replace a changed workspace
+selection or redirect a user who moved to another conversation or opened another
+dialog. Saved and imported forms remain accessible through Saved launch forms.
 
-## Source-bound forms and local return
+## AgentBox presentation and filing
 
-Forms carry exact offered request/revision or launch/default identity. Returning from Commands/Info keeps their query, draft, caret/selection and focus while the form is live. Retired prompts cannot be restored. Formal approval is possible only through its exact allowed answer, never generic Reviewed, a plain reply or a numeral without the offered request review.
+Attention, Working, Queued, Later and Reviewed reflect native metadata. Local
+priority and project order affect presentation only. They never claim tasks,
+start agents or schedule execution. Local rank changes have a revision guard and
+an explicit guarded undo. Viewing, scrolling and searching never settle a task.
+Reviewed, Restore to inbox, snooze and pin are explicit native actions.
 
-Developer and AgentBox share the same editor and native attachment. Local return records are bounded to 64 source identities and contain editor/reading position only. A cached editor is restored only if its exact bytes still equal the Session's canonical draft. Native row-key/line anchors account for changed width; the transcript itself is reacquired from T3. Process restart restores durable text and pending identities; it does not claim persistent terminal caret/selection from an earlier process.
+File multiple tasks accepts a human-authored list. Each item receives a separate
+project/default/model/workspace review and an explicit Create. The remaining
+text is a draft, not a queued operation. Bounded receipts distinguish
+Acknowledged, Needs recovery and Remaining draft. Saving a pending launch and
+its receipt item is one transaction; acknowledging it and retiring only its exact
+unchanged prefix is another. A newer edited list is never overwritten.
 
-## Undo and multiple clients
+Batch receipt and remaining-draft views survive restart. Resuming opens the
+original source and human text for review; it never submits the remaining list
+automatically. An uncertain item must be reconciled before continuing. Native T3
+remains responsible for execution after an accepted launch and after client exit.
 
-Visibility undo is a new explicit inverse native action against the post-acknowledgement revision. If a different client modifies that thread, the inverse is stale and refused. Local priority undo uses its sidecar revision. Neither mechanism reverses provider execution or Git effects. Native visibility commands do not expose an atomic expected-revision field: the adapter rejects a mismatch in a fresh preflight read, but cannot exclude a different native client racing after that read. Strict atomic exclusion needs a native API change.
+## Verification boundary
 
-One writer owns each Go state path. Clients with different state paths may maintain different presentation ranks; native state remains authoritative for both. They do not claim work, dispatch a shared backlog or overwrite one another's execution ledger. Native commands and the host journal retain their exact identity checks.
-
-## Rollback
-
-Restore the accepted prior executable/helper release pointers using the host's existing atomic process. Preserve all new state and pending operations first. Do not run an older writer against new records it cannot understand, erase an unresolved journal, overwrite state with a pre-action backup or assume a release rollback undoes native effects. Swift uses its own state and remains available; unresolved Go actions still need review in their original environment.
-
-## Saved action review and partial batch receipts
-
-`/recover` (**Review saved action**) shows the original environment, thread,
-action kind, exact payload and operation ID before explicit reconciliation.
-It uses the existing journal identity. Closing keeps the record. An action from
-another thread first opens that exact target and requires explicit recovery there;
-a removed environment remains inspectable but cannot silently use another route.
-`/retry-launch` retains its exact native launch identity and reviewed options.
-
-Batch filing stores at most sixteen source-bound receipts in the existing private
-draft/recovery state, not in a scheduler or transcript database. Each stores the
-original human list once and bounded item ranges plus exact native operation and
-target identities. The states are **Acknowledged**, **Needs recovery**, and
-**Remaining draft**. Acknowledged means the native operation receipt, not that its
-run completed. Unsubmitted text is never called Queued.
-
-Saving a pending launch and marking its receipt item Needs recovery happen in one
-transaction before dispatch. Its ACK, acknowledged identity and exact unchanged
-prefix retirement are another single transaction. A lost result pauses subsequent
-filing. Restart displays the same receipt and payload, dispatches nothing, and
-explicit reconciliation uses the same ID. A newer human list is never overwritten.
-An explicitly reopened unchanged remainder continues the same receipt; changed
-input begins a new reviewed list. Only fully acknowledged old receipts may be
-evicted at the bound; unfinished originals are preserved. Definite first-attempt
-rejection can return an item to Remaining draft; manually clearing a retry record
-does not fabricate an acknowledged or definitely-unsent outcome.
-
-`/batch-receipts` is read-only. No pending or remaining item resumes when this
-client exits or restarts. The atomic state file and process lock remain the sole
-owners; the retained Swift state is separate.
-
-Local review position stores at most 64 source-qualified viewport offsets and a
-digest of complete native diff source hashes, with no diff copy, per-file approval
-or review database. Only the exact profile/environment/project/thread and hashes
-restore an offset. Missing/changed hashes, unsupported or clipped diffs start
-fresh with a notice; that position never proves review, tests, merge, or completion.
-
-## Attached request attention
-
-A live attached request shows its cue immediately. Automatic presentation waits
-for 1.5 seconds without input while an editor owns focus, or for editor blur, and
-waits behind another modal. More typing or paste restarts the interval. Explicit
-Requests opens sooner and promotes an already pending read without issuing a
-second request. Preview and background metadata carry no request authority.
-
-An automatically opened form starts on its heading. Tab, arrow navigation or a
-fresh click deliberately enters its controls; a queued editor Submit cannot
-answer it. Text or paste that reaches the unarmed form keeps its original editor
-owner and defers the unchanged form again. Esc cancels only local presentation,
-including an invalid unsent answer, and restores the invoking text, caret,
-selection, focus and reading anchor. Stop retains its separate operation lane.
-
-Closing suppresses that exact environment/thread/request ID/revision for the
-current attachment, bounded to the latest 128 identities. Repeated identical
-snapshots do not reopen it, and explicit Requests can still review it. A new ID
-or changed revision is new attention. Disconnection, changed live authority or a
-retired prompt disables the old form, its deferred prompt and its timer; a late
-click or result cannot acquire a replacement revision. Suppression survives a
-reconnect within the same attachment and resets when that attachment is replaced.
-No request answers or suppression identities are written to durable state.
+See [Rust verification](rust-verification.md) for executable test evidence and
+[contracts](rust-contracts.md) for pinned native sources. The implementation work
+uses disposable state and synthetic native endpoints; it does not touch installed
+services or user files. Any later installation must preserve existing state and
+journals. Replacing an executable does not undo a native effect or resolve an
+uncertain operation.

@@ -89,3 +89,16 @@ test('deep collapsed family and search stay bounded without losing ancestor iden
  const data=shell(rows);assert.deepEqual(ids(threadList(data,'',{grouped:true})),['root']);
  const r=threadList(data,'child-2499',{grouped:true});assert.ok(r.threads.length<=200);assert.ok(r.threads.every(t=>t.depth<=12));assert.equal(r.more,true);
 });
+
+// B1: project navigation is independent of whether a project has a human question.
+test('project inventory retains zero-thread projects with bounded completeness', () => {
+  const source = shell([thread('one')]);
+  source.projects.push({id:'empty',title:'Empty project'});
+  const page = threadList(source);
+  assert.deepEqual(page.projects.map(project => project.id), ['project','empty']);
+  assert.equal(page.projectsMore, false);
+  source.projects = Array.from({length:205},(_,index)=>({id:`project-${index}`,title:`Project ${index}`}));
+  const bounded = threadList(source);
+  assert.equal(bounded.projects.length,200);
+  assert.equal(bounded.projectsMore,true);
+});

@@ -1,6 +1,6 @@
 // Independently authored bounded client projection over verified T3 protocol-2
 // handlers. Native T3 owns projects, worktrees, runs, queues and visibility.
-import { LIMIT, clip, hash, identifier, requireThat, text } from './core.mjs';
+import { LIMIT, NAVIGATION_PIN_TAG, navigationPinned, clip, hash, identifier, requireThat, text } from './core.mjs';
 import { catalog, selection, sameSelection, validateChoice, providerIdentity } from './models.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
@@ -52,6 +52,15 @@ export function projectFileDefaults(contents) {
   return data.defaultThreadEnvMode===undefined?{}:{defaultThreadEnvMode:data.defaultThreadEnvMode};
 }
 
+export { NAVIGATION_PIN_TAG, navigationPinned };
+
+// This release's public MIT protocol-2 contract includes thread.tag.set but
+// its descriptor has no tag capability bit. Unknown releases stay readable.
+export function navigationPinSupported(descriptor) {
+  return descriptor?.orchestrationProtocolVersion === 2 &&
+    descriptor.serverVersion === '0.1.8-nightly.20261104.4179';
+}
+
 export function nativeRevision(t) {
   requireThat(typeof t.updatedAt === 'string' && Number.isFinite(Date.parse(t.updatedAt)),
     'Native thread revision is unavailable.', 'unsupported');
@@ -59,6 +68,7 @@ export function nativeRevision(t) {
     worktreePath:t.worktreePath ?? null, branch:t.branch ?? null,
     settledOverride:t.settledOverride ?? null, snoozedUntil:t.snoozedUntil ?? null,
     pinnedAt:t.pinnedAt ?? null, pinOrderKey:t.pinOrderKey ?? null,
+    navigationPinned:navigationPinned(t),
     activeRunId:t.activeRunId ?? null, latestRunId:t.latestRunId ?? null,
     status:t.status ?? null, activityRunStatus:t.activityRunStatus ?? null,
     pendingRuntimeRequest:t.pendingRuntimeRequest ?? null, queuedRunCount:t.queuedRunCount ?? null});
@@ -80,22 +90,60 @@ export function pullRequests(t) {
   }
   return result;
 }
+// A1/A2/S1/S2: shell.updatedAt also advances for token/tool and presentation
+// changes. Only source events qualify unread state; native lifecycle timestamps
+// (including human sends) qualify ordering. No observation time is substituted.
+export function meaningfulActivity(t) {
+  const stamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : '';
+  const run = optionalID(t.latestRunId), completed = stamp(t.latestRunCompletedAt);
+  const events = [];
+  if (run && completed && t.status === 'completed' && t.latestRunSilent !== true)
+    events.push({kind:'completion',at:completed,identity:{runId:run,completedAt:completed}});
+  if (t.status === 'failed' && run)
+    events.push({kind:'failure',at:completed || stamp(t.latestRunStartedAt) || stamp(t.latestRunRequestedAt),
+      identity:{runId:run,error:clip(t.lastError,4096).text,errorClass:clip(t.lastErrorClass,128).text,errorCode:clip(t.lastErrorCode,128).text}});
+  const request = t.pendingRuntimeRequest;
+  if (request?.id && request.kind !== 'auth_refresh')
+    events.push({kind:'request',at:stamp(request.createdAt),identity:{id:optionalID(request.id),kind:clip(request.kind,64).text,createdAt:stamp(request.createdAt)}});
+  const latest = t.latestVisibleMessage;
+  // The pinned shell may omit messages entirely. While a run is active its
+  // message text can be streaming, so only detail can admit a mid-run reply.
+  if (latest?.role === 'assistant' && !ACTIVE.has(t.activityRunStatus ?? t.status) && latest.id)
+    events.push({kind:'reply',at:stamp(latest.updatedAt),identity:{messageId:optionalID(latest.id),content:hash(latest.text ?? '')}});
+  events.sort((a,b) => Date.parse(b.at || '1970-01-01') - Date.parse(a.at || '1970-01-01') ||
+    ({request:4,failure:3,reply:2,completion:1}[b.kind] - {request:4,failure:3,reply:2,completion:1}[a.kind]));
+  const current = events[0];
+  const dates = [stamp(t.createdAt),stamp(t.latestUserAuthoredMessageAt ?? t.latestUserMessageAt),
+    stamp(t.latestRunRequestedAt),stamp(t.latestRunStartedAt),completed,...events.map(event => event.at)].filter(Boolean);
+  dates.sort((a,b) => Date.parse(b)-Date.parse(a));
+  return {at:dates[0] ?? '',generation:current ? hash({threadId:t.id,kind:current.kind,...current.identity}) : null,
+    kind:current?.kind ?? null};
+}
 export function inboxMetadata(t, extra = {}) {
   // Unknown older shells stay readable but cannot offer a revision-bound action.
   if (typeof t.updatedAt !== 'string' || !Number.isFinite(Date.parse(t.updatedAt))) return undefined;
   const latest = t.latestVisibleMessage;
   const message = latest && ['user','assistant','system'].includes(latest.role)
     ? {role:latest.role, ...clip(latest.text, 1024), updatedAt:clip(latest.updatedAt,64).text} : null;
+  const activity = meaningfulActivity(t);
   return {nativeRevision:nativeRevision(t), updatedAt:t.updatedAt,
+    activityAt:activity.at, activityGeneration:activity.generation, activityKind:activity.kind,
     settled:t.settledOverride === 'settled', snoozedUntil:clip(t.snoozedUntil,64).text,
     pinnedAt:clip(t.pinnedAt,64).text, pinOrderKey:clip(t.pinOrderKey,256).text,
+    navigationPinned:navigationPinned(t),
     latestUserMessageAt:clip(t.latestUserAuthoredMessageAt ?? t.latestUserMessageAt,64).text,
-    ...extra, runId:optionalID(t.activeRunId ?? t.latestRunId),
+    latestRunCompletedAt:clip(t.latestRunCompletedAt,64).text,
+    latestRunRequestedAt:clip(t.latestRunRequestedAt,64).text,
+    latestRunStartedAt:clip(t.latestRunStartedAt,64).text,
+    ...extra, runId:optionalID(t.activeRunId ?? t.latestRunId), activeRunId:optionalID(t.activeRunId),
+    pendingReview:t.interactionMode==='plan' && t.hasActionableProposedPlan===true &&
+      !['preparing','queued','starting','running','waiting'].includes(t.status) && t.activeRunId!==t.latestRunId,
     queuedCount:Number.isSafeInteger(t.queuedRunCount) && t.queuedRunCount >= 0 ? t.queuedRunCount : -1,
     // The shell offers one pending-request summary, not a complete count/form.
     pendingRequestCount:t.pendingRuntimeRequest ? 1 : 0,
     pendingRequestId:optionalID(t.pendingRuntimeRequest?.id),
     pendingRequestType:clip(t.pendingRuntimeRequest?.kind,64).text,
+    pendingRequestCreatedAt:clip(t.pendingRuntimeRequest?.createdAt,64).text,
     latestMessage:message, workspace:safePath(t.worktreePath) ? t.worktreePath : '',
     branch:clip(t.branch,512).text, pullRequests:pullRequests(t)};
 }
@@ -248,12 +296,14 @@ export function threadActionCommand(a, p, shellThread) {
     'Native thread identity mismatch.', 'identity_mismatch');
   requireThat(a.expectedRevision === nativeRevision(shellThread), 'Thread changed; review the current item.', 'stale');
   requireThat(!p.thread.deletedAt && !p.thread.archivedAt, 'Thread is unavailable.', 'unavailable');
-  const actions = new Set(['settle','unsettle','snooze','unsnooze','pin','unpin']);
+  const actions = new Set(['settle','unsettle','snooze','unsnooze','pin','unpin','navigation-pin','navigation-unpin']);
   requireThat(actions.has(a.action), 'Unsupported native thread action.');
   if (['settle','snooze'].includes(a.action)) {
     requireThat(!p.runtimeRequests.some(r=>r.status==='pending'), 'Answer the formal T3 request before hiding this thread.', 'blocked');
     requireThat(!p.runs.some(r=>ACTIVE.has(r.status) || r.status==='queued'), 'Active or queued work cannot be marked reviewed or snoozed here.', 'blocked');
   }
+  if (['navigation-pin','navigation-unpin'].includes(a.action)) return {type:'thread.tag.set',
+    commandId:identifier(a.id),threadId:identifier(a.threadId),tag:NAVIGATION_PIN_TAG,tagged:a.action==='navigation-pin'};
   const payload = {type:'thread.'+a.action,commandId:identifier(a.id),threadId:identifier(a.threadId)};
   if (['unsettle','unsnooze'].includes(a.action)) payload.reason='user';
   if (a.action === 'snooze') {

@@ -4,6 +4,7 @@ import { mkdtemp, rm, chmod, readdir, writeFile, symlink, stat } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { closeSync } from 'node:fs';
 import { Journal, journalScope } from '../adapter/journal.mjs';
 import { T3 } from '../adapter/t3.mjs';
 import { Fault, hash, requests } from '../adapter/core.mjs';
@@ -61,6 +62,7 @@ test('durable accepted answer survives restart without redispatch or new control
     revision: requests(s.projection)[0].revision, answers: { q: 'Original answer' } };
   let server = backend(path, s);
   const result = await server.act('answer', a);
+  assert.deepEqual(result.acknowledgement, {environmentId:'env-a',threadId:'thread-a',requestId:'request-a',revision:a.revision,operationId:'answer-a'});
   server.close(); s.projection.runtimeRequests[0].status = 'resolved';
   server = backend(path, s);
   assert.deepEqual(await server.act('answer', a), result);
@@ -74,7 +76,7 @@ test('durable accepted answer survives restart without redispatch or new control
 test('unacknowledged answer retry preserves exact answers and request after helper replacement', async t => {
   const path = await directory(t), s = state();
   s.projection.turnItems = [{ id: 'question', type: 'user_input_request', requestId: 'request-a',
-    questions: [{ id: 'q', header: 'Fixture' }] }];
+    questions: [{ id: 'q', header: 'Fixture', multiSelect:true, options:[{label:'Original'},{label:'answer'}] }] }];
   s.projection.runtimeRequests = [{ id: 'request-a', status: 'pending', responseCapability: { type: 'message' } }];
   const a = { id: 'answer-a', environmentId: 'env-a', threadId: 'thread-a', requestId: 'request-a',
     revision: requests(s.projection)[0].revision, answers: { q: ['Original', 'answer'] } };
@@ -82,7 +84,7 @@ test('unacknowledged answer retry preserves exact answers and request after help
   s.dispatch = async () => { s.projection.runtimeRequests[0].status = 'resolved'; throw new Fault('timeout', 'Lost ACK', true); };
   await assert.rejects(server.act('answer', a), { uncertain: true }); server.close();
   server = backend(path, s); s.dispatch = async () => ({ sequence: 12 });
-  assert.deepEqual(await server.act('answer', a), { sequence: 12 });
+  assert.deepEqual(await server.act('answer', a), { sequence: 12, acknowledgement:{environmentId:'env-a',threadId:'thread-a',requestId:'request-a',revision:a.revision,operationId:'answer-a'} });
   assert.deepEqual(s.calls[0], s.calls[1]); assert.equal(s.reads, 1); server.close();
 });
 
@@ -180,4 +182,18 @@ test('fresh-helper authentication failure preserves prior uncertainty without re
   server.connect = async () => { throw new Fault('authorization', 'Renew this host credential.'); };
   await assert.rejects(server.act('stop', action), { code: 'authorization', uncertain: true });
   assert.equal(s.calls.length, 1); server.close();
+});
+
+test('legacy thread ACK decoration cannot hide a conflicting sequence, source or action', async t => {
+  const path=await directory(t),journal=new Journal(path,scope);
+  for(const [index,result] of [{sequence:99},{sequence:12,threadId:'other'},{sequence:12,action:'unsettle'}].entries()){
+    const id='conflicting-legacy-'+index;
+    const record=journal.access(id,hash(id),{tag:'orchestration.dispatchCommand',payload:{type:'thread.settle',commandId:id,threadId:'thread-a'}});
+    // Publish the old bytes directly so this checks compatibility validation,
+    // rather than requiring the current writer to create invalid metadata.
+    const fd=journal.directoryFd();
+    try {journal.publish(record.path+'.ack',{v:1,key:record.key,scope,fingerprint:record.fingerprint,payloadHash:record.payloadHash,result},fd)}
+    finally {closeSync(fd)}
+    assert.throws(()=>journal.acknowledge(record,{sequence:12}),{code:'journal',uncertain:true});
+  }
 });

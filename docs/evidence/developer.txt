@@ -1,0 +1,38 @@
+ t3oxide   Developer   AgentBox                                                                                             Ctrl+P Commands 
+ Live · running · fixture-model · auto                                                                                  Split  Focus  Wide  
+┌ Conversations ─────────────┐┌ Fixture host / Active implementation ───────────────────────────────────┐┌ Details ────────────────────────┐
+│  / Filter conversations    ││ You                                                                     ││ Environment                     │
+│ Active Attention Working   ││ Inspect Active implementation.                                          ││ Fixture host                    │
+│ Settled All                ││                                                                         ││                                 │
+│                            ││ Agent                                                                   ││ Thread                          │
+│ ▎● Active implementation   ││ ## Active implementation                                                ││ thread-a                        │
+│    Fixture host / Fixture  ││                                                                         ││                                 │
+│  ? Permission needed       ││ Ready for review.                                                       ││ Workspace                       │
+│    Fixture host / Fixture  ││                                                                         ││ root                            │
+│  ✓ Alternative design      ││ - Exact thread identity retained                                        ││                                 │
+│    Fixture host / Fixture  ││ - Unicode: 日本語 café 🙂                                               ││ Model                           │
+│  ? Question to answer      ││                                                                         ││ fixture-model                   │
+│    Fixture host / Fixture  ││ cargo test completed. Streaming update 1. Streaming update 2.           ││                                 │
+│  ✓ Finished refactor       ││ Streaming update 3.                                                     ││ Run                             │
+│    Fixture host / Fixture  ││                                                                         ││ running                         │
+│                            ││                                                                         ││                                 │
+│                            ││                                                                         ││ Delivery                        │
+│                            ││                                                                         ││ auto                            │
+│                            ││                                                                         ││                                 │
+│                            ││                                                                         ││ Requests                        │
+│                            ││                                                                         ││ 0                               │
+│                            ││                                                                         ││                                 │
+│                            ││                                                                         ││ Recovery                        │
+│                            ││                                                                         ││ 0                               │
+│                            ││                                                                         ││                                 │
+│                            ││                                                                         ││ Hosts                           │
+│                            ││                                                                         ││ Fixture host: 7 · Offline host: │
+│                            ││                                                             ● Following ││ unavailable (Could not read the │
+│                            │└─────────────────────────────────────────────────────────────────────────┘│ local T3 endpoint. No server    │
+│                            │┌ Message ────────────────────────────────────────────────────────────────┐│ was started or changed.)        │
+│                            ││ Durable draft: café 日本語 🙂                                           ││                                 │
+│                            ││ Second line remains unsent.                                             ││ reasoningEffort                 │
+└ 5 shown ───────────────────┘└─────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────┘
+ MESSAGE   Enter newline · Ctrl+] send · Ctrl+S stop · Ctrl+Y requests · Tab focus                                                          
+ Fixture host: 7 · Offline host: unavailable (Could not read the local T3 endpoint. No server was started or changed.)                      
+                                                                                                                                            

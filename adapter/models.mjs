@@ -1,6 +1,6 @@
 // Additive companion-v1 model controls. T3 contract provenance: docs/model-navigation.md.
 // No provider process, credentials, or model catalog is owned by this client.
-import { Fault, activity, clip, command, identifier, launch, requireThat, stable, text, view } from './core.mjs';
+import { Fault, activity, clip, command, identifier, launch, requireThat, stable, text, view, navigationPinned } from './core.mjs';
 import { activityPage } from './activity.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
@@ -83,6 +83,7 @@ export function modelView(snapshot, threadId, identities) {
   const current = optionalSelection(p.thread.modelSelection);
   return { ...result, activity: activityPage(p.visibleTurnItems, {sequence: snapshot.snapshotSequence,
     cursor: snapshot.historyCursor, hasMore: snapshot.hasMoreHistory}),
+    navigationPinned: navigationPinned(p.thread),
     modelSelection: current,
     ...(current ? {providerIdentity:structuredClone(identities?.get(current.instanceId) ?? providerIdentity(null,current.instanceId))} : {}),
     lineage: lineage(p.thread.lineage), runtimeDetails: runtimeDetails(p) };

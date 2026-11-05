@@ -11,6 +11,7 @@ Thumbs.db
 
 # Build output, measurements and host-local configuration.
 dist/
+target/
 .build/
 metrics/
 __pycache__/

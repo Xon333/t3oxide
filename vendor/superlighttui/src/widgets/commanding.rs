@@ -1,0 +1,718 @@
+//! Commanding family state — key chords, command palette, screen stack and
+//! mode state.
+//!
+//! Rendered by `context/widgets/commanding.rs`.
+
+/// Default tick budget (~1s at 60Hz) after which a partially-typed chord
+/// is abandoned. Matches the tick clock used by notifications/animation.
+///
+/// Override per call site with
+/// [`Context::key_chord_timeout`](crate::Context::key_chord_timeout).
+pub const DEFAULT_CHORD_TIMEOUT_TICKS: u64 = 60;
+
+/// Cross-frame partial-sequence buffer for
+/// [`Context::key_chord`](crate::Context::key_chord).
+///
+/// Persisted in `FrameState` across frames (same out/in policy as
+/// `keyed_states`). Holds at most one in-flight chord prefix; a mismatching
+/// key or a timeout clears it. You never construct this directly — SLT owns a
+/// single instance per [`Context`](crate::Context) and threads it through the
+/// frame loop for you.
+///
+/// # Example
+///
+/// ```no_run
+/// slt::run(|ui: &mut slt::Context| {
+///     // The buffer is managed internally; just call `key_chord`.
+///     if ui.key_chord("gg") {
+///         // jump to top
+///     }
+/// });
+/// ```
+#[derive(Debug, Default, Clone)]
+pub struct ChordState {
+    /// Characters accumulated so far toward some registered chord.
+    pub(crate) pending: String,
+    /// Tick of the most recent accepted key; used for timeout expiry.
+    pub(crate) last_tick: u64,
+}
+
+/// State for a command palette overlay.
+///
+/// Renders as a modal with a search input and filtered command list.
+#[derive(Debug, Clone)]
+pub struct CommandPaletteState {
+    /// Available commands.
+    commands: Vec<PaletteCommand>,
+    /// Current search query.
+    pub input: String,
+    /// Cursor index within `input`.
+    pub cursor: usize,
+    /// Whether the palette modal is open.
+    pub open: bool,
+    /// The last selected command index, set when the user confirms a selection.
+    /// Check this after `response.changed` is true.
+    pub last_selected: Option<usize>,
+    selected: usize,
+    /// Cached filtered indices for the last `input` value. Avoids running
+    /// `fuzzy_score` twice per frame (clamp + render).
+    filter_cache: Option<(String, Vec<usize>)>,
+}
+
+impl CommandPaletteState {
+    /// Create command palette state from a command list.
+    pub fn new(commands: Vec<PaletteCommand>) -> Self {
+        Self {
+            commands,
+            input: String::new(),
+            cursor: 0,
+            open: false,
+            last_selected: None,
+            selected: 0,
+            filter_cache: None,
+        }
+    }
+
+    /// Return all available commands.
+    pub fn commands(&self) -> &[PaletteCommand] {
+        &self.commands
+    }
+
+    /// Replace all commands and synchronize filter and selection state.
+    pub fn set_commands(&mut self, commands: Vec<PaletteCommand>) {
+        self.commands = commands;
+        self.synchronize_commands();
+    }
+
+    /// Append a command and invalidate the filter cache.
+    pub fn push_command(&mut self, command: PaletteCommand) {
+        self.commands.push(command);
+        self.synchronize_commands();
+    }
+
+    /// Remove and return a command by data index.
+    pub fn remove_command(&mut self, index: usize) -> Option<PaletteCommand> {
+        if index >= self.commands.len() {
+            return None;
+        }
+        let command = self.commands.remove(index);
+        self.synchronize_commands();
+        Some(command)
+    }
+
+    /// Remove all commands and reset cache-coupled selection state.
+    pub fn clear_commands(&mut self) {
+        self.commands.clear();
+        self.synchronize_commands();
+    }
+
+    fn synchronize_commands(&mut self) {
+        self.filter_cache = None;
+        self.selected = 0;
+        self.last_selected = self
+            .last_selected
+            .filter(|&index| index < self.commands.len());
+    }
+
+    /// Toggle open/closed state and reset input when opening.
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+        if self.open {
+            self.input.clear();
+            self.cursor = 0;
+            self.selected = 0;
+            self.filter_cache = None;
+        }
+    }
+
+    pub(crate) fn fuzzy_score(pattern: &str, text: &str) -> Option<i32> {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            return Some(0);
+        }
+
+        let text_chars: Vec<char> = text.chars().collect();
+        let mut score = 0;
+        let mut search_start = 0usize;
+        let mut prev_match: Option<usize> = None;
+
+        for p in pattern.chars() {
+            let mut found = None;
+            for (idx, ch) in text_chars.iter().enumerate().skip(search_start) {
+                if ch.eq_ignore_ascii_case(&p) {
+                    found = Some(idx);
+                    break;
+                }
+            }
+
+            let idx = found?;
+            if prev_match.is_some_and(|prev| idx == prev + 1) {
+                score += 3;
+            } else {
+                score += 1;
+            }
+
+            if idx == 0 {
+                score += 2;
+            } else {
+                let prev = text_chars[idx - 1];
+                let curr = text_chars[idx];
+                if matches!(prev, ' ' | '_' | '-') || prev.is_uppercase() || curr.is_uppercase() {
+                    score += 2;
+                }
+            }
+
+            prev_match = Some(idx);
+            search_start = idx + 1;
+        }
+
+        Some(score)
+    }
+
+    /// Cached variant of [`Self::filtered_indices`].
+    ///
+    /// Reuses the previous result when `self.input` has not changed since the
+    /// last call. `command_palette()` invokes this twice per frame (before key
+    /// handling, to clamp the selection index, and again for render); on idle
+    /// frames the second call is served from cache instead of re-running
+    /// `fuzzy_score` over the full command list.
+    pub(crate) fn filtered_indices_cached(&mut self) -> &[usize] {
+        let needs_recompute = match &self.filter_cache {
+            Some((cached_input, _)) => *cached_input != self.input,
+            None => true,
+        };
+        if needs_recompute {
+            let indices = self.filtered_indices();
+            self.filter_cache = Some((self.input.clone(), indices));
+        }
+        &self
+            .filter_cache
+            .as_ref()
+            .expect("filter_cache populated above")
+            .1
+    }
+
+    pub(crate) fn filtered_indices(&self) -> Vec<usize> {
+        let query = self.input.trim();
+        if query.is_empty() {
+            return (0..self.commands.len()).collect();
+        }
+
+        let mut scored: Vec<(usize, i32)> = self
+            .commands
+            .iter()
+            .enumerate()
+            .filter_map(|(i, cmd)| {
+                let mut haystack =
+                    String::with_capacity(cmd.label.len() + cmd.description.len() + 1);
+                haystack.push_str(&cmd.label);
+                haystack.push(' ');
+                haystack.push_str(&cmd.description);
+                Self::fuzzy_score(query, &haystack).map(|score| (i, score))
+            })
+            .collect();
+
+        if scored.is_empty() {
+            let tokens: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+            return self
+                .commands
+                .iter()
+                .enumerate()
+                .filter(|(_, cmd)| {
+                    let label = cmd.label.to_lowercase();
+                    let desc = cmd.description.to_lowercase();
+                    tokens.iter().all(|token| {
+                        label.contains(token.as_str()) || desc.contains(token.as_str())
+                    })
+                })
+                .map(|(i, _)| i)
+                .collect();
+        }
+
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(idx, _)| idx).collect()
+    }
+
+    pub(crate) fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub(crate) fn set_selected(&mut self, s: usize) {
+        self.selected = s;
+    }
+}
+
+// ── Command Palette ───────────────────────────────────────────────────
+
+/// A single command entry in the palette.
+#[derive(Debug, Clone)]
+pub struct PaletteCommand {
+    /// Primary command label.
+    pub label: String,
+    /// Supplemental command description.
+    pub description: String,
+    /// Optional keyboard shortcut hint.
+    pub shortcut: Option<String>,
+}
+
+impl PaletteCommand {
+    /// Create a new palette command.
+    pub fn new(label: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            description: description.into(),
+            shortcut: None,
+        }
+    }
+
+    /// Set a shortcut hint displayed alongside the command.
+    #[must_use]
+    pub fn shortcut(mut self, s: impl Into<String>) -> Self {
+        self.shortcut = Some(s.into());
+        self
+    }
+}
+
+/// Navigation stack state for multi-screen apps.
+///
+/// Tracks screen names in a push/pop stack while preserving the root screen.
+/// Each screen gets isolated focus and hook state when used with
+/// [`crate::Context::screen`].
+///
+/// # Example
+///
+/// ```no_run
+/// let mut screens = slt::ScreenState::new("main");
+///
+/// slt::run(|ui| {
+///     let current = screens.current().to_string();
+///     if current == "main" {
+///         if ui.button("Settings").clicked { screens.push("settings"); }
+///     }
+///     if current == "settings" {
+///         if ui.button("Back").clicked { screens.pop(); }
+///     }
+/// });
+/// ```
+#[derive(Debug)]
+pub struct ScreenState {
+    id: u64,
+    stack: Vec<String>,
+    focus_state: std::collections::HashMap<String, (usize, usize)>,
+    pending_focus: PendingScreenFocus,
+}
+
+pub(crate) type PendingScreenFocus = std::sync::Arc<std::sync::Mutex<ScreenFocusMailbox>>;
+
+#[derive(Debug, Default)]
+pub(crate) struct ScreenFocusMailbox {
+    pub generation: u64,
+    pub leases: std::collections::HashMap<std::sync::Arc<str>, u64>,
+    pub update: Option<ScreenFocusUpdate>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ScreenFocusUpdate {
+    pub name: std::sync::Arc<str>,
+    pub index: usize,
+    pub count: usize,
+}
+
+impl Clone for ScreenState {
+    fn clone(&self) -> Self {
+        let mut focus_state = self.focus_state.clone();
+        if let Some(update) = self
+            .pending_focus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .update
+            .as_ref()
+        {
+            focus_state.insert(update.name.to_string(), (update.index, update.count));
+        }
+        Self {
+            id: next_screen_state_id(),
+            stack: self.stack.clone(),
+            focus_state,
+            pending_focus: Default::default(),
+        }
+    }
+}
+
+fn next_screen_state_id() -> u64 {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl ScreenState {
+    /// Create a screen stack with an initial root screen.
+    pub fn new(initial: impl Into<String>) -> Self {
+        Self {
+            id: next_screen_state_id(),
+            stack: vec![initial.into()],
+            focus_state: std::collections::HashMap::new(),
+            pending_focus: Default::default(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Return the current screen name (top of the stack).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if an internal invariant is broken: a [`ScreenState`] always holds at least one screen.
+    pub fn current(&self) -> &str {
+        self.stack
+            .last()
+            .expect("ScreenState always contains at least one screen")
+            .as_str()
+    }
+
+    /// Push a new screen onto the stack.
+    pub fn push(&mut self, name: impl Into<String>) {
+        self.stack.push(name.into());
+    }
+
+    /// Pop the current screen, preserving the root screen.
+    pub fn pop(&mut self) {
+        if self.can_pop() {
+            self.stack.pop();
+        }
+    }
+
+    /// Return current stack depth.
+    pub fn depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    /// Return `true` if popping is allowed.
+    pub fn can_pop(&self) -> bool {
+        self.stack.len() > 1
+    }
+
+    /// Return `true` if `name` is currently present in the navigation stack.
+    pub fn contains(&self, name: &str) -> bool {
+        self.stack.iter().any(|screen| screen == name)
+    }
+
+    /// Reset to only the root screen.
+    pub fn reset(&mut self) {
+        self.stack.truncate(1);
+    }
+
+    /// Remove retained focus state for a screen that is no longer on the stack.
+    ///
+    /// Returns `false` when the screen is still active or stacked, because
+    /// dropping focus for a live screen would make back navigation jumpy.
+    pub fn remove_inactive(&mut self, name: &str) -> bool {
+        self.sync_focus();
+        if self.contains(name) {
+            return false;
+        }
+        let removed = self.focus_state.remove(name).is_some();
+        if removed {
+            self.cancel_focus_update(name);
+        }
+        removed
+    }
+
+    /// Retain inactive focus-state entries accepted by `keep`.
+    ///
+    /// Screens still present in the stack are always kept. Returns the number
+    /// of focus-state entries removed.
+    pub fn retain_inactive(&mut self, mut keep: impl FnMut(&str) -> bool) -> usize {
+        self.sync_focus();
+        let before = self.focus_state.len();
+        let stack = &self.stack;
+        self.focus_state
+            .retain(|name, _| stack.iter().any(|screen| screen == name) || keep(name));
+        let mut mailbox = self
+            .pending_focus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        mailbox
+            .leases
+            .retain(|name, _| self.focus_state.contains_key(name.as_ref()));
+        if mailbox
+            .update
+            .as_ref()
+            .is_some_and(|update| !self.focus_state.contains_key(update.name.as_ref()))
+        {
+            mailbox.update = None;
+        }
+        before - self.focus_state.len()
+    }
+
+    /// Number of retained per-screen focus entries.
+    ///
+    /// Diagnostic helper for apps with runtime-generated screen names.
+    pub fn focus_state_count(&self) -> usize {
+        self.focus_state.len()
+    }
+
+    /// Apply a deferred navigation request recorded inside a
+    /// [`crate::Context::screen`] closure (issue #279).
+    pub(crate) fn apply_nav(&mut self, nav: ScreenNav) {
+        match nav {
+            ScreenNav::Push(name) => self.push(name),
+            ScreenNav::Pop => self.pop(),
+            ScreenNav::Reset => self.reset(),
+        }
+    }
+
+    pub(crate) fn save_focus(&mut self, name: &str, focus_index: usize, focus_count: usize) {
+        if let Some(slot) = self.focus_state.get_mut(name) {
+            *slot = (focus_index, focus_count);
+        } else {
+            self.focus_state
+                .insert(name.to_string(), (focus_index, focus_count));
+        }
+    }
+
+    pub(crate) fn restore_focus(&self, name: &str) -> (usize, usize) {
+        if let Some(update) = self
+            .pending_focus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .update
+            .as_ref()
+            && update.name.as_ref() == name
+        {
+            return (update.index, update.count);
+        }
+        self.focus_state.get(name).copied().unwrap_or((0, 0))
+    }
+
+    pub(crate) fn sync_focus(&mut self) {
+        let pending = self
+            .pending_focus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .update
+            .take();
+        if let Some(update) = pending {
+            self.save_focus(&update.name, update.index, update.count);
+        }
+    }
+
+    fn cancel_focus_update(&mut self, name: &str) {
+        let mut mailbox = self
+            .pending_focus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        mailbox.leases.remove(name);
+        if mailbox
+            .update
+            .as_ref()
+            .is_some_and(|update| update.name.as_ref() == name)
+        {
+            mailbox.update = None;
+        }
+    }
+
+    pub(crate) fn focus_updates(&self, name: &std::sync::Arc<str>) -> (PendingScreenFocus, u64) {
+        let mut mailbox = self
+            .pending_focus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        mailbox.generation = mailbox.generation.wrapping_add(1);
+        let generation = mailbox.generation;
+        mailbox
+            .leases
+            .insert(std::sync::Arc::clone(name), generation);
+        (std::sync::Arc::clone(&self.pending_focus), generation)
+    }
+}
+
+/// A deferred screen-navigation request recorded inside a
+/// [`crate::Context::screen`] closure and applied to the active
+/// [`ScreenState`] after the closure returns (issue #279).
+#[derive(Debug, Clone)]
+pub(crate) enum ScreenNav {
+    /// Push a new screen onto the stack.
+    Push(String),
+    /// Pop the current screen, preserving the root.
+    Pop,
+    /// Reset to only the root screen.
+    Reset,
+}
+
+/// Named mode system with independent screen stacks.
+///
+/// Each mode contains its own [`ScreenState`]. Switching modes preserves
+/// the previous mode's screen stack, focus, and hook state.
+///
+/// # Example
+///
+/// ```no_run
+/// let mut modes = slt::ModeState::new("app", "home");
+/// modes.add_mode("settings", "general");
+///
+/// slt::run(|ui| {
+///     if ui.key('1') { modes.switch_mode("app"); }
+///     if ui.key('2') { modes.switch_mode("settings"); }
+///     let mode = modes.active_mode().to_string();
+///     ui.text(format!("Mode: {}", mode));
+/// });
+/// ```
+#[derive(Debug, Clone)]
+pub struct ModeState {
+    modes: std::collections::HashMap<String, ScreenState>,
+    active: String,
+}
+
+impl ModeState {
+    /// Create a mode system with an initial mode and screen.
+    pub fn new(mode: impl Into<String>, screen: impl Into<String>) -> Self {
+        let mode = mode.into();
+        let mut modes = std::collections::HashMap::new();
+        modes.insert(mode.clone(), ScreenState::new(screen));
+        Self {
+            modes,
+            active: mode,
+        }
+    }
+
+    /// Add a new mode with an initial screen.
+    pub fn add_mode(&mut self, mode: impl Into<String>, screen: impl Into<String>) {
+        let mode = mode.into();
+        self.modes
+            .entry(mode)
+            .or_insert_with(|| ScreenState::new(screen));
+    }
+
+    /// Switch to a different mode. The mode must have been added with [`Self::add_mode`].
+    ///
+    /// Panics if the mode does not exist. For a non-panicking variant that
+    /// reports success, use [`Self::try_switch_mode`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `mode` was never registered with [`ModeState::add_mode`].
+    pub fn switch_mode(&mut self, mode: impl Into<String>) {
+        let mode = mode.into();
+        assert!(self.modes.contains_key(&mode), "mode '{mode}' not found");
+        self.active = mode;
+    }
+
+    /// Switch modes, returning `true` when the mode exists and the switch
+    /// happened, or `false` when the mode has not been registered via
+    /// [`Self::add_mode`].
+    ///
+    /// Prefer this over [`Self::switch_mode`] when the mode name comes from
+    /// user input, key bindings, or anywhere the value could be unexpected
+    /// at runtime — an unknown mode should not crash the host application.
+    pub fn try_switch_mode(&mut self, mode: impl Into<String>) -> bool {
+        let mode = mode.into();
+        if !self.modes.contains_key(&mode) {
+            return false;
+        }
+        self.active = mode;
+        true
+    }
+
+    /// Return the active mode name.
+    pub fn active_mode(&self) -> &str {
+        &self.active
+    }
+
+    /// Get a reference to the active mode's screen state.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if an internal invariant is broken: the active mode is always registered.
+    pub fn screens(&self) -> &ScreenState {
+        self.modes
+            .get(&self.active)
+            .expect("active mode must exist")
+    }
+
+    /// Get a mutable reference to the active mode's screen state.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if an internal invariant is broken: the active mode is always registered.
+    pub fn screens_mut(&mut self) -> &mut ScreenState {
+        self.modes
+            .get_mut(&self.active)
+            .expect("active mode must exist")
+    }
+
+    /// Return `true` when a mode has been registered.
+    pub fn contains_mode(&self, mode: &str) -> bool {
+        self.modes.contains_key(mode)
+    }
+
+    /// Number of registered modes.
+    ///
+    /// Diagnostic helper for dynamic mode sets.
+    pub fn mode_count(&self) -> usize {
+        self.modes.len()
+    }
+
+    /// Remove an inactive mode and its retained screen state.
+    ///
+    /// The active mode is preserved and returns `false`.
+    pub fn remove_mode(&mut self, mode: &str) -> bool {
+        if self.active == mode {
+            return false;
+        }
+        self.modes.remove(mode).is_some()
+    }
+
+    /// Retain inactive modes accepted by `keep`.
+    ///
+    /// The active mode is always retained. Returns the number of modes removed.
+    pub fn retain_modes(&mut self, mut keep: impl FnMut(&str) -> bool) -> usize {
+        let before = self.modes.len();
+        let active = self.active.as_str();
+        self.modes
+            .retain(|mode, _| mode.as_str() == active || keep(mode.as_str()));
+        before - self.modes.len()
+    }
+}
+
+#[cfg(test)]
+mod mode_state_tests {
+    use super::ModeState;
+
+    #[test]
+    fn try_switch_mode_returns_false_for_unknown_mode() {
+        let mut modes = ModeState::new("app", "home");
+        modes.add_mode("settings", "general");
+        assert!(modes.try_switch_mode("settings"));
+        assert_eq!(modes.active_mode(), "settings");
+        assert!(!modes.try_switch_mode("nonexistent"));
+        // Active mode must not change when the switch is rejected.
+        assert_eq!(modes.active_mode(), "settings");
+    }
+
+    #[test]
+    fn remove_mode_preserves_active_mode() {
+        let mut modes = ModeState::new("app", "home");
+        modes.add_mode("settings", "general");
+        modes.add_mode("admin", "dashboard");
+
+        assert_eq!(modes.mode_count(), 3);
+        assert!(!modes.remove_mode("app"));
+        assert!(modes.remove_mode("admin"));
+        assert!(!modes.contains_mode("admin"));
+        assert_eq!(modes.mode_count(), 2);
+    }
+
+    #[test]
+    fn retain_modes_keeps_active_mode() {
+        let mut modes = ModeState::new("app", "home");
+        modes.add_mode("settings", "general");
+        modes.add_mode("admin", "dashboard");
+
+        let removed = modes.retain_modes(|mode| mode == "admin");
+        assert_eq!(removed, 1);
+        assert!(modes.contains_mode("app"));
+        assert!(modes.contains_mode("admin"));
+        assert!(!modes.contains_mode("settings"));
+    }
+}
