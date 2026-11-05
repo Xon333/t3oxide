@@ -5307,6 +5307,192 @@ fn context_worker_retired_native_question_cannot_reopen_its_closed_read_view() {
 }
 
 #[test]
+fn r8_pointer_tab_restores_composer_and_sends_original_unicode_draft_once() {
+    fn journal_files(root: &Path) -> std::collections::BTreeMap<PathBuf, (Vec<u8>, u32)> {
+        let mut files = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                for (name, value) in journal_files(&path) {
+                    files.insert(PathBuf::from(path.file_name().unwrap()).join(name), value);
+                }
+            } else {
+                files.insert(
+                    path.file_name().unwrap().into(),
+                    (
+                        fs::read(&path).unwrap(),
+                        fs::metadata(&path).unwrap().permissions().mode(),
+                    ),
+                );
+            }
+        }
+        files
+    }
+    fn settle_source(fixture: &mut Fixture) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture
+            .app
+            .active
+            .as_ref()
+            .is_none_or(|active| active.navigating)
+        {
+            let event = fixture
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("pointer-selected native source attachment");
+            fixture.app.handle(event).unwrap();
+        }
+    }
+
+    let mut fixture = Fixture::new(500);
+    for environment in &fixture.app.environments {
+        let mut config: Value =
+            serde_json::from_slice(&fs::read(&environment.host_config).unwrap()).unwrap();
+        config["fixture"]["persistInitialState"] = json!(true);
+        fs::write(&environment.host_config, config.to_string()).unwrap();
+    }
+    fixture.load_pages();
+    // Retain a genuine acknowledged host journal and an independent uncertain lane.
+    fixture.open(1);
+    fixture.app.replace_text("Retained journal intent".into());
+    fixture.app.command("send").unwrap();
+    let event = fixture.next_mutation();
+    fixture.app.handle(event).unwrap();
+    let other_native = fs::read(&fixture.native_states[1]).unwrap();
+    let other_journal = fixture.directory.path().join("host-1/operations-v1");
+    let journal_before = journal_files(&other_journal);
+    assert!(!journal_before.is_empty());
+    let recovery = json!({"id":"r8-other-uncertain","environmentId":"native-1","threadId":"thread-a","op":"send","message":"Original uncertain intent"});
+    fixture
+        .app
+        .state
+        .save_pending("native-1", false, recovery.clone())
+        .unwrap();
+    fixture.open(0);
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::CloseTab("1\0thread-a".into()),
+            &mut crate::slt_ui::SurfaceState::new(),
+        )
+        .unwrap();
+    let source = fixture.app.source(0, "thread-a");
+    let native_before = fs::read(&fixture.native_states[0]).unwrap();
+    let draft = "/help stays literal · café 日本語 alpha beta gamma alpha beta gamma\nsecond line  e\u{301} 👩\u{200d}💻  ";
+    let other_draft = "independent tab draft";
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend = ::slt::TestBackend::new(140, 38)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    assert_eq!(
+        model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new()).as_deref(),
+        Some("composer")
+    );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .paste(draft)
+            .key_code(::slt::KeyCode::Left)
+            .key_code(::slt::KeyCode::Left)
+            .key_code(::slt::KeyCode::Left)
+            .build(),
+    );
+    fixture.app.flush_draft().unwrap();
+    let caret = fixture.app.composer.cursor();
+    assert_ne!(caret, (1, draft.lines().last().unwrap().chars().count()));
+    let (x, y) = backend
+        .find_text("Finished refactor")
+        .expect("navigator source");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().click(x, y).build(),
+    );
+    settle_source(&mut fixture);
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-review");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().paste(other_draft).build(),
+    );
+    fixture.app.flush_draft().unwrap();
+    let (x, y) = backend
+        .find_text("Active implementation")
+        .expect("original conversation tab");
+    assert_eq!(y, 1, "activate the conversation tab, not navigator content");
+    let mut click_owners = Vec::new();
+    backend.run_with_events(::slt::EventBuilder::new().click(x, y).build(), |ctx| {
+        fixture.draw_slt(ctx, &mut surface);
+        click_owners.push(ctx.focused_name().map(str::to_owned));
+    });
+    settle_source(&mut fixture);
+    let owner = model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    assert_eq!(surface.source.as_ref(), Some(&source));
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+    assert_eq!(
+        fixture.app.state.draft("native-0", "thread-review"),
+        other_draft
+    );
+    assert!(fixture.app.state.pending("native-0", false).is_none());
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    let events = [::slt::KeyEventKind::Press, ::slt::KeyEventKind::Release]
+        .into_iter()
+        .map(|kind| {
+            let mut event =
+                ::slt::Event::key_mod(::slt::KeyCode::Enter, ::slt::KeyModifiers::CONTROL);
+            if let ::slt::Event::Key(key) = &mut event {
+                key.kind = kind;
+            }
+            event
+        })
+        .collect();
+    model_tail_input(&mut backend, &mut fixture, &mut surface, events);
+    let pending = fixture.app.state.pending("native-0", false)
+        .unwrap_or_else(|| panic!("pointer tab must admit Ctrl+Enter Send; settled owner={owner:?}, click owners={click_owners:?}"));
+    assert_eq!(owner.as_deref(), Some("composer"));
+    assert_eq!(pending["op"], "send");
+    assert_eq!(pending["threadId"], "thread-a");
+    assert_eq!(pending["message"], draft);
+    assert_eq!(fixture.app.state.pending_records().len(), 2);
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation { context, id, op, fields, result: Ok(_) }
+        if context.profile == 0 && *id == pending["id"] && op == "send"
+            && fields["threadId"] == "thread-a" && fields["message"] == draft)
+    );
+    fixture.app.handle(event).unwrap();
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    assert!(fixture.app.state.pending("native-0", false).is_none());
+    assert_eq!(fixture.app.text(), "");
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(native["effects"], 1);
+    assert_eq!(native["receipts"].as_object().unwrap().len(), 1);
+    let sent: Vec<_> = native["projections"]["thread-a"]["turnItems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["type"] == "user_message" && item["text"] == draft)
+        .collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        fixture.app.state.draft("native-0", "thread-review"),
+        other_draft
+    );
+    assert_eq!(fixture.app.state.pending("native-1", false), Some(recovery));
+    assert_eq!(fixture.app.state.pending_records().len(), 1);
+    assert_eq!(fs::read(&fixture.native_states[1]).unwrap(), other_native);
+    assert_eq!(journal_files(&other_journal), journal_before);
+}
+
+#[test]
 fn r8_actual_tab_cycle_keeps_source_tab_owner_and_original_drafts() {
     let mut fixture = Fixture::new(0);
     let config_path = &fixture.app.environments[0].host_config;

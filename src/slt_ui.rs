@@ -114,6 +114,7 @@ pub struct SurfaceState {
     tab_editors: HashMap<String, TextareaState>,
     tabs_control: TabsState,
     tabs_start: usize,
+    pointer_tab_activation: bool,
     modal_editor: TextareaState,
     modal_stamp: Option<u64>,
     modal_selected: usize,
@@ -192,7 +193,9 @@ pub fn draw(
         }))
     .then(|| state.focused_control.clone())
     .flatten();
+    let pointer_tab_activation = std::mem::take(&mut state.pointer_tab_activation);
     let retain_tab_focus = state.composer_key != state.active_key
+        && !pointer_tab_activation
         && state.focused_control.as_deref() == Some("conversation-tabs");
     state.transcript_layout = None;
     state.overlay_open = modal.is_some() || state.context_expanded;
@@ -212,7 +215,7 @@ pub fn draw(
         state.controller_scroll = None;
         state.command_escape = None;
         state.command_open = false;
-        if ctx.focused_name() != Some("conversation-tabs") {
+        if !retain_tab_focus {
             ctx.focus_by_name("composer");
         }
         ctx.request_frame();
@@ -846,6 +849,15 @@ fn draw_tabs(ctx: &mut Context, state: &mut SurfaceState, width: u32, actions: &
         });
         if next.clicked && end < state.tabs.len() {
             actions.push(Action::SelectTab(state.tabs[end].key.clone()));
+        }
+        if response.clicked
+            || (previous.clicked && start > 0)
+            || (next.clicked && end < state.tabs.len())
+        {
+            // SLT resolves named focus next frame, when the new source is restored.
+            state.pointer_tab_activation = true;
+            ctx.focus_by_name("composer");
+            ctx.request_frame();
         }
         let close = ctx.interaction();
         ctx.text(" × ").dim();
