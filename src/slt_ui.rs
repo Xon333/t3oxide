@@ -169,6 +169,11 @@ pub fn draw(
         .viewport
         .replace(geometry)
         .is_some_and(|old| old != geometry);
+    if resized {
+        // SLT clears measured geometry on resize. Rebind the controller intent
+        // before fresh bounds can turn a clamped offset into manual scrolling.
+        state.controller_scroll = None;
+    }
     let restore_focus = (resized
         && modal.is_none()
         && !state.overlay_open
@@ -1520,7 +1525,7 @@ fn identity_color(identity: &str) -> Color {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     struct Cells(slt::Buffer);
@@ -1538,28 +1543,28 @@ mod tests {
     }
 
     /// The public SLT frame path with a real geometry change and retained focus/layout state.
-    pub(super) struct ResizableBackend {
+    pub(crate) struct ResizableBackend {
         cells: Cells,
         state: slt::AppState,
         config: slt::RunConfig,
     }
 
     impl ResizableBackend {
-        pub(super) fn new(width: u32, height: u32) -> Self {
+        pub(crate) fn new(width: u32, height: u32) -> Self {
             Self {
                 cells: Cells(slt::Buffer::empty(slt::Rect::new(0, 0, width, height))),
                 state: slt::AppState::new(),
                 config: slt::RunConfig::default(),
             }
         }
-        pub(super) fn with_activation_boundaries(mut self) -> Self {
+        pub(crate) fn with_activation_boundaries(mut self) -> Self {
             self.config = self.config.activation_boundaries(true);
             self
         }
-        pub(super) fn render(&mut self, draw: impl FnMut(&mut Context)) {
+        pub(crate) fn render(&mut self, draw: impl FnMut(&mut Context)) {
             self.run_with_events(Vec::new(), draw);
         }
-        pub(super) fn run_with_events(
+        pub(crate) fn run_with_events(
             &mut self,
             events: Vec<slt::Event>,
             mut draw: impl FnMut(&mut Context),
@@ -1584,13 +1589,13 @@ mod tests {
                 .map(|x| self.cells.0.get(x, y).symbol.as_str())
                 .collect()
         }
-        pub(super) fn text(&self) -> String {
+        pub(crate) fn text(&self) -> String {
             (0..self.cells.0.area.height)
                 .map(|y| self.line(y))
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        pub(super) fn find_text(&self, expected: &str) -> Option<(u32, u32)> {
+        pub(crate) fn find_text(&self, expected: &str) -> Option<(u32, u32)> {
             (0..self.cells.0.area.height).find_map(|y| {
                 let line = self.line(y);
                 line.find(expected).map(|byte| {
@@ -1601,14 +1606,14 @@ mod tests {
                 })
             })
         }
-        pub(super) fn assert_contains(&self, expected: &str) {
+        pub(crate) fn assert_contains(&self, expected: &str) {
             assert!(
                 self.find_text(expected).is_some(),
                 "missing {expected:?}:\n{}",
                 self.text()
             );
         }
-        pub(super) fn assert_not_contains(&self, expected: &str) {
+        pub(crate) fn assert_not_contains(&self, expected: &str) {
             assert!(
                 self.find_text(expected).is_none(),
                 "unexpected {expected:?}:\n{}",

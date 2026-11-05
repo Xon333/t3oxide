@@ -55,6 +55,26 @@ PTY group, its Apply/acknowledgement and restart/resize cases, and the full-29
 recheck were not run in this lane; installed, physical and visual acceptance
 remain separate.
 
+A retained-state real-App regression now covers 70×22 → 140×38 → 70×22
+with the same SLT `AppState`, an actually resized `Buffer`, activation boundaries
+and production layout observation/action dispatch. Before correction, the first
+settled narrow frame lost follow and painted the transcript head with a downward
+overflow cue. Rebinding the existing controller scroll intent when SLT invalidates
+geometry on resize preserves the visible tail and exact durable reading anchor.
+The regression also checks complete durable-state equality at the close checkpoint,
+intentional wheel scrolling through resize/source return, explicit Latest, and
+manual/following positions after reopening the state file in a fresh App. Unicode
+interior draft/caret, another source's draft, a nonempty original uncertain
+operation, native bytes/mode and the absent host journal remain preserved.
+
+This source passed **261 Rust tests**, workspace/vendor formatting, both Clippy
+checks and `git diff --check`. The new regression has retained failing-command
+source manifests and logs; its final before-fix run also has a complete source
+archive. The strict 195 Python assertions and all runtime inputs are unchanged.
+The retained R5 PTY failure remains unresolved at the binary acceptance boundary:
+this lane ran no release build, product/PTY group, installed, physical or visual
+check. The parent must build the corrected source before the next focused runtime.
+
 The correction pass is still in progress. The second frozen release (R2) is
 `t3oxide 0.11.0 · Rust / SLT`, SHA-256
 `99bbe9f5738c3927cb62e5c677422f13b08eb2b66347139e1086e7215e565e57`,
