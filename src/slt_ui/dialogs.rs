@@ -31,10 +31,19 @@ struct ModelPicker {
     phase: Option<ui::ModelDialog>,
     focus: String,
     expanded: bool,
+    dismiss_tail: DismissalTail,
     values: ListState,
     indices: Vec<usize>,
     displayed_indices: Vec<usize>,
     geometry: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+enum DismissalTail {
+    #[default]
+    None,
+    Input,
+    ActivationSettle,
 }
 
 #[derive(Clone)]
@@ -127,6 +136,7 @@ fn draw_model(
         _ => None,
     };
     if changed {
+        picker.dismiss_tail = DismissalTail::None;
         let returning =
             matches!(picker.phase, Some(ui::ModelDialog::OptionValues { .. })) && option.is_none();
         picker.expanded = option.is_some();
@@ -158,6 +168,7 @@ fn draw_model(
         });
     if !fields.iter().any(|field| field.name == picker.focus)
         && !picker.focus.starts_with("model-action:")
+        && picker.focus != "model-close"
     {
         picker.focus.clone_from(&fields[0].name);
     }
@@ -201,6 +212,18 @@ fn draw_model(
             .anchor(slt::Anchor::BottomRight)
             .offset(2, 1),
         |ctx| {
+            // SLT defers navigation tails; Escape/pointer activation inserts one
+            // empty layout frame first. Retain ownership through that frame,
+            // then let an input-free settle release a later deliberate Enter.
+            if ctx.raw_events().next().is_none() {
+                picker.dismiss_tail = match picker.dismiss_tail {
+                    DismissalTail::ActivationSettle => DismissalTail::Input,
+                    _ => DismissalTail::None,
+                };
+            }
+            if picker.dismiss_tail != DismissalTail::None {
+                ctx.request_frame();
+            }
             if !picker.expanded
                 && let Some(name) = ctx
                     .focused_name()
@@ -244,10 +267,19 @@ fn draw_model(
                     ctx.consume_event(event);
                     continue;
                 }
+                let dismiss_enter =
+                    key.code == KeyCode::Enter && picker.dismiss_tail != DismissalTail::None;
+                picker.dismiss_tail = DismissalTail::None;
+                if dismiss_enter {
+                    ctx.consume_event(event);
+                    continue;
+                }
                 if key.code == KeyCode::Tab || backwards {
                     if picker.expanded && option.is_some() {
                         actions.push(Action::CloseModal);
                         dispatched = true;
+                    } else if picker.expanded {
+                        picker.dismiss_tail = DismissalTail::Input;
                     }
                     picker.expanded = false;
                     let position = order
@@ -282,6 +314,8 @@ fn draw_model(
                             if option.is_some() {
                                 actions.push(Action::CloseModal);
                                 dispatched = true;
+                            } else {
+                                picker.dismiss_tail = DismissalTail::ActivationSettle;
                             }
                             focus_request = Some(picker.focus.clone());
                         }
@@ -423,6 +457,8 @@ fn draw_model(
                         if option.is_some() {
                             actions.push(Action::CloseModal);
                             dispatched = true;
+                        } else {
+                            picker.dismiss_tail = DismissalTail::ActivationSettle;
                         }
                         focus_request = Some(picker.focus.clone());
                         ctx.request_frame();

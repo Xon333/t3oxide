@@ -15,6 +15,19 @@ response so its hit rectangle belongs to the painted field. These are source
 and synthetic fixture results; this candidate has no new release, PTY, installed
 host, physical or visual acceptance evidence.
 
+A fresh independent source review found queued Enter escaping local Model
+dismissal and Space activating Model while × owned focus. Production SLT/App
+regressions at 70×22 failed before correction for Tab, BackTab, Escape and
+outside-pointer dismissal, and for Space on the settled close control. Retained
+dismissal ownership now survives SLT's activation layout frame and expires after
+input-free settling; later deliberate Enter applies once. The close control
+retains its valid focus identity. The corrected source passed **259 Rust tests**,
+workspace/vendor formatting, both Clippy checks, `git diff --check` and the
+Rust/Cargo **1.92.0** all-target/all-feature compile check. The tests preserve
+native bytes before Apply, exact pending/acknowledgement identity, one native
+effect and the Unicode draft/caret. The independent review predates these fixes;
+their subsequent validation was run by the implementer.
+
 The correction pass is still in progress. The second frozen release (R2) is
 `t3oxide 0.11.0 · Rust / SLT`, SHA-256
 `99bbe9f5738c3927cb62e5c677422f13b08eb2b66347139e1086e7215e565e57`,

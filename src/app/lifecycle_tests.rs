@@ -9,6 +9,7 @@ struct Fixture {
     app: App,
     directory: tempfile::TempDir,
     native_states: Vec<PathBuf>,
+    slt_closes: usize,
 }
 
 impl Fixture {
@@ -79,6 +80,7 @@ impl Fixture {
             app: App::new(Args::default(), environments, state).unwrap(),
             directory,
             native_states,
+            slt_closes: 0,
         }
     }
 
@@ -100,6 +102,9 @@ impl Fixture {
         );
         self.app.observe_slt_layout(surface);
         for action in actions {
+            if matches!(action, crate::slt_ui::Action::CloseModal) {
+                self.slt_closes += 1;
+            }
             self.app.surface_action(action, surface).unwrap();
         }
     }
@@ -1942,6 +1947,216 @@ fn slt_model_picker_commits_only_the_reviewed_native_selection() {
             serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
         assert_eq!(native["effects"], 1);
     }
+}
+
+fn model_tail_input(
+    backend: &mut ::slt::TestBackend,
+    fixture: &mut Fixture,
+    surface: &mut crate::slt_ui::SurfaceState,
+    events: Vec<::slt::Event>,
+) -> Option<String> {
+    backend.run_with_events(events, |ctx| fixture.draw_slt(ctx, surface));
+    let mut focus = None;
+    for _ in 0..8 {
+        backend.render(|ctx| {
+            fixture.draw_slt(ctx, surface);
+            focus = ctx.focused_name().map(str::to_owned);
+        });
+    }
+    assert!(!backend.has_pending_input(), "modal input tail drained");
+    focus
+}
+
+fn staged_model_tail_fixture() -> (Fixture, crate::slt_ui::SurfaceState, ::slt::TestBackend) {
+    let mut fixture = Fixture::new(500);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["persistInitialState"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.open(0);
+    fixture.app.composer = ui::editor(
+        "Tail 日本語 café e\u{301} draft\n\n",
+        &fixture.app.theme,
+        "",
+    );
+    fixture.app.flush_draft().unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::Command("model".into()), &mut surface)
+        .unwrap();
+    while fixture.app.model_edit.is_none() {
+        let event = fixture.app.rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    let mut backend = ::slt::TestBackend::new(70, 22)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key(' ')
+            .key_code(::slt::KeyCode::Down)
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+    );
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().selection,
+        json!({"instanceId":"fixture-provider","model":"fixture-fast"})
+    );
+    assert!(fixture.app.state.pending_records().is_empty());
+    (fixture, surface, backend)
+}
+
+fn assert_local_model_dismissal_tail(key: Option<::slt::KeyCode>) {
+    let (mut fixture, mut surface, mut backend) = staged_model_tail_fixture();
+    let draft = fixture.app.text();
+    let caret = fixture.app.composer.cursor();
+    let original = fixture.app.metadata()["modelSelection"].clone();
+    let staged = fixture.app.model_edit.as_ref().unwrap().selection.clone();
+    let native_before = fs::read(&fixture.native_states[0]).unwrap();
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().key(' ').build(),
+    );
+    backend.assert_contains("✓ Fixture fast");
+    let events = if let Some(key) = &key {
+        ::slt::EventBuilder::new()
+            .key_code(key.clone())
+            .key_code(::slt::KeyCode::Enter)
+            .build()
+    } else {
+        let (x, y) = backend.find_text("Apply ↵").expect("painted outside Apply");
+        ::slt::EventBuilder::new()
+            .click(x, y)
+            .key_code(::slt::KeyCode::Enter)
+            .build()
+    };
+    model_tail_input(&mut backend, &mut fixture, &mut surface, events);
+    assert!(
+        fixture.app.state.pending_records().is_empty(),
+        "child dismissal must consume its queued Enter without a native write"
+    );
+    assert_eq!(
+        fixture.app.modal().unwrap().model,
+        Some(ui::ModelDialog::Configuration)
+    );
+    assert_eq!(fixture.app.model_edit.as_ref().unwrap().selection, staged);
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+    // Dismiss again without a queued tail. Its requested idle frames must expire
+    // ownership before a later deliberate Enter, including after pointer release.
+    let (x, y) = backend
+        .find_text("Fixture fast")
+        .expect("painted staged Model");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().click(x, y).build(),
+    );
+    backend.assert_contains("✓ Fixture fast");
+    let events = if let Some(key) = key {
+        ::slt::EventBuilder::new().key_code(key).build()
+    } else {
+        let (x, y) = backend.find_text("Apply ↵").expect("painted outside Apply");
+        ::slt::EventBuilder::new().click(x, y).build()
+    };
+    model_tail_input(&mut backend, &mut fixture, &mut surface, events);
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert_eq!(
+        fixture.app.modal().unwrap().model,
+        Some(ui::ModelDialog::Configuration)
+    );
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+    );
+    let pending = fixture.app.state.pending("native-0", false).unwrap();
+    assert_eq!(pending["op"], "select-model");
+    assert_eq!(pending["threadId"], "thread-a");
+    assert_eq!(pending["modelSelection"], staged);
+    assert_eq!(pending["expectedModelSelection"], original);
+    assert_eq!(fixture.app.state.pending_records().len(), 1);
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event, Background::Mutation { id, op, fields, result: Ok(_), .. }
+        if *id == pending["id"] && op == "select-model"
+            && fields["threadId"] == "thread-a" && fields["modelSelection"] == staged
+            && fields["expectedModelSelection"] == original)
+    );
+    fixture.app.handle(event).unwrap();
+    assert!(fixture.app.state.pending_records().is_empty());
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(native["effects"], 1);
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
+}
+
+#[test]
+fn slt_model_local_tab_dismissal_owns_queued_enter() {
+    assert_local_model_dismissal_tail(Some(::slt::KeyCode::Tab));
+}
+
+#[test]
+fn slt_model_local_backtab_dismissal_owns_queued_enter() {
+    assert_local_model_dismissal_tail(Some(::slt::KeyCode::BackTab));
+}
+
+#[test]
+fn slt_model_local_escape_dismissal_owns_queued_enter() {
+    assert_local_model_dismissal_tail(Some(::slt::KeyCode::Esc));
+}
+
+#[test]
+fn slt_model_local_pointer_dismissal_owns_queued_enter() {
+    assert_local_model_dismissal_tail(None);
+}
+
+#[test]
+fn slt_model_close_focus_survives_settle_and_space_closes_once() {
+    let (mut fixture, mut surface, mut backend) = staged_model_tail_fixture();
+    let draft = fixture.app.text();
+    let caret = fixture.app.composer.cursor();
+    let native_before = fs::read(&fixture.native_states[0]).unwrap();
+    let focus = model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::BackTab)
+            .build(),
+    );
+    assert_eq!(focus.as_deref(), Some("model-close"));
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().key(' ').build(),
+    );
+    assert!(
+        fixture.app.modal().is_none(),
+        "Space on × must close the outer modal"
+    );
+    assert_eq!(fixture.slt_closes, 1);
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), draft);
 }
 
 #[test]
