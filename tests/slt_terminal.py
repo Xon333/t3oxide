@@ -950,6 +950,20 @@ def compact_model_interactions(binary, directory):
             before_restart = snapshot("before-restart")
             assert terminal.close() == 0
             retain("closed")
+            # Normal exit fills this fixture tab's missing display title. Verify
+            # that sole source-qualified change before using the closed state
+            # as the exact restart/no-replay checkpoint.
+            expected_closed = json.loads(json.dumps(before_restart))
+            tabs = expected_closed["state"]["sltUi"]["tabs"]
+            assert tabs == [{"profileId": "fixture", "environmentId": "fixture-env",
+                             "threadId": "thread-a", "title": None}], tabs
+            native_thread = before_restart["native"]["projections"]["thread-a"]["thread"]
+            assert (native_thread["id"], native_thread["title"]) == (
+                "thread-a", "Active implementation"), native_thread
+            tabs[0]["title"] = native_thread["title"]
+            closed = snapshot("closed-checkpoint")
+            assert closed == expected_closed, "normal close may fill only the verified tab title"
+            before_restart = closed
             terminal = None
             child = 1
             terminal = Terminal(binary, paths["config"], paths["state"],

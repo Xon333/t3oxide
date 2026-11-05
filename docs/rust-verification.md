@@ -35,9 +35,10 @@ to the composer without moving its actual rendered caret; typed `<caret>` lands
 at the original interior position and removal restores the exact Unicode draft.
 The original uncertain operation, other-source draft and native bytes remain
 unchanged. The Python harness now makes that explicit keyboard return only
-before its post-close, outer-Escape and applied caret probes. All 192 current
+before its post-close, outer-Escape and applied caret probes. All 192 pre-existing
 assertions (including the 152 in the 18 unchanged functions), generic helpers
-and the pending-context gate are preserved. The source passed **260 Rust tests**,
+and the pending-context gate are preserved; three close-checkpoint assertions
+bring the current total to 195. The source passed **260 Rust tests**,
 workspace/vendor formatting and both Clippy checks. No new minimum-version APIs
 were introduced; the prior 1.92.0 compile evidence is reused, not rerun.
 
