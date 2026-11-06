@@ -598,22 +598,24 @@ The R8 pointer-tab real-App regression reproduces a blocked Ctrl+Enter Send befo
 
 R9 adds five real-App SLT regressions with activation boundaries. The baseline reproduces the retained 40×12 form hiding its review action and a nonempty Unicode composer leaving no transcript body. The correction keeps Open form and Open in A visible with context off/on, preserves exact request/source, draft and interior caret, independent pending operations, native bytes/modes and an acknowledged host journal, and rejects changed, unavailable, submitting, uncertain and acknowledged offers. Compact transcript decoration yields to body rows; context geometry settles before scroll feedback. The complete graph focus route and measured-divider drag pass as positive conservation checks: arrows select without activating, Tab away/back retains graph paint, Enter selects the original Empty project identity among duplicate Atlas labels, and the default 30-cell/manual 42-cell widths survive resize. These are source-fixture results; new-binary, native, full terminal, visual and integrated acceptance remain pending. R7 native Enter-pair ordering remains OPEN/INCONCLUSIVE.
 
-The 2026-11-06 keyboard correction passed **274 Rust tests** (259 library and
-15 integration), workspace/vendor formatting, both Clippy checks, the locked
-Rust/Cargo **1.92.0** all-target/all-feature compile check and `git diff --check`.
-The final real-App regression fails on unchanged production after actual finite
-Tab traversal confirms transcript focus: Up leaves accepted offset 37 unchanged
-at 40×12. The correction uses the existing scroll state for focused Up/Down and
-PageUp/PageDown, retaining manual intent even at the tail until explicit Latest.
-At 40×12 and 70×22 with context off/on, the regression checks accepted offsets
-and rendered body movement, resize/context/source return, stale-source input,
-non-transcript ownership, exact Unicode draft/interior caret, independent original
-pending and pendingStops, native bytes/modes and an acknowledged journal.
-Reflow may clamp a row offset; source identity and manual intent survive, and
-source return restores the accepted position. Failing runs and their actual
-source archives remain retained, including a zero-test filter mistake, a compile
-error and the corrected reflow-checkpoint setup. The 263/273-test checkpoints
-and immutable R9 full29 remain baseline evidence; runtime inputs and strict 195
-assertions are unchanged. No binary was rebuilt or run in this source lane.
-New-binary, targeted runtime, native, graph and visual acceptance remain pending;
-the historical native Enter pair remains OPEN/INCONCLUSIVE.
+The 2026-11-06 keyboard and divider corrections passed **275 Rust tests**
+(260 library and 15 integration), workspace/vendor formatting, both Clippy
+checks, the locked Rust/Cargo **1.92.0** all-target/all-feature compile check and
+`git diff --check`. The retained keyboard regression covers focused scrolling,
+source/geometry rebinding, manual/follow intent and context changes. The new
+real-App divider regression fails on unchanged production: the requested
+42-cell navigator is allocated only 41 visible cells, losing its right border
+and starting the main pane one cell early. Rounding the native split's grow
+weight upward preserves the complete navigator, one-cell divider and right-pane
+border; paint rounding is excluded from keyboard preference deltas. Default 30
+and manual 42 survive the 140→86→70→40→140 resize cycle; actual Tab traversal
+checks divider arrows at 140 and 129 columns, and resize cancels a captured drag.
+The regression preserves exact Unicode drafts/interior carets, manual/follow
+intent, nonempty independent pending and pendingStops, the complete durable
+state, native bytes/modes and acknowledged host journals. Prior tests remain
+unchanged; contemporaneous fail-first archives and logs are retained. The
+274-test checkpoint and immutable R9 full29 are baseline evidence; runtime
+inputs and strict 195 assertions are unchanged. No binary was rebuilt or run
+in this source lane. New-binary, targeted runtime, native, graph and visual
+acceptance remain pending; the historical native Enter pair remains
+OPEN/INCONCLUSIVE. Optimization remains separate and held.

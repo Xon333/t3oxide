@@ -946,7 +946,13 @@ fn draw_conversations(
             .unwrap_or(30)
             .clamp(min_sidebar, max_sidebar);
         split.min_ratio = f64::from(min_sidebar) / f64::from(available);
-        split.set_ratio(f64::from(nav_width) / f64::from(available));
+        // SLT quantizes split ratios to 1000 grow weights, then floors the
+        // first pane's cell share. Round the weight up so its fixed-width
+        // navigator is not clipped by a one-cell-smaller allocation.
+        const SPLIT_GROW_SCALE: f64 = 1000.0;
+        let ratio = (f64::from(nav_width) * SPLIT_GROW_SCALE / f64::from(available)).ceil()
+            / SPLIT_GROW_SCALE;
+        split.set_ratio(ratio);
         let main_width = width.saturating_sub(nav_width + 1);
         let colors: Vec<_> = view
             .rows
@@ -1017,7 +1023,10 @@ fn draw_conversations(
                 },
             );
             if response.changed {
-                let width = (f64::from(available) * response.ratio).round() as u32;
+                // The grow-weight rounding is paint-only; keyboard deltas keep
+                // their original cell rounding and never enter the preference.
+                let width = (f64::from(nav_width) + f64::from(available) * (response.ratio - ratio))
+                    .round() as u32;
                 state.sidebar_width = Some(width.clamp(min_sidebar, max_sidebar));
                 ctx.request_frame();
             }
@@ -1726,6 +1735,9 @@ pub(crate) mod tests {
             (0..self.cells.0.area.width)
                 .map(|x| self.cells.0.get(x, y).symbol.as_str())
                 .collect()
+        }
+        pub(crate) fn symbol(&self, x: u32, y: u32) -> &str {
+            self.cells.0.get(x, y).symbol.as_str()
         }
         pub(crate) fn text(&self) -> String {
             (0..self.cells.0.area.height)

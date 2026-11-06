@@ -6657,3 +6657,323 @@ fn focused_transcript_keyboard_scroll_preserves_source_draft_and_recovery() {
         }
     }
 }
+
+fn r9_divider_geometry(
+    backend: &mut crate::slt_ui::tests::ResizableBackend,
+    fixture: &mut Fixture,
+    surface: &mut crate::slt_ui::SurfaceState,
+    expected: u32,
+) -> ::slt::Rect {
+    let (mut nav, mut visible, mut main) = (None, None, None);
+    backend.render(|ctx| {
+        fixture.draw_slt(ctx, surface);
+        nav = ctx.measured_layout_rect("t3oxide.navigator");
+        visible = ctx.measured_rect("t3oxide.navigator");
+        main = ctx.measured_layout_rect("t3oxide.conversation");
+    });
+    let rect = nav.expect("measured navigator");
+    let main = main.expect("measured right pane");
+    eprintln!(
+        "navigator={rect:?}, visible={visible:?}, right-pane={main:?}, expected={expected}\n{}",
+        backend.text()
+    );
+    assert_eq!(rect.width, expected);
+    assert_eq!(
+        visible,
+        Some(rect),
+        "allocated navigator must contain its entire border box"
+    );
+    assert_eq!(
+        backend.symbol(rect.right() - 1, rect.y),
+        "╮",
+        "complete Browse top border"
+    );
+    assert_eq!(backend.symbol(rect.right() - 1, rect.bottom() - 1), "╯");
+    for y in rect.y + 1..rect.bottom() - 1 {
+        assert_eq!(
+            backend.symbol(rect.right() - 1, y),
+            "│",
+            "Browse right edge at y={y}"
+        );
+    }
+    for y in rect.y..rect.bottom() {
+        assert_eq!(backend.symbol(rect.right(), y), "│", "divider at y={y}");
+    }
+    assert_eq!(
+        main.x,
+        rect.right() + 1,
+        "right pane follows the one-cell divider"
+    );
+    assert_eq!(main.y, rect.y);
+    assert_eq!(main.height, rect.height);
+    for y in rect.y + 1..rect.bottom() {
+        assert!(
+            matches!(backend.symbol(main.right() - 1, y), "│" | "╮" | "╯"),
+            "complete right-pane border at y={y}"
+        );
+    }
+    backend.assert_contains("Browse");
+    backend.assert_contains("Earlier");
+    backend.assert_contains("Latest");
+    backend.assert_contains("Model");
+    backend.assert_contains("Send");
+    rect
+}
+
+#[test]
+fn r9_manual_divider_paints_exact_cells_and_conserves_recovery() {
+    for follow in [true, false] {
+        let mut fixture = Fixture::new(0);
+        for environment in &fixture.app.environments {
+            let mut config: Value =
+                serde_json::from_slice(&fs::read(&environment.host_config).unwrap()).unwrap();
+            config["fixture"]["persistInitialState"] = json!(true);
+            fs::write(&environment.host_config, config.to_string()).unwrap();
+        }
+        fixture.open(1);
+        fixture.app.replace_text("Retained journal intent".into());
+        fixture.app.command("send").unwrap();
+        let event = fixture.next_mutation();
+        fixture.app.handle(event).unwrap();
+        fixture.load_pages();
+        fixture.open(0);
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        if !follow {
+            let (x, y) = backend.find_text("Earlier").unwrap();
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().click(x, y).build(),
+            );
+        }
+        transcript_tab_to(&mut backend, &mut fixture, &mut surface, "composer", false);
+        let draft = "日本語 café e\u{301} 👩\u{200d}💻 retained draft  \nsecond interior line  ";
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .paste(draft)
+                .key_code(::slt::KeyCode::Left)
+                .key_code(::slt::KeyCode::Left)
+                .build(),
+        );
+        fixture.app.flush_draft().unwrap();
+        let caret = fixture.app.composer.cursor();
+        fixture
+            .app
+            .state
+            .set_draft("native-0", "thread-review", "Other source 日本語 draft  \n")
+            .unwrap();
+        for (stop, operation) in [(false, "send"), (true, "stop")] {
+            fixture
+                .app
+                .state
+                .save_pending(
+                    "native-1",
+                    stop,
+                    json!({
+                        "id":format!("original-uncertain-{operation}"), "environmentId":"native-1",
+                        "threadId":"thread-a", "op":operation, "message":"Exact independent intent"
+                    }),
+                )
+                .unwrap();
+        }
+        let recovery = fixture.app.state.snapshot();
+        let durable = fs::read(fixture.directory.path().join("rust-state.json")).unwrap();
+        let native = fixture
+            .native_states
+            .iter()
+            .map(|p| {
+                (
+                    fs::read(p).unwrap(),
+                    fs::metadata(p).unwrap().permissions().mode(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let journals = (0..2)
+            .map(|index| {
+                let root = fixture
+                    .directory
+                    .path()
+                    .join(format!("host-{index}/operations-v1"));
+                let files = root.exists().then(|| r9_files(&root));
+                (root, files)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            journals[1]
+                .1
+                .as_ref()
+                .is_some_and(|files| !files.is_empty())
+        );
+        let source = fixture.app.source(0, "thread-a");
+        for preferred in [30, 42] {
+            if preferred == 42 {
+                let rect = r9_divider_geometry(&mut backend, &mut fixture, &mut surface, 30);
+                for events in [
+                    ::slt::EventBuilder::new()
+                        .click(rect.right(), rect.y + 5)
+                        .build(),
+                    ::slt::EventBuilder::new()
+                        .drag(rect.x + 42, rect.y + 5)
+                        .build(),
+                    ::slt::EventBuilder::new()
+                        .mouse_up(rect.x + 42, rect.y + 5)
+                        .build(),
+                ] {
+                    r9_input(&mut backend, &mut fixture, &mut surface, events);
+                }
+            }
+            for width in [140, 86, 70, 40, 140] {
+                r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new().resize(width, 38).build(),
+                );
+                if width >= 86 {
+                    let rect =
+                        r9_divider_geometry(&mut backend, &mut fixture, &mut surface, preferred);
+                    assert_eq!(rect.x, 0);
+                    let mut main = None;
+                    backend.render(|ctx| {
+                        fixture.draw_slt(ctx, &mut surface);
+                        main = ctx.measured_layout_rect("t3oxide.conversation");
+                    });
+                    assert_eq!(
+                        main.unwrap().right(),
+                        width,
+                        "right pane reaches terminal edge"
+                    );
+                }
+                assert_eq!(
+                    fixture.app.follow, follow,
+                    "reading intent at width {width}"
+                );
+                assert_eq!(fixture.app.text(), draft);
+                assert_eq!(fixture.app.composer.cursor(), caret);
+                assert_eq!(fixture.app.source(0, "thread-a"), source);
+                assert_eq!(
+                    fixture.app.state.snapshot(),
+                    recovery,
+                    "exact durable state at width {width}"
+                );
+                assert_eq!(
+                    fs::read(fixture.directory.path().join("rust-state.json")).unwrap(),
+                    durable
+                );
+            }
+        }
+        // Reach the actual SLT handle through finite Tab traversal, without
+        // assigning focus or duplicating its event classifier.
+        let rect = r9_divider_geometry(&mut backend, &mut fixture, &mut surface, 42);
+        let mut focused = None;
+        for _ in 0..30 {
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Tab)
+                    .build(),
+            );
+            backend.render(|ctx| {
+                fixture.draw_slt(ctx, &mut surface);
+                focused = ctx.focused_layout_rect();
+            });
+            if focused
+                .is_some_and(|r| r.x == rect.right() && r.width == 1 && r.height == rect.height)
+            {
+                break;
+            }
+        }
+        assert!(
+            focused.is_some_and(|r| r.x == rect.right() && r.width == 1 && r.height == rect.height),
+            "finite Tab traversal reaches real handle: {focused:?}"
+        );
+        for (key, width) in [(::slt::KeyCode::Right, 49), (::slt::KeyCode::Left, 42)] {
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().key_code(key).build(),
+            );
+            r9_divider_geometry(&mut backend, &mut fixture, &mut surface, width);
+        }
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().resize(129, 38).build(),
+        );
+        r9_divider_geometry(&mut backend, &mut fixture, &mut surface, 42);
+        for (key, width) in [(::slt::KeyCode::Right, 48), (::slt::KeyCode::Left, 42)] {
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().key_code(key).build(),
+            );
+            r9_divider_geometry(&mut backend, &mut fixture, &mut surface, width);
+        }
+        // Resize invalidates a captured native drag; a later drag event must
+        // not overwrite the retained manual preference using stale geometry.
+        let rect = r9_divider_geometry(&mut backend, &mut fixture, &mut surface, 42);
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .click(rect.right(), rect.y + 5)
+                .build(),
+        );
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().resize(86, 38).build(),
+        );
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .drag(60, rect.y + 5)
+                .mouse_up(60, rect.y + 5)
+                .build(),
+        );
+        r9_divider_geometry(&mut backend, &mut fixture, &mut surface, 42);
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().resize(140, 38).build(),
+        );
+        r9_divider_geometry(&mut backend, &mut fixture, &mut surface, 42);
+        assert_eq!(fixture.app.follow, follow);
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.state.snapshot(), recovery);
+        assert_eq!(
+            fs::read(fixture.directory.path().join("rust-state.json")).unwrap(),
+            durable
+        );
+        for (path, original) in fixture.native_states.iter().zip(native) {
+            assert_eq!(
+                (
+                    fs::read(path).unwrap(),
+                    fs::metadata(path).unwrap().permissions().mode()
+                ),
+                original
+            );
+        }
+        for (root, files) in journals {
+            assert_eq!(root.exists().then(|| r9_files(&root)), files);
+        }
+    }
+}
