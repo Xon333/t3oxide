@@ -6304,3 +6304,356 @@ fn r9_compact_retained_form_fails_closed_after_source_or_delivery_changes() {
         );
     }
 }
+
+fn transcript_tab_to(
+    backend: &mut crate::slt_ui::tests::ResizableBackend,
+    fixture: &mut Fixture,
+    surface: &mut crate::slt_ui::SurfaceState,
+    target: &str,
+    reverse: bool,
+) {
+    let mut owners = Vec::new();
+    for _ in 0..40 {
+        let owner = r9_input(
+            backend,
+            fixture,
+            surface,
+            ::slt::EventBuilder::new()
+                .key_code(if reverse {
+                    ::slt::KeyCode::BackTab
+                } else {
+                    ::slt::KeyCode::Tab
+                })
+                .build(),
+        );
+        owners.push(owner.clone());
+        if owner.as_deref() == Some(target) {
+            return;
+        }
+    }
+    panic!("Tab traversal did not reach {target}: {owners:?}");
+}
+
+fn transcript_body(
+    backend: &mut crate::slt_ui::tests::ResizableBackend,
+    fixture: &mut Fixture,
+    surface: &mut crate::slt_ui::SurfaceState,
+) -> String {
+    let mut rect = None;
+    backend.render(|ctx| {
+        fixture.draw_slt(ctx, surface);
+        rect = ctx.measured_layout_rect(&format!("t3oxide.transcript:{}", surface.active_key));
+    });
+    let rect = rect.expect("accepted transcript geometry");
+    backend
+        .text()
+        .lines()
+        .skip(rect.y as usize)
+        .take(rect.height as usize)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn focused_transcript_keyboard_scroll_preserves_source_draft_and_recovery() {
+    const BODY: &str = concat!(
+        "## Research\n\n### Release evidence\n",
+        "- Source revision is retained.\n- The next decision has two explicit options.\n\n",
+        "| Check | Result |\n|---|---|\n| Draft recovery | Preserved |\n",
+        "| Delivery | Requires acknowledgement |\n\n```mermaid\nflowchart TD\n",
+        "  Review[Review source] --> Submit[Submit answer]\n",
+        "  Submit --> Ack[Native acknowledgement]\n```\n\n",
+        "### Remaining\nVerify the physical terminal input path."
+    );
+    for (width, height) in [(40, 12), (70, 22)] {
+        for context in [false, true] {
+            let mut fixture = Fixture::new(0);
+            for environment in &fixture.app.environments {
+                let mut config: Value =
+                    serde_json::from_slice(&fs::read(&environment.host_config).unwrap()).unwrap();
+                config["fixture"]["persistInitialState"] = json!(true);
+                fs::write(&environment.host_config, config.to_string()).unwrap();
+            }
+            fixture.open(1);
+            fixture.app.replace_text("Retained journal intent".into());
+            fixture.app.command("send").unwrap();
+            let event = fixture.next_mutation();
+            fixture.app.handle(event).unwrap();
+            fixture.load_pages();
+            fixture.open(0);
+            // Reattachment must read the same original body as the first frame.
+            let mut native_state: Value =
+                serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+            native_state["projections"]["thread-a"]["visibleTurnItems"][1]["item"]["text"] =
+                json!(BODY);
+            native_state["projections"]["thread-a"]["turnItems"][1]["text"] = json!(BODY);
+            fs::write(&fixture.native_states[0], native_state.to_string()).unwrap();
+            fixture.open_thread(0, "thread-review");
+            fixture.open(0);
+            let mut surface = crate::slt_ui::SurfaceState::new();
+            let mut backend =
+                crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            let draft =
+                "日本語 café e\u{301} 👩\u{200d}💻 retained draft  \nsecond interior line  ";
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .paste(draft)
+                    .key_code(::slt::KeyCode::Left)
+                    .key_code(::slt::KeyCode::Left)
+                    .build(),
+            );
+            fixture.app.flush_draft().unwrap();
+            let caret = fixture.app.composer.cursor();
+            fixture
+                .app
+                .state
+                .set_draft("native-0", "thread-review", "Independent 日本語 draft  \n")
+                .unwrap();
+            for (stop, operation) in [(false, "send"), (true, "stop")] {
+                fixture.app.state.save_pending("native-1", stop, json!({
+                    "id":format!("original-uncertain-{operation}"), "environmentId":"native-1",
+                    "threadId":"thread-a", "op":operation, "message":"Exact independent intent"
+                })).unwrap();
+            }
+            let recovery = fixture.app.state.snapshot();
+            let native = fixture
+                .native_states
+                .iter()
+                .map(|p| {
+                    (
+                        fs::read(p).unwrap(),
+                        fs::metadata(p).unwrap().permissions().mode(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let journals = (0..2)
+                .map(|index| {
+                    let root = fixture
+                        .directory
+                        .path()
+                        .join(format!("host-{index}/operations-v1"));
+                    let files = root.exists().then(|| r9_files(&root));
+                    (root, files)
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                journals[1]
+                    .1
+                    .as_ref()
+                    .is_some_and(|files| !files.is_empty())
+            );
+            let source = fixture.app.source(0, "thread-a");
+            surface.show_context = context;
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new().resize(width, height).build(),
+            );
+            transcript_tab_to(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                "transcript",
+                false,
+            );
+            let owner = r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            assert_eq!(owner.as_deref(), Some("transcript"));
+            let tail = surface.transcript_layout.as_ref().unwrap().top;
+            assert!(tail > 2, "overflow at {width}x{height}, context={context}");
+            let before = transcript_body(&mut backend, &mut fixture, &mut surface);
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Up)
+                    .build(),
+            );
+            assert_eq!(
+                fixture.app.transcript_scroll,
+                tail - 1,
+                "focused Up must move accepted layout at {width}x{height}, context={context}:\n{}",
+                backend.text()
+            );
+            assert!(!fixture.app.follow, "keyboard reading leaves follow");
+            assert_ne!(
+                transcript_body(&mut backend, &mut fixture, &mut surface),
+                before,
+                "Up must move actual transcript body rows"
+            );
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Down)
+                    .build(),
+            );
+            assert_eq!(fixture.app.transcript_scroll, tail);
+            assert!(
+                !fixture.app.follow,
+                "manual Down to the tail retains manual intent"
+            );
+            let page = surface.transcript_layout.as_ref().unwrap().visible.max(1);
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::PageUp)
+                    .build(),
+            );
+            assert_eq!(fixture.app.transcript_scroll, tail.saturating_sub(page));
+            assert_ne!(
+                transcript_body(&mut backend, &mut fixture, &mut surface),
+                before
+            );
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::PageDown)
+                    .build(),
+            );
+            assert_eq!(fixture.app.transcript_scroll, tail);
+            assert!(!fixture.app.follow);
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::PageUp)
+                    .build(),
+            );
+            fixture.app.save_ui().unwrap();
+            let identity = json!(["profile-0", "native-0", "thread-a"]).to_string();
+            let manual_before_resize =
+                fixture.app.state.snapshot()["rustReadingPositions"][&identity].clone();
+            for (w, h) in [(140, 38), (width, height)] {
+                r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new().resize(w, h).build(),
+                );
+                assert!(
+                    !fixture.app.follow,
+                    "resize preserves manual reading intent"
+                );
+            }
+            surface.show_context = !context;
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            surface.show_context = context;
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            assert!(!fixture.app.follow);
+            fixture.app.save_ui().unwrap();
+            let manual = fixture.app.state.snapshot()["rustReadingPositions"][&identity].clone();
+            // Reflow can clamp a row offset; source identity and manual intent
+            // survive, and returning must restore this accepted position.
+            for key in ["rowKey", "digest", "follow"] {
+                assert_eq!(manual[key], manual_before_resize[key]);
+            }
+            fixture.open_thread(0, "thread-review");
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::PageUp)
+                    .build(),
+            );
+            assert!(
+                fixture.app.follow,
+                "old transcript input cannot scroll the new source"
+            );
+            fixture.open(0);
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            assert!(!fixture.app.follow, "source return retains manual intent");
+            fixture.app.save_ui().unwrap();
+            assert_eq!(
+                fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+                manual
+            );
+            transcript_tab_to(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                "transcript-tools",
+                true,
+            );
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Home)
+                    .key_code(::slt::KeyCode::Right)
+                    .key_code(::slt::KeyCode::Enter)
+                    .build(),
+            );
+            assert!(fixture.app.follow, "explicit Latest resumes follow");
+            assert_eq!(
+                fixture.app.transcript_scroll,
+                surface.transcript_layout.as_ref().unwrap().max
+            );
+            let tail = fixture.app.transcript_scroll;
+            let owner = r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Up)
+                    .key_code(::slt::KeyCode::PageUp)
+                    .key_code(::slt::KeyCode::Down)
+                    .key_code(::slt::KeyCode::PageDown)
+                    .build(),
+            );
+            assert_eq!(owner.as_deref(), Some("transcript-tools"));
+            assert_eq!(
+                fixture.app.transcript_scroll, tail,
+                "tools do not own transcript scrolling"
+            );
+            assert!(fixture.app.follow);
+            assert_eq!(
+                fixture
+                    .app
+                    .active
+                    .as_ref()
+                    .unwrap()
+                    .projection
+                    .snapshot()
+                    .unwrap()
+                    .as_wire_value()["items"][1]["text"],
+                BODY
+            );
+            assert_eq!(fixture.app.text(), draft);
+            assert_eq!(fixture.app.composer.cursor(), caret);
+            assert_eq!(fixture.app.source(0, "thread-a"), source);
+            assert!(fixture.app.dialog.is_none());
+            assert!(fixture.app.request_edit.is_none());
+            assert!(!surface.attention_mode);
+            let after = fixture.app.state.snapshot();
+            for key in ["drafts", "pending", "pendingStops"] {
+                assert_eq!(after[key], recovery[key], "preserve exact {key}");
+            }
+            for (path, original) in fixture.native_states.iter().zip(native) {
+                assert_eq!(
+                    (
+                        fs::read(path).unwrap(),
+                        fs::metadata(path).unwrap().permissions().mode()
+                    ),
+                    original
+                );
+            }
+            for (root, files) in journals {
+                assert_eq!(root.exists().then(|| r9_files(&root)), files);
+            }
+        }
+    }
+}

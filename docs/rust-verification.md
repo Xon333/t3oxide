@@ -597,3 +597,23 @@ Installed authentication, actual SSH routes, provider execution and native termi
 The R8 pointer-tab real-App regression reproduces a blocked Ctrl+Enter Send before the correction and passes after it: pointer activation restores composer focus, while keyboard arrows retain the conversation-tab composite. The fixture verifies the original source, complete Unicode draft and interior caret before Send, one pending operation and matching acknowledgement/native effect with the exact original text, and preservation of the other draft, independent uncertain recovery and existing host journal. The retained keyboard and A/B tab-cycle regression also passes. This is source-fixture evidence only; a fresh binary, full29, native, graph and visual acceptance remain pending. R7 native Enter-pair ordering remains qualified OPEN without an established causal source defect.
 
 R9 adds five real-App SLT regressions with activation boundaries. The baseline reproduces the retained 40×12 form hiding its review action and a nonempty Unicode composer leaving no transcript body. The correction keeps Open form and Open in A visible with context off/on, preserves exact request/source, draft and interior caret, independent pending operations, native bytes/modes and an acknowledged host journal, and rejects changed, unavailable, submitting, uncertain and acknowledged offers. Compact transcript decoration yields to body rows; context geometry settles before scroll feedback. The complete graph focus route and measured-divider drag pass as positive conservation checks: arrows select without activating, Tab away/back retains graph paint, Enter selects the original Empty project identity among duplicate Atlas labels, and the default 30-cell/manual 42-cell widths survive resize. These are source-fixture results; new-binary, native, full terminal, visual and integrated acceptance remain pending. R7 native Enter-pair ordering remains OPEN/INCONCLUSIVE.
+
+The 2026-11-06 keyboard correction passed **274 Rust tests** (259 library and
+15 integration), workspace/vendor formatting, both Clippy checks, the locked
+Rust/Cargo **1.92.0** all-target/all-feature compile check and `git diff --check`.
+The final real-App regression fails on unchanged production after actual finite
+Tab traversal confirms transcript focus: Up leaves accepted offset 37 unchanged
+at 40×12. The correction uses the existing scroll state for focused Up/Down and
+PageUp/PageDown, retaining manual intent even at the tail until explicit Latest.
+At 40×12 and 70×22 with context off/on, the regression checks accepted offsets
+and rendered body movement, resize/context/source return, stale-source input,
+non-transcript ownership, exact Unicode draft/interior caret, independent original
+pending and pendingStops, native bytes/modes and an acknowledged journal.
+Reflow may clamp a row offset; source identity and manual intent survive, and
+source return restores the accepted position. Failing runs and their actual
+source archives remain retained, including a zero-test filter mistake, a compile
+error and the corrected reflow-checkpoint setup. The 263/273-test checkpoints
+and immutable R9 full29 remain baseline evidence; runtime inputs and strict 195
+assertions are unchanged. No binary was rebuilt or run in this source lane.
+New-binary, targeted runtime, native, graph and visual acceptance remain pending;
+the historical native Enter pair remains OPEN/INCONCLUSIVE.

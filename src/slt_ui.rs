@@ -1182,6 +1182,7 @@ fn draw_transcript(
             Some(offset.saturating_add((*inner).min(height.saturating_sub(1))))
         });
     let mut jumped = false;
+    let mut keyboard_scrolled = false;
     let before_binding = state.transcript.offset;
     state.transcript.follow_focus = false;
     state.transcript.stick_to_bottom = view.follow && state.transcript_jump.is_none();
@@ -1189,7 +1190,36 @@ fn draw_transcript(
         .w(width)
         .h(height.saturating_sub(1))
         .col(|ctx| {
-            ctx.register_focusable_named("transcript");
+            let focused = ctx.register_focusable_named("transcript");
+            // A source/geometry rebind has no accepted bounds yet. Its old
+            // focus slot must not deliver scrolling to the replacement view.
+            let keys: Vec<_> = ctx
+                .key_presses_when(focused && state.controller_scroll.is_some())
+                .filter(|(_, key)| {
+                    key.modifiers == KeyModifiers::NONE
+                        && matches!(
+                            key.code,
+                            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+                        )
+                })
+                .map(|(index, key)| (index, key.code.clone()))
+                .collect();
+            for (index, code) in keys {
+                state.transcript.offset =
+                    state.transcript.offset.min(state.transcript.max_offset());
+                let page = (state.transcript.viewport_height() as usize).max(1);
+                match code {
+                    KeyCode::Up => state.transcript.scroll_up(1),
+                    KeyCode::Down => state.transcript.scroll_down(1),
+                    KeyCode::PageUp => state.transcript.scroll_up(page),
+                    KeyCode::PageDown => state.transcript.scroll_down(page),
+                    _ => unreachable!("filtered transcript navigation key"),
+                }
+                keyboard_scrolled = true;
+                state.transcript.stick_to_bottom = false;
+                ctx.consume_event(index);
+                ctx.request_frame();
+            }
             let mut viewport = ctx.scrollable(&mut state.transcript);
             // Bind first so SLT can accept deferred adjustments and fresh bounds.
             // Then the explicit, source-qualified jump overrides that accepted offset.
@@ -1242,7 +1272,8 @@ fn draw_transcript(
     {
         let top = state.transcript.offset;
         let max = state.transcript.max_offset();
-        let follow = !jumped
+        let follow = !keyboard_scrolled
+            && !jumped
             && state.transcript_jump.is_none()
             && top == max
             && (view.follow || top > before_binding);
