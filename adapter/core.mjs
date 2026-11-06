@@ -1,6 +1,58 @@
 // Narrow T3 control/view adaptation. Upstream provenance and MIT notice: ../NOTICE.
 import { createHash } from 'node:crypto';
 
+// Native status is execution evidence; a retained run/provider identity alone is not.
+const ACTIVE = new Set(['preparing','queued','starting','running','waiting']);
+const EXECUTING = new Set(['preparing','starting','running']);
+const KNOWN = new Set([...ACTIVE,'idle','completed','failed','cancelled','interrupted','rolled_back']);
+
+// Native commands/monitors may be persistent servers. Only an explicit wait
+// or a native subagent/background task holds the owner's completion.
+function backgroundHolds(tasks) {
+  return Array.isArray(tasks) && tasks.some(task => task?.awaited === true ||
+    ['subagent','background_task'].includes(task?.kind));
+}
+
+// The bounded projection carries native provider rosters and active work rows.
+// Apply the native settled-run gate; persistent commands alone never hold it.
+function projectionBackgroundHolds(p) {
+  const last = p.runs.at(-1);
+  const watched = (p.thread.pullRequests ?? []).some(link => link.watch !== undefined && link.source !== 'stack-dismissed');
+  if (!last) return watched;
+  if (!['completed','interrupted','cancelled','waiting'].includes(last.status)) return false;
+  const providers = (p.providerThreads ?? []).filter(thread =>
+    p.thread.activeProviderThreadId == null || thread.id === p.thread.activeProviderThreadId);
+  if (providers.some(thread => backgroundHolds(thread.pendingBackgroundTasks))) return true;
+  if (watched) return true;
+  const rolledBack = new Set(p.runs.filter(run => run.status === 'rolled_back').map(run => run.id));
+  return (p.turnItems ?? []).some(item => ['pending','running','waiting'].includes(item.status) &&
+    !rolledBack.has(item.runId) && (item.type === 'subagent' ||
+      item.type === 'dynamic_tool' && item.input?.persistent !== true));
+}
+
+export function shellRuntime(t, childRequest = false) {
+  const nativeStatus = t.activityRunStatus ?? t.status ?? 'unknown';
+  const failed = t.status === 'failed' || nativeStatus === 'failed';
+  const backgroundHolding = !failed && backgroundHolds(t.pendingBackgroundTasks);
+  const request = t.pendingRuntimeRequest;
+  const requestAttention = Boolean(request && request.kind !== 'auth_refresh' &&
+    (request.kind !== 'user_input' || request.blocking !== false || backgroundHolding || !EXECUTING.has(nativeStatus)));
+  const settledRun = t.latestRunId && !ACTIVE.has(t.status) && t.activeRunId !== t.latestRunId;
+  const pendingReview = t.interactionMode === 'plan' && t.hasActionableProposedPlan === true && Boolean(settledRun);
+  const attention = failed || requestAttention || childRequest || pendingReview;
+  const identity = Boolean(t.activeRunId || t.latestRunId || t.activeProviderThreadId);
+  const workingKnown = backgroundHolding || KNOWN.has(nativeStatus) && (!ACTIVE.has(nativeStatus) || identity);
+  const working = !attention && workingKnown && (backgroundHolding || ACTIVE.has(nativeStatus));
+  return {working, workingKnown, attention, backgroundHolding, pendingReview,
+    status:failed ? 'failed' : backgroundHolding ? 'waiting' : ACTIVE.has(nativeStatus) && !identity ? 'unreported' : nativeStatus};
+}
+
+export function childRunLive(t) {
+  return t.activityRunStatus === undefined
+    ? EXECUTING.has(t.status) || t.status === 'waiting'
+    : EXECUTING.has(t.activityRunStatus) || t.activityRunStatus === 'waiting';
+}
+
 // T3-owned navigation intent is independent of native shelf disposition.
 export const NAVIGATION_PIN_TAG = 't3oxide:navigation-pin';
 export const navigationPinned = t => Array.isArray(t.tags) && t.tags.includes(NAVIGATION_PIN_TAG);
@@ -153,6 +205,8 @@ export function requests(p) {
 // correlated provider activity without inventing a run ID or Stop capability.
 export function activity(p) {
   const active = [...p.runs].reverse().find(r => ['preparing', 'starting', 'running', 'waiting'].includes(r.status));
+  if (active && active.status !== 'waiting') return { status: active.status, activeRunId: active.id, source: 'app-run' };
+  if (projectionBackgroundHolds(p)) return {status:'waiting',activeRunId:active?.id ?? null,source:'background-work',backgroundHolding:true};
   if (active) return { status: active.status, activeRunId: active.id, source: 'app-run' };
   const last = p.runs.at(-1);
   const nativeChild = p.thread.lineage?.relationshipToParent === 'subagent';
@@ -184,6 +238,7 @@ export function view(snapshot, expected) {
     projectId: p.thread.projectId, ...(workspace === null ? {} : { workspace }),
     model: clip(p.thread.modelSelection?.model ?? '',256).text,
     mode: p.thread.runtimeMode, status: currentActivity.status,
+    backgroundHolding: currentActivity.backgroundHolding === true,
     activeRunId: currentActivity.activeRunId, requests: pending,
     ...page,
     limited: page.limited || snapshot.payloadBudgetExceeded === true || p.runtimeRequests.filter(r => r.status === 'pending').length > 8,

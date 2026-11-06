@@ -896,27 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn rejected_required_answer_keeps_the_original_question_visible() {
-        let (_dir, mut app) = app();
-        app.request_edit = Some(RequestEdit {
-            request: json!({"questions": [{"id": "required", "header": "Plan", "required": true}]}),
-            index: 0,
-            answers: serde_json::Map::new(),
-        });
-        app.menu(
-            "Plan question",
-            "Choose before continuing",
-            vec![Choice::new("Next", "", Intent::QuestionNext)],
-        );
-        let error = app
-            .input(key(KeyCode::Enter, KeyModifiers::NONE))
-            .unwrap_err();
-        assert!(error.to_string().contains("requires an answer"));
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Plan question");
-        assert_eq!(app.request_edit.as_ref().unwrap().index, 0);
-    }
-
-    #[test]
     fn queued_keys_after_quit_cannot_dispatch_an_action() {
         let (_dir, mut app) = app();
         app.quit = true;

@@ -4,7 +4,7 @@ use fael_core::{Config, Cut, Filter, Log, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 
 const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PACK_BYTES: usize = 384 * 1024;
+// A snapshot observation is bounded independently of native transcript paging.
+const MAX_OBSERVATION_ROWS: usize = 200;
+const MAX_OBSERVATION_BYTES: usize = 16 * 1024 * 1024;
 
 /// Original native provenance, including the state observed when content was captured.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -48,7 +51,7 @@ impl Source {
 }
 
 /// Scope uses native identities; omitted project/thread fields widen only that dimension.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
     pub environment_id: String,
@@ -97,6 +100,32 @@ pub struct RecordInput {
     pub full_source: Vec<u8>,
     pub supersedes: Option<String>,
     pub revisit: Option<String>,
+}
+
+/// A captured source revision and the exact durable local row that retains it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedRecord {
+    pub id: String,
+    pub source: Source,
+}
+
+/// A loaded source left in native T3 because the observation budget was reached.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureOmission {
+    pub source: Source,
+    pub reason: String,
+}
+
+/// Snapshot capture is idempotent; unchanged revisions do not append journal events.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureBatch {
+    pub recorded: Vec<CapturedRecord>,
+    pub unchanged: Vec<CapturedRecord>,
+    pub omitted: Vec<CaptureOmission>,
+    pub degradation: Vec<String>,
 }
 
 /// Bounded recall parameters; history opts into closed and superseded local context.
@@ -198,11 +227,37 @@ struct Provenance {
     source_sha256: String,
 }
 
+/// One immutable local event, retained across explicit retry before any publication.
+/// Full source bytes stay in the original owned request, never in this record.
+#[derive(Debug)]
+pub(crate) struct PreparedEvent {
+    row: Row,
+    line: Vec<u8>,
+}
+impl PreparedEvent {
+    #[cfg(test)]
+    pub(crate) fn identity(&self) -> (&str, &[u8]) {
+        (&self.row.id, &self.line)
+    }
+    fn new(row: Row) -> Self {
+        let line = format!("{}\n", row.to_line()).into_bytes();
+        Self { row, line }
+    }
+}
+
 /// A private, explicitly selected state-sibling directory; no upstream hooks are installed.
 #[derive(Debug)]
 pub struct Store {
     root: PathBuf,
     _lock: File,
+}
+impl Drop for Store {
+    fn drop(&mut self) {
+        // A helper's fork can retain this open-file description until exec.
+        // Release ownership even while an inherited descriptor remains open.
+        // SAFETY: the descriptor is owned and valid; LOCK_UN takes no pointers.
+        unsafe { libc::flock(self._lock.as_raw_fd(), libc::LOCK_UN) };
+    }
 }
 impl Store {
     /// Open only the supplied private directory and retain its exclusive writer lock.
@@ -241,6 +296,11 @@ impl Store {
 
     /// Capture only explicitly selected source material and return its stable local row ID.
     pub fn record(&self, input: &RecordInput) -> Result<String> {
+        let prepared = self.prepare_record(input)?;
+        self.commit_prepared(&prepared, &input.source, Some(&input.full_source))
+    }
+
+    pub(crate) fn prepare_record(&self, input: &RecordInput) -> Result<PreparedEvent> {
         self.check_roots()?;
         input.source.validate()?;
         ensure!(
@@ -286,24 +346,127 @@ impl Store {
             row.decision_source = Some("caller:flag".into());
         }
         fael_core::validate(&row, &Config::default()).map_err(anyhow::Error::msg)?;
-        self.publish_source(&meta, &input.full_source)?;
-        self.publish_row(&row)?;
-        Ok(row.id)
+        Ok(PreparedEvent::new(row))
+    }
+
+    /// Retain evidence/journals from authorized, already-loaded native payloads.
+    ///
+    /// Call on substantive snapshot changes, outside rendering. This reads the
+    /// journal once, never scans native files or classifies prose, and never
+    /// creates decisions, open loops, native requests or native mutations.
+    /// Each payload is the complete loaded envelope; an excerpt must retain its
+    /// native limitation in `source.observed`. Changed revisions remain history.
+    ///
+    /// # Errors
+    /// Rejects unqualified/conflicting revisions and automatic lifecycle changes.
+    /// A publication failure preserves already-published rows and recovery inputs.
+    pub fn observe_loaded(&self, inputs: &[RecordInput]) -> Result<CaptureBatch> {
+        let log = self.load()?;
+        let mut known = HashMap::<String, (String, String)>::new();
+        for row in &log.rows {
+            if let Ok(meta) = provenance(row) {
+                known
+                    .entry(source_key(&meta.source)?)
+                    .or_insert_with(|| (row.id.clone(), meta.source_sha256));
+            }
+        }
+        let mut result = CaptureBatch {
+            degradation: log.warnings,
+            ..CaptureBatch::default()
+        };
+        let mut bytes = 0usize;
+        for input in inputs {
+            input.source.validate()?;
+            ensure!(
+                matches!(input.kind, Kind::Evidence | Kind::Journal)
+                    && input.supersedes.is_none()
+                    && input.revisit.is_none(),
+                "Loaded source observation records evidence/journals only; local lifecycle changes must be explicit"
+            );
+            ensure!(
+                input.source.item_id.is_some(),
+                "Loaded source observation needs the exact native item identity"
+            );
+            let key = source_key(&input.source)?;
+            let digest = hash(&input.full_source);
+            if let Some((id, prior_digest)) = known.get(&key) {
+                ensure!(
+                    *prior_digest == digest,
+                    "Loaded source payload changed without a native revision change; prior capture retained"
+                );
+                result.unchanged.push(CapturedRecord {
+                    id: id.clone(),
+                    source: input.source.clone(),
+                });
+                continue;
+            }
+            let reason = if input.source.observed["streaming"] == true {
+                Some("Source is still streaming")
+            } else if input.full_source.is_empty() {
+                Some("Loaded source payload is empty")
+            } else if result.recorded.len() >= MAX_OBSERVATION_ROWS
+                || input.full_source.len() > MAX_SOURCE_BYTES
+                || input.full_source.len() > MAX_OBSERVATION_BYTES.saturating_sub(bytes)
+            {
+                Some("Loaded source capture budget exceeded; source retained in native T3")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                result.omitted.push(CaptureOmission {
+                    source: input.source.clone(),
+                    reason: reason.into(),
+                });
+                continue;
+            }
+            let id = self.record(input)?;
+            bytes += input.full_source.len();
+            known.insert(key, (id.clone(), digest));
+            result.recorded.push(CapturedRecord {
+                id,
+                source: input.source.clone(),
+            });
+        }
+        if let Some(record) = result.unchanged.first() {
+            sync_directory(&self.root.join("log")).with_context(|| {
+                format!("Context observation {} was published but durability is uncertain; retry its exact observation", record.id)
+            })?;
+        }
+        Ok(result)
     }
 
     /// Close only a local context row; no native request or operation is touched.
     pub fn close(&self, id: &str, source: &Source, reason: &str) -> Result<String> {
+        let prepared = self.prepare_close(id, source, reason)?;
+        self.commit_prepared(&prepared, source, None)
+    }
+
+    pub(crate) fn prepare_close(
+        &self,
+        id: &str,
+        source: &Source,
+        reason: &str,
+    ) -> Result<PreparedEvent> {
         let old = self.exact_row(id, source)?;
         let mut row = Row::close("t3oxide", id, reason);
         row.extra
             .insert("t3oxide".into(), old.extra["t3oxide"].clone());
         fael_core::validate_close(&row, &Config::default()).map_err(anyhow::Error::msg)?;
-        self.publish_row(&row)?;
-        Ok(row.id)
+        Ok(PreparedEvent::new(row))
     }
 
     /// Record an explicit revisit event while retaining the original row and source.
     pub fn revisit(&self, id: &str, source: &Source, when: &str) -> Result<String> {
+        let prepared = self.prepare_revisit(id, source, when)?;
+        self.commit_prepared(&prepared, source, None)
+    }
+
+    pub(crate) fn prepare_revisit(
+        &self,
+        id: &str,
+        source: &Source,
+        when: &str,
+    ) -> Result<PreparedEvent> {
         ensure!(
             !when.trim().is_empty(),
             "A revisit date or condition is required"
@@ -329,8 +492,7 @@ impl Store {
             row.id = fael_core::ulid_at(fael_core::ulid_ms(last).unwrap_or(0) + 1);
         }
         fael_core::validate_bump(&row, &Config::default()).map_err(anyhow::Error::msg)?;
-        self.publish_row(&row)?;
-        Ok(row.id)
+        Ok(PreparedEvent::new(row))
     }
 
     /// Ranked, scoped local recall using the upstream log/query engine.
@@ -364,11 +526,8 @@ impl Store {
             all: query.history,
             ..Filter::default()
         };
-        let (mut page, total) = fael_core::page(
-            fael_core::find(&log, &filter),
-            Some(query.limit),
-            query.offset,
-        );
+        let (matches, degradation) = self.find_payloads(&log, &filter)?;
+        let (mut page, total) = fael_core::page(matches, Some(query.limit), query.offset);
         let mut native_records = Vec::new();
         for record in native
             .iter()
@@ -398,9 +557,9 @@ impl Store {
             native_eligible: native_records.len(),
             native_shown: 0,
             native_omitted: 0,
-            complete: log.warnings.is_empty(),
+            complete: degradation.is_empty(),
             truncated: false,
-            degradation: log.warnings.clone(),
+            degradation,
             rows: Vec::new(),
             native_records,
             markdown: String::new(),
@@ -497,6 +656,65 @@ impl Store {
         Ok(row)
     }
 
+    fn find_payloads<'log>(
+        &self,
+        log: &'log Log,
+        filter: &Filter,
+    ) -> Result<(Vec<&'log Row>, Vec<String>)> {
+        let mut degradation = log.warnings.clone();
+        if filter.text.is_none() {
+            return Ok((fael_core::find(log, filter), degradation));
+        }
+        let mut eligibility = filter.clone();
+        eligibility.text = None;
+        let candidates = fael_core::find(log, &eligibility);
+        let mut matches = Vec::new();
+        for row in candidates {
+            // Keep fael's lifecycle filtering/ranking and all-word matcher.
+            // Search one full source at a time, retaining only its compact row.
+            let mut probe = Log {
+                rows: vec![row.clone()],
+                ..Log::default()
+            };
+            let text_filter = Filter {
+                text: filter.text.clone(),
+                all: true,
+                ..Filter::default()
+            };
+            if !fael_core::find(&probe, &text_filter).is_empty() {
+                matches.push(row);
+                continue;
+            }
+            let meta = provenance(row)?;
+            match read_private(&self.root.join(meta.source_ref), MAX_SOURCE_BYTES) {
+                Ok(bytes) if hash(&bytes) == meta.source_sha256 => match String::from_utf8(bytes) {
+                    Ok(payload) => {
+                        probe.rows[0].text.push('\n');
+                        probe.rows[0].text.push_str(&payload);
+                        if !fael_core::find(&probe, &text_filter).is_empty() {
+                            matches.push(row);
+                        }
+                    }
+                    Err(_) => degradation.push(format!(
+                        "Captured source {} is not UTF-8; retrieval used its summary only",
+                        meta.source_sha256
+                    )),
+                },
+                Ok(_) => degradation.push(format!(
+                    "Captured source {} hash mismatch; original retained for recovery",
+                    meta.source_sha256
+                )),
+                Err(error) => degradation.push(format!(
+                    "Captured source {} unavailable: {error}",
+                    meta.source_sha256
+                )),
+            }
+        }
+        degradation.sort();
+        degradation.dedup();
+        Ok((matches, degradation))
+    }
+
     fn publish_source(&self, meta: &Provenance, bytes: &[u8]) -> Result<()> {
         let path = self.root.join(&meta.source_ref);
         match fs::symlink_metadata(&path) {
@@ -509,23 +727,99 @@ impl Store {
                     read_private(&path, MAX_SOURCE_BYTES)? == bytes,
                     "Existing captured source hash conflicts; original retained"
                 );
-                return Ok(());
+                return sync_directory(&self.root.join("sources")).with_context(|| {
+                    format!("Captured source {} was published but durability is uncertain; retry its exact bytes", path.display())
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
         publish(&path, bytes)
     }
-    fn publish_row(&self, row: &Row) -> Result<()> {
+    pub(crate) fn commit_prepared(
+        &self,
+        prepared: &PreparedEvent,
+        source: &Source,
+        full_source: Option<&[u8]>,
+    ) -> Result<String> {
+        self.check_roots()?;
+        let row = &prepared.row;
+        let meta = provenance(row)?;
+        ensure!(
+            meta.source == *source,
+            "Prepared context source/revision changed; original event retained"
+        );
+        if let Some(target) = row.reference.as_ref().or(row.bumps.as_ref()) {
+            ensure!(
+                full_source.is_none(),
+                "Lifecycle event must retain its original captured source"
+            );
+            let target_row = self.exact_row(target, source)?;
+            ensure!(
+                target_row.extra.get("t3oxide") == row.extra.get("t3oxide"),
+                "Prepared lifecycle provenance changed; original event retained"
+            );
+            let bytes = read_private(&self.root.join(&meta.source_ref), MAX_SOURCE_BYTES)
+                .context("Prepared lifecycle source unavailable; original event retained")?;
+            ensure!(
+                hash(&bytes) == meta.source_sha256,
+                "Prepared lifecycle source changed; original event retained"
+            );
+        } else {
+            let bytes =
+                full_source.context("Prepared record needs its original complete source bytes")?;
+            ensure!(
+                !bytes.is_empty()
+                    && bytes.len() <= MAX_SOURCE_BYTES
+                    && hash(bytes) == meta.source_sha256,
+                "Prepared context source bytes changed; original event retained"
+            );
+            if let Some(id) = &row.supersedes {
+                let old = self
+                    .load()?
+                    .rows
+                    .into_iter()
+                    .find(|old| old.id == *id)
+                    .context("Exact context record to supersede not found")?;
+                let old = provenance(&old)?.source;
+                ensure!(
+                    old.environment_id == source.environment_id
+                        && old.project_id == source.project_id
+                        && old.thread_id == source.thread_id,
+                    "Superseding context must retain its original native scope"
+                );
+            }
+            self.publish_source(&meta, bytes)?;
+        }
         let suffix = if row.reference.is_some() {
             ".close.jsonl"
         } else {
             ".jsonl"
         };
-        publish(
-            &self.root.join("log").join(format!("{}{suffix}", row.id)),
-            format!("{}\n", row.to_line()).as_bytes(),
-        )
+        let path = self.root.join("log").join(format!("{}{suffix}", row.id));
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {
+                ensure!(
+                    read_private(&path, 64 * 1024)? == prepared.line,
+                    "Prepared context event identity conflicts; original event retained"
+                );
+                sync_directory(&self.root.join("log")).with_context(|| format!(
+                    "Context record {} was published but durability is uncertain; retry its exact event", path.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if let Some(id) = &row.bumps {
+                    let log = self.load()?;
+                    ensure!(
+                        !fael_core::closed(&log).contains(id.as_str())
+                            && !fael_core::superseded(&log).contains(id.as_str()),
+                        "Revisit applies only to open local context; history remains retained"
+                    );
+                }
+                publish(&path, &prepared.line)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(row.id.clone())
     }
 
     fn load(&self) -> Result<Log> {
@@ -568,6 +862,12 @@ impl Store {
                     }
                     Err(error) => log.warnings.push(format!("{}: {error}", file.display())),
                 }
+            }
+            // Match pinned fael::read: first nonempty ID in sorted file order wins.
+            // Rows and closes have separate identity sets; empty IDs are retained.
+            for rows in [&mut log.rows, &mut log.closes] {
+                let mut seen = HashSet::new();
+                rows.retain(|row| row.id.is_empty() || seen.insert(row.id.clone()));
             }
             log
         };
@@ -632,6 +932,16 @@ impl Store {
 
 fn identity(value: &str) -> bool {
     !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
+}
+fn source_key(source: &Source) -> Result<String> {
+    Ok(serde_json::to_string(&(
+        &source.environment_id,
+        &source.project_id,
+        &source.thread_id,
+        &source.item_id,
+        &source.request_id,
+        &source.revision,
+    ))?)
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -715,7 +1025,12 @@ fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
     temporary.persist_noclobber(path).map_err(|error| {
         anyhow::anyhow!("Context publication failed; original retained: {error}")
     })?;
-    File::open(parent)?.sync_all().with_context(|| format!("Context record {} was published but durability is uncertain; inspect its exact identity before recording again", path.display()))
+    sync_directory(parent).with_context(|| format!("Context record {} was published but durability is uncertain; inspect its exact identity before recording again", path.display()))
+}
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    tests::fail_directory_sync(path)?;
+    File::open(path)?.sync_all()
 }
 fn scan(directory: &Path, files: &mut Vec<PathBuf>, warnings: &mut Vec<String>) -> Result<()> {
     let metadata = fs::symlink_metadata(directory)
@@ -788,7 +1103,7 @@ fn scan(directory: &Path, files: &mut Vec<PathBuf>, warnings: &mut Vec<String>) 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -820,6 +1135,314 @@ mod tests {
             supersedes: None,
             revisit: None,
         }
+    }
+
+    thread_local! {
+        static DIRECTORY_SYNC_FAILURE: std::cell::RefCell<Option<PathBuf>> = const {
+            std::cell::RefCell::new(None)
+        };
+    }
+
+    pub(crate) struct DirectorySyncFailure;
+    impl DirectorySyncFailure {
+        pub(crate) fn arm(path: &Path) -> Self {
+            DIRECTORY_SYNC_FAILURE.with(|failure| {
+                assert!(
+                    failure.borrow().is_none(),
+                    "previous sync fault must be consumed"
+                );
+                *failure.borrow_mut() = Some(path.to_owned());
+            });
+            Self
+        }
+        pub(crate) fn assert_consumed(&self) {
+            DIRECTORY_SYNC_FAILURE.with(|failure| {
+                assert!(
+                    failure.borrow().is_none(),
+                    "required directory sync was skipped"
+                );
+            });
+        }
+    }
+    impl Drop for DirectorySyncFailure {
+        fn drop(&mut self) {
+            DIRECTORY_SYNC_FAILURE.with(|failure| *failure.borrow_mut() = None);
+        }
+    }
+    pub(super) fn fail_directory_sync(path: &Path) -> std::io::Result<()> {
+        DIRECTORY_SYNC_FAILURE.with(|failure| {
+            let mut failure = failure.borrow_mut();
+            if failure.as_deref() == Some(path) {
+                failure.take();
+                Err(std::io::Error::other("injected directory sync failure"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    #[test]
+    fn source_reuse_retries_directory_durability_before_publishing_a_row() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("context-v1");
+        let store = Store::open(&root).unwrap();
+        let original = input(Kind::Evidence, "source-sync", "Original observation");
+        let source_path = root
+            .join("sources")
+            .join(format!("{}.bin", hash(&original.full_source)));
+        for _ in 0..2 {
+            let fault = DirectorySyncFailure::arm(&root.join("sources"));
+            let error = store
+                .observe_loaded(std::slice::from_ref(&original))
+                .expect_err("source publication/reuse must establish directory durability");
+            fault.assert_consumed();
+            assert!(error.to_string().contains("durability is uncertain"));
+            assert_eq!(fs::read(&source_path).unwrap(), original.full_source);
+            assert!(
+                store.load().unwrap().rows.is_empty(),
+                "no row may precede source durability"
+            );
+        }
+        let first = store
+            .observe_loaded(std::slice::from_ref(&original))
+            .unwrap();
+        assert_eq!(first.recorded.len(), 1);
+        let repeated = store
+            .observe_loaded(std::slice::from_ref(&original))
+            .unwrap();
+        assert_eq!(repeated.unchanged[0].id, first.recorded[0].id);
+        assert_eq!(store.load().unwrap().rows.len(), 1);
+        assert_eq!(fs::read(source_path).unwrap(), original.full_source);
+    }
+
+    #[test]
+    fn observation_reuse_retries_published_row_directory_durability_without_duplication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("context-v1");
+        let store = Store::open(&root).unwrap();
+        let original = input(Kind::Evidence, "row-sync", "Original observation");
+        {
+            let fault = DirectorySyncFailure::arm(&root.join("log"));
+            let error = store
+                .observe_loaded(std::slice::from_ref(&original))
+                .unwrap_err();
+            fault.assert_consumed();
+            assert!(error.to_string().contains("durability is uncertain"));
+        }
+        let published = store.load().unwrap().rows.remove(0);
+        let path = root.join("log").join(format!("{}.jsonl", published.id));
+        let bytes = fs::read(&path).unwrap();
+        {
+            let fault = DirectorySyncFailure::arm(&root.join("log"));
+            let error = store
+                .observe_loaded(std::slice::from_ref(&original))
+                .expect_err("an existing observation must restore uncertain directory durability");
+            fault.assert_consumed();
+            assert!(error.to_string().contains("durability is uncertain"));
+        }
+        let retry = store
+            .observe_loaded(std::slice::from_ref(&original))
+            .unwrap();
+        assert!(retry.recorded.is_empty());
+        assert_eq!(retry.unchanged[0].id, published.id);
+        assert_eq!(store.load().unwrap().rows.len(), 1);
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        assert_eq!(
+            store.source(&published.id).unwrap().bytes,
+            original.full_source
+        );
+    }
+
+    #[test]
+    fn degraded_load_preserves_first_ids_for_rows_closes_and_empty_ids() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("context-v1");
+        let store = Store::open(&root).unwrap();
+        let first = input(Kind::OpenLoop, "first", "First canonical row");
+        let first_id = store.record(&first).unwrap();
+        let second = input(Kind::OpenLoop, "second", "Second canonical row");
+        let second_id = store.record(&second).unwrap();
+        let close_id = store
+            .close(&first_id, &first.source, "Canonical close")
+            .unwrap();
+        let canonical = store.load().unwrap();
+        let mut duplicate = canonical
+            .rows
+            .iter()
+            .find(|row| row.id == first_id)
+            .unwrap()
+            .clone();
+        duplicate.text = "Conflicting duplicate row".into();
+        let duplicate_path = root.join("log/zz-duplicate.jsonl");
+        publish(
+            &duplicate_path,
+            format!("{}\n", duplicate.to_line()).as_bytes(),
+        )
+        .unwrap();
+        let mut duplicate_close = canonical
+            .closes
+            .iter()
+            .find(|row| row.id == close_id)
+            .unwrap()
+            .clone();
+        duplicate_close.reference = Some(second_id.clone());
+        let close_path = root.join("log/zz-duplicate.close.jsonl");
+        publish(
+            &close_path,
+            format!("{}\n", duplicate_close.to_line()).as_bytes(),
+        )
+        .unwrap();
+        duplicate.id.clear();
+        let empty_one = duplicate.to_line();
+        duplicate.text = "Another empty ID remains admitted".into();
+        let empty_path = root.join("log/zz-empty.jsonl");
+        publish(
+            &empty_path,
+            format!("{}\n{}\n", empty_one, duplicate.to_line()).as_bytes(),
+        )
+        .unwrap();
+        let expected = store.load().unwrap();
+        assert_eq!(
+            expected.rows.iter().filter(|row| row.id.is_empty()).count(),
+            2
+        );
+        assert!(!fael_core::closed(&expected).contains(second_id.as_str()));
+        let stage = root.join("log/.staged-recovery-input");
+        publish(&stage, b"Exact interrupted input").unwrap();
+        let paths = [&duplicate_path, &close_path, &empty_path, &stage];
+        let retained: Vec<_> = paths.iter().map(|path| fs::read(path).unwrap()).collect();
+        let degraded = store.load().unwrap();
+        assert_eq!(
+            degraded.closes.iter().map(Row::to_line).collect::<Vec<_>>(),
+            expected.closes.iter().map(Row::to_line).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            degraded.rows.iter().map(Row::to_line).collect::<Vec<_>>(),
+            expected.rows.iter().map(Row::to_line).collect::<Vec<_>>()
+        );
+        assert!(!degraded.warnings.is_empty());
+        assert_eq!(
+            paths
+                .iter()
+                .map(|path| fs::read(path).unwrap())
+                .collect::<Vec<_>>(),
+            retained
+        );
+    }
+
+    #[test]
+    fn store_lock_release_follows_owner_with_an_inherited_helper_descriptor() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("context-v1");
+        let store = Store::open(&root).unwrap();
+        let inherited = store._lock.try_clone().unwrap();
+        assert!(Store::open(&root).is_err(), "live owner remains exclusive");
+        drop(store);
+        let next = Store::open(&root).expect("inherited descriptor cannot extend owner lifetime");
+        drop(inherited);
+        assert!(
+            Store::open(&root).is_err(),
+            "old descriptor cannot unlock new owner"
+        );
+        drop(next);
+        assert!(Store::open(&root).is_ok());
+    }
+
+    #[test]
+    fn loaded_source_observation_is_durable_idempotent_and_preserves_revisions() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("context-v1");
+        let store = Store::open(&path).unwrap();
+        let original = input(Kind::Evidence, "native-revision-a", "Source evidence");
+        let first = store
+            .observe_loaded(std::slice::from_ref(&original))
+            .unwrap();
+        assert_eq!(first.recorded.len(), 1);
+        assert!(first.unchanged.is_empty() && first.omitted.is_empty());
+        let id = first.recorded[0].id.clone();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let mut observed_again = original.clone();
+        observed_again.source.observed["connectionGeneration"] = json!(91);
+        let repeated = store.observe_loaded(&[observed_again]).unwrap();
+        assert!(repeated.recorded.is_empty());
+        assert_eq!(repeated.unchanged[0].id, id);
+        let mut changed = original.clone();
+        changed.source.revision = "native-revision-b".into();
+        changed.full_source = b"Updated native source payload".to_vec();
+        let update = store.observe_loaded(&[changed]).unwrap();
+        assert_eq!(update.recorded.len(), 1);
+        assert_ne!(update.recorded[0].id, id);
+        assert_eq!(store.source(&id).unwrap().bytes, original.full_source);
+        let mut conflict = original.clone();
+        conflict.full_source = b"Different bytes under the old revision".to_vec();
+        assert!(store.observe_loaded(&[conflict]).is_err());
+        let decision = input(Kind::Decision, "not-automatically-admitted", "Do this");
+        assert!(store.observe_loaded(&[decision]).is_err());
+        assert_eq!(store.recall(&query()).unwrap().eligible, 2);
+    }
+
+    #[test]
+    fn loaded_excerpts_stay_qualified_and_streaming_omissions_are_explicit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::open(&temporary.path().join("context-v1")).unwrap();
+        let mut excerpt = input(Kind::Journal, "excerpt-revision", "Loaded excerpt");
+        excerpt.source.observed["truncated"] = json!(true);
+        let mut streaming = input(Kind::Evidence, "streaming-revision", "In progress");
+        streaming.source.observed["streaming"] = json!(true);
+        let observed = store
+            .observe_loaded(&[excerpt.clone(), streaming.clone()])
+            .unwrap();
+        assert_eq!(observed.recorded.len(), 1);
+        assert_eq!(observed.omitted.len(), 1);
+        assert_eq!(observed.omitted[0].source, streaming.source);
+        let pack = store.resume(&query(), &[]).unwrap();
+        assert!(pack.truncated);
+        assert_eq!(pack.rows[0].source, excerpt.source);
+        assert!(
+            pack.native_records.is_empty(),
+            "recorded evidence is not a human request"
+        );
+    }
+
+    #[test]
+    fn recall_searches_full_retained_source_without_replacing_the_summary() {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::open(&temporary.path().join("context-v1")).unwrap();
+        let mut original = input(Kind::Evidence, "revision-full", "Concise result");
+        original.full_source = format!(
+            "{}\n日本語 uniqueness: Zephyr solution",
+            "Long source context. ".repeat(1000)
+        )
+        .into_bytes();
+        let id = store
+            .observe_loaded(std::slice::from_ref(&original))
+            .unwrap()
+            .recorded[0]
+            .id
+            .clone();
+        let mut request = query();
+        request.text = "日本語 zephyr".into();
+        let found = store.recall(&request).unwrap();
+        assert_eq!(found.eligible, 1);
+        assert_eq!(found.rows[0].id, id);
+        assert_eq!(found.rows[0].text, original.text);
+        assert!(found.complete);
+        assert_eq!(store.source(&id).unwrap().bytes, original.full_source);
+        assert_eq!(found.id, store.recall(&request).unwrap().id);
+        let source_file = store.root.join(&found.rows[0].source_ref);
+        fs::write(source_file, "Corrupt replacement containing 日本語 Zephyr").unwrap();
+        let damaged = store.recall(&request).unwrap();
+        assert_eq!(
+            damaged.eligible, 0,
+            "unverified bytes cannot become retrieval evidence"
+        );
+        assert!(!damaged.complete);
+        let observed_again = store.observe_loaded(&[original]).unwrap();
+        assert!(
+            !observed_again.degradation.is_empty(),
+            "capture must surface existing store damage"
+        );
     }
 
     #[test]

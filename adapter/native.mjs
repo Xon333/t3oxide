@@ -1,6 +1,6 @@
 // Independently authored bounded client projection over verified T3 protocol-2
 // handlers. Native T3 owns projects, worktrees, runs, queues and visibility.
-import { LIMIT, NAVIGATION_PIN_TAG, navigationPinned, clip, hash, identifier, requireThat, text } from './core.mjs';
+import { LIMIT, NAVIGATION_PIN_TAG, navigationPinned, clip, hash, identifier, requireThat, shellRuntime, text } from './core.mjs';
 import { catalog, selection, sameSelection, validateChoice, providerIdentity } from './models.mjs';
 
 const ACTIVE = new Set(['preparing', 'starting', 'running', 'waiting']);
@@ -136,8 +136,7 @@ export function inboxMetadata(t, extra = {}) {
     latestRunRequestedAt:clip(t.latestRunRequestedAt,64).text,
     latestRunStartedAt:clip(t.latestRunStartedAt,64).text,
     ...extra, runId:optionalID(t.activeRunId ?? t.latestRunId), activeRunId:optionalID(t.activeRunId),
-    pendingReview:t.interactionMode==='plan' && t.hasActionableProposedPlan===true &&
-      !['preparing','queued','starting','running','waiting'].includes(t.status) && t.activeRunId!==t.latestRunId,
+    pendingReview:shellRuntime(t).pendingReview,
     queuedCount:Number.isSafeInteger(t.queuedRunCount) && t.queuedRunCount >= 0 ? t.queuedRunCount : -1,
     // The shell offers one pending-request summary, not a complete count/form.
     pendingRequestCount:t.pendingRuntimeRequest ? 1 : 0,

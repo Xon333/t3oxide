@@ -1,5 +1,5 @@
 // Bounded thread navigation, derived only from T3's authoritative lineage.
-import { clip, identifier, LIMIT, requireThat } from './core.mjs';
+import { childRunLive, clip, identifier, LIMIT, requireThat, shellRuntime } from './core.mjs';
 import { lineage, providerIdentity } from './models.mjs';
 import { inboxMetadata, meaningfulActivity, navigationPinned } from './native.mjs';
 
@@ -11,28 +11,14 @@ export function threadType(thread) {
   return l.parentThreadId === null ? 'main' : 'unknown';
 }
 
-// Membership follows the pinned native shell presentation + threadInbox rules.
-// Background work is significant only when native data says it holds completion.
-export function nativeWorking(t, childApproval=false) {
-  const holds = (t.pendingBackgroundTasks ?? []).some(task => task?.awaited===true ||
-    ['subagent','background_task'].includes(task?.kind));
-  const status = holds && t.status!=='failed' ? 'idle' : t.activityRunStatus ?? t.status;
-  const active = ['preparing','queued','starting','running','waiting'].includes(status);
-  const running = ['preparing','starting','running'].includes(status);
-  const request = t.pendingRuntimeRequest;
-  const attention = request && request.kind !== 'auth_refresh' &&
-    (request.kind !== 'user_input' || request.blocking !== false || !running);
-  if (attention || childApproval || !active && status!=='idle') return false;
-  if (!t.latestRunId && !t.activeProviderThreadId && !holds) return false;
-  const settledRun = t.latestRunId && !['preparing','queued','starting','running','waiting'].includes(t.status) && t.activeRunId!==t.latestRunId;
-  return !(t.interactionMode==='plan' && t.hasActionableProposedPlan && settledRun);
+export function nativeWorking(t, childRequest=false) {
+  return shellRuntime(t,childRequest).working;
 }
 function childRequestParents(threads) {
   const byID=new Map(threads.map(t=>[t.id,t])), pending=new Set();
   for (const t of threads) {
-    const live = t.activityRunStatus === undefined ? ['preparing','starting','running','waiting'].includes(t.status) : t.activityRunStatus !== null;
     if (threadType(t)!=='subagent' || !t.pendingRuntimeRequest ||
-        t.creationSource==='provider' || !live || ['user_input','auth_refresh'].includes(t.pendingRuntimeRequest.kind)) continue;
+        t.creationSource==='provider' || !childRunLive(t) || t.pendingRuntimeRequest.kind==='auth_refresh') continue;
     const seen=new Set([t.id]); let parent=lineage(t.lineage)?.parentThreadId;
     while(parent && !seen.has(parent) && !pending.has(parent)) {
       seen.add(parent); pending.add(parent);
@@ -63,7 +49,7 @@ export function threadList(shell, query = '', options = {}) {
   requireThat(Number.isSafeInteger(requestedLimit) && requestedLimit > 0 && requestedLimit <= LIMIT.threads, 'Invalid conversation limit.');
   const rootLimit = scoped ? Number.MAX_SAFE_INTEGER : LIMIT.threads;
   const rowLimit = scoped ? Number.MAX_SAFE_INTEGER : LIMIT.threads;
-  const working = t => ['preparing', 'queued', 'starting', 'running', 'waiting'].includes(t.activityRunStatus ?? t.status);
+  const working = t => ['preparing', 'queued', 'starting', 'running', 'waiting'].includes(t.activityRunStatus ?? t.status) || shellRuntime(t).backgroundHolding;
   const available = shell.threads.filter(t => !t.deletedAt && !t.archivedAt && (!scoped || options.navigationPinsOnly===true ||
     lifecycle === 'all' || lifecycle === 'active' && t.settledOverride !== 'settled' ||
     ['completed','failed'].includes(lifecycle) && (t.activityRunStatus ?? t.status) === lifecycle));
@@ -154,14 +140,17 @@ export function threadList(shell, query = '', options = {}) {
   more ||= scoped && cursor + page.length < nodes.length;
   for (const {t, depth} of page) {
     const l = lineage(t.lineage), parent = all.get(l?.parentThreadId);
-    const inbox = inboxMetadata(t,{working:nativeWorking(t,pendingChildRequests.has(t.id)),pendingChildRequest:pendingChildRequests.has(t.id)});
+    const runtime = shellRuntime(t,pendingChildRequests.has(t.id));
+    const {status,...state} = runtime;
+    const inbox = inboxMetadata(t,{...state,pendingChildRequest:pendingChildRequests.has(t.id),
+      nativeStatus:clip(t.status,64).text,activityStatus:clip(t.activityRunStatus,64).text});
     const instanceId = t.providerInstanceId == null && t.modelSelection?.instanceId == null ? '' : identifier(t.providerInstanceId ?? t.modelSelection.instanceId,'provider instance');
     const row = { id: t.id, title: clip(t.title,512).text,
       ...(typeof t.updatedAt==='string' ? {updatedAt:clip(t.updatedAt,64).text} : {}),
       ...(inbox ? {inbox} : {}),
       ...(t.projectId == null ? {} : { projectId: identifier(t.projectId, 'project id') }),
       project: clip(projects.get(t.projectId) ?? '',256).text,
-      status: clip(t.activityRunStatus ?? t.status ?? 'unknown',64).text,
+      status: clip(status,64).text,
       model: clip(t.modelSelection?.model ?? '',256).text,
       providerInstanceId:instanceId,
       ...(instanceId ? {providerIdentity:structuredClone(options.providerIdentities?.get(instanceId) ?? providerIdentity(null,instanceId))} : {}),

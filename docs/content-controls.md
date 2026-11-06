@@ -42,6 +42,61 @@ selecting the current queue item refreshes the view before an answer can begin.
 Project navigation includes native inventory projects with no human questions;
 these projects do not create queue items.
 
+## Independent content selection (B1–B3)
+
+Definition before the correction implementation: loaded assistant content is
+available independently of pending questions. A content item carries `key`,
+`source`, `title`, `kind`, `markdown`, `revision` and `truncated`. `source` keeps
+the exact environment, project and thread identities; `key` also identifies the
+original message. `revision` qualifies its unchanged payload. Display titles
+never become source identities.
+
+| Kind | Payload and controls | Validation and retained edits |
+|---|---|---|
+| Explanation | Original Markdown with concise findings, relevant evidence and optional diagrams. Select, read and Open source. | Ordinary assistant output remains an explanation. Reading does not create a human obligation, settle a thread or send an answer. |
+| Research | Authored research findings, sources and unresolved questions. Select, read and Open source. | A specialized kind requires an explicit authored heading or supported source metadata. Paragraph wording, retrieval scores and completion state do not infer it. |
+| Guide | Authored steps, prerequisites and relevant examples. Select, read and Open source. | Preserve the original steps, source and truncation marker. A guide does not become a checklist of developer obligations. |
+| Receipt | Authored outcome, evidence and remaining work. Select, read and Open source. | An explicit receipt heading or supported source metadata qualifies this kind. A completed run alone does not. |
+
+The project navigation region remains present while reading content or answering
+a question. Returning to the global project level retains the selected content.
+Context reveals detailed provenance separately. Changing selection retains any
+answer edits under the original request revision. Content controls are read-only;
+native question forms retain their explicit Submit and acknowledged-delivery
+boundary above. Unavailable, changed or excerpted sources cannot be presented as
+complete current evidence.
+
+Filled examples below are synthetic definitions, not native acceptance evidence.
+Each has the same source envelope, for example
+`environment-a/project-a/thread-a/message-a`, a payload digest in `revision`, and
+`truncated: false`:
+
+```markdown
+## Explanation
+- Outcome: explicit Submit delivers the selected answer.
+- Evidence: the original native request receives an acknowledgement.
+
+## Research
+- Finding: the terminal supports the selected send chord.
+- Source: the installed terminal's documented input API.
+- Open question: physical key delivery still needs a native check.
+
+## Guide
+1. Select the original question.
+2. Review its supporting evidence.
+3. Choose an answer and submit it explicitly.
+
+## Completion receipt
+- Outcome: source-revision validation implemented.
+- Evidence: changed-source submission is rejected before dispatch.
+- Remaining: verify the adopted client through its normal entry point.
+```
+
+These are four separate native message examples, not a required combined
+template. Authors choose the structure appropriate to their material. Full
+owner wording remains in the original source; a display title or concise visible
+summary never replaces it.
+
 A filled supporting Markdown example:
 
 ```json

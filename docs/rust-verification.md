@@ -1,4 +1,304 @@
-# Revised Rust/SLT integration — 2026-11-05
+# Rust / SLT verification
+
+## Active correction pass — 2026-11-05
+
+The latest R8 source checkpoint passed **267 Rust tests** (252 library and 15
+integration), workspace/vendor formatting, both Clippy checks and
+`git diff --check`. Rust/Cargo **1.92.0** compiled all locked targets/features;
+that check did not execute tests. Four production regressions failed before the
+corrections and pass afterward: compact Context navigation, short-form action
+placement, complete acknowledgement diagrams in the outer report scroll, and
+source-tab focus retention. Actual forward/reverse Tab traversal and A/B return
+preserve the Unicode interior caret, original uncertain operation, native bytes
+and journal guards. The six-file correction also bounds the graph preview,
+exposes compact navigation through existing controls, distinguishes active tabs
+from keyboard focus and clarifies Model focus/Apply paint. All 195 strict Python
+assertions and the 12 runtime inputs remain unchanged.
+
+The prior R7 binary passed one full29 run, including the mandatory context gate
+and 33 normal primary exits. Its later acceptance remained **NOT_ACCEPTED**:
+the blind visual target was unmet, populated graph navigation had compact/focus
+limits, and a physical near-concurrent Enter pair produced an extra fixture
+setting operation with delivery ordering unproved. No source defect is attributed
+to that pair. These results qualify R7; the changed R8 source still needs a new
+immutable binary, functional/native/graph checks and fresh visual acceptance.
+No correction-pass merge, deployment or M4 switch has occurred.
+
+The compact Model integration source passed **254 Rust tests**, workspace/vendor
+formatting, both Clippy checks and `git diff --check`. Rust/Cargo **1.92.0**
+compiled all targets with all features; that check did not execute tests. The
+production SLT-to-App fixture at 140×38, 70×22 and 40×12 exercises the painted
+Model pointer target, a native display-name/action-label collision, native model
+and option staging, batched Space/Enter, child Tab/BackTab/Escape, outside-click
+dismissal and local favorite saving. Explicit Apply produces one exact pending
+operation, matching acknowledgement and native fixture effect, preserving the
+Unicode draft and caret. The pointer repair uses the SLT row container's returned
+response so its hit rectangle belongs to the painted field. These are source
+and synthetic fixture results; this candidate has no new release, PTY, installed
+host, physical or visual acceptance evidence.
+
+A fresh independent source review found queued Enter escaping local Model
+dismissal and Space activating Model while × owned focus. Production SLT/App
+regressions at 70×22 failed before correction for Tab, BackTab, Escape and
+outside-pointer dismissal, and for Space on the settled close control. Retained
+dismissal ownership now survives SLT's activation layout frame and expires after
+input-free settling; later deliberate Enter applies once. The close control
+retains its valid focus identity. The corrected source passed **259 Rust tests**,
+workspace/vendor formatting, both Clippy checks, `git diff --check` and the
+Rust/Cargo **1.92.0** all-target/all-feature compile check. The tests preserve
+native bytes before Apply, exact pending/acknowledgement identity, one native
+effect and the Unicode draft/caret. The independent review predates these fixes;
+their subsequent validation was run by the implementer.
+
+A subsequent focused regression passed through production SLT rendering and
+App action dispatch: pointer-opened Model belongs to `composer-tools`, and Space
+on the settled × restores that invoking owner. One deliberate Shift+F6 returns
+to the composer without moving its actual rendered caret; typed `<caret>` lands
+at the original interior position and removal restores the exact Unicode draft.
+The original uncertain operation, other-source draft and native bytes remain
+unchanged. The Python harness now makes that explicit keyboard return only
+before its post-close, outer-Escape and applied caret probes. All 192 pre-existing
+assertions (including the 152 in the 18 unchanged functions), generic helpers
+and the pending-context gate are preserved; three close-checkpoint assertions
+bring the current total to 195. The source passed **260 Rust tests**,
+workspace/vendor formatting and both Clippy checks. No new minimum-version APIs
+were introduced; the prior 1.92.0 compile evidence is reused, not rerun.
+
+One minimal 70×22 production-entry PTY diagnostic reused the frozen R5 binary
+(SHA-256 `05a4b938cb27a4c5b645c76f8f707abebf70e278a76ba553c0f5c202cbd22283`).
+It reproduced the absent editor caret while the invoking tools owned focus,
+then passed coordinate equality and actual marker insertion/removal after
+Shift+F6. During the caret proof, full durable state, Unicode drafts, the original
+uncertain pending record, native bytes/mode and journal remained exact; effects
+and payloads stayed zero. Normal exit persisted only the tab’s previously absent
+display title, preserving its source identity. The single product child exited
+with status 0. The earlier compact Model group failure remains retained. That
+PTY group, its Apply/acknowledgement and restart/resize cases, and the full-29
+recheck were not run in this lane; installed, physical and visual acceptance
+remain separate.
+
+A retained-state real-App regression now covers 70×22 → 140×38 → 70×22
+with the same SLT `AppState`, an actually resized `Buffer`, activation boundaries
+and production layout observation/action dispatch. Before correction, the first
+settled narrow frame lost follow and painted the transcript head with a downward
+overflow cue. Rebinding the existing controller scroll intent when SLT invalidates
+geometry on resize preserves the visible tail and exact durable reading anchor.
+The regression also checks complete durable-state equality at the close checkpoint,
+intentional wheel scrolling through resize/source return, explicit Latest, and
+manual/following positions after reopening the state file in a fresh App. Unicode
+interior draft/caret, another source's draft, a nonempty original uncertain
+operation, native bytes/mode and the absent host journal remain preserved.
+
+This source passed **261 Rust tests**, workspace/vendor formatting, both Clippy
+checks and `git diff --check`. The new regression has retained failing-command
+source manifests and logs; its final before-fix run also has a complete source
+archive. The strict 195 Python assertions and all runtime inputs are unchanged.
+The retained R5 PTY failure remains unresolved at the binary acceptance boundary:
+this lane ran no release build, product/PTY group, installed, physical or visual
+check. The parent must build the corrected source before the next focused runtime.
+The R6 strict full-suite attempt subsequently failed at the original
+`focus_and_panes` assertion: Escape from direct Effort invented an unopened
+Model configuration, so F3 remained confined to a modal. A production SLT/App
+regression reproduced that return-path failure before the controller repair.
+An explicit option-origin fact now distinguishes direct entry from a real Model
+child without duplicating staged selection. Direct cancellation restores its
+invoking controls; a real child still returns one level to its staged Model.
+A source-bound direct dismissal tail retains one deferred Enter through SLT's
+close/focus activation frame, then expires after settling. It neither reopens a
+catalog read nor applies or sends. The original pane sequence, literal draft,
+actual keyboard caret return, complete durable state, uncertain operation,
+native bytes/mode and absent journal are checked. Direct Escape/Tab/BackTab/
+pointer plus Enter, unchanged-value acceptance into Apply review, and a later
+real child return are covered. Nested child Escape and outside-pointer
+dismissals also retain their queued Enter across the return to the exact saved
+configuration. The existing real SLT/App regression fails before that repair
+and passes afterward, including Escape+Enter and pointer+Enter, while preserving
+its selected native values and single later deliberate Apply. A changed source
+or configuration stamp clears that retained input ownership.
+
+This source passed **263 Rust tests** (248 library and 15 integration),
+workspace/vendor formatting, both Clippy checks, `git diff --check`, and the
+Rust/Cargo **1.92.0** locked all-target/all-feature compile check. The strict
+195 Python assertions and all runtime inputs remain exact. The nested-child
+failure and its contemporaneous source archive remain preserved.
+The prior focused runtime pass qualifies only its old binary; R6 full-suite
+acceptance remains **FAIL/PARTIAL**. No new binary, PTY/full-suite, native,
+graph, physical, visual or M4 acceptance was run. The parent owns a fresh build
+and strict runtime validation.
+
+The correction pass is still in progress. The second frozen release (R2) is
+`t3oxide 0.11.0 · Rust / SLT`, SHA-256
+`99bbe9f5738c3927cb62e5c677422f13b08eb2b66347139e1086e7215e565e57`,
+9,187,104 bytes on macOS ARM64. Its 317-file source manifest has SHA-256
+`b0fd9ff72cdbc865e7c1837a8db47f5d16243957d2f3b1699490231444b1701a`.
+These results qualify that frozen source, rather than later working-tree changes.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Source checks | 199 Rust tests, workspace/vendor formatting and both Clippy checks passed. Official Rust/Cargo 1.92.0 compiled all targets with all features; this was a compile check, without test execution. |
+| Shared checks | Unchanged dependency hashes retained the passing 259 Node and 5 Python results. Six affected installer tests were rerun after the NOTICE change; revised Python inputs passed syntax checks. |
+| Production-entry PTY | One uninterrupted run passed all 26 checks in 43.572 seconds on the exact release. Source bytes, modes and file set, runtime inputs and protected payloads matched before and after. These are synthetic endpoint results. |
+| Physical Rex | Controlled-fixture draft paint/resize, independent tab drafts, whole-draft clipboard bytes, modal guards and explicit answer submission have passing evidence. Direct Settled→Unread pointer activation failed; Run→Unread restored the list. That defect is retained for a later-source correction. |
+| Native answer | A fresh two-question submission received its original source/request/revision ACK, with both exact answers returned and no pending operation. Physical review navigation retained the answers. Final handback verified clipboard items, types and bytes and preserved prior session labels, windows and layouts, with an independently reconnected client's owner-metadata change recorded separately. |
+| Visual review and adoption | Three fresh blind reviewers and a separate judge ranked R2 first against the preserved baseline and fixed references. The visual acceptance bar was not met; source/detail cues, graph framing, contrast and selection remain correction work. No correction-pass M4 switch has occurred. |
+
+The corrected debug executable
+`e11202eddf066bd97fa19cfed3274a7f19925d1b97cac93d27e711e5c0ca5b8e`
+previously established all 26 outcomes across nine completed and 17 remaining
+checks. Its combined attempts remain failed; the later release run above is the
+single complete pass. Setup/selector diagnostics and physical failures remain
+retained evidence.
+
+The next source revision separately introduces the accepted bounded context-I/O
+worker, navigator activation correction, further presentation corrections and
+physically proved Copy draft shortcut metadata. Focused source checks passed:
+13 worker regressions, 43 UI tests, three project-graph tests and lib/tests Clippy.
+An earlier checkpoint passed seven Store-preservation and 53 lifecycle tests.
+Fresh consequential review found native question retirement closing a pending
+Context view without invalidating its read token. The new regression failed
+before the correction, then passed for replacement and cancellation while
+retaining the original answer draft, composer and protected operations. Source
+lookup also rejects a changed original digest or reference; its expanded
+regression failed before the check and passes afterward.
+
+The worker owns context reads and writes separately from draft storage and drains
+accepted outcomes before joining. It adds one in-process thread; a Store scan's
+duration remains unbounded. These source results do not establish latency or
+resource savings.
+
+The next frozen debug executable has SHA-256
+`faad35bbb9bf9e6958dd365d31b9bd87b7de5b25450c77dc15fddeac09456610`.
+Its 318-file source snapshot passed 221 Rust tests, workspace/vendor formatting,
+both Clippy checks and an official Rust/Cargo 1.92.0 all-target/all-feature compile
+check. That minimum-version check did not execute tests. Unchanged shared inputs
+retain the passing 259 Node, five Python and six installer results.
+
+All 28 debug PTY outcomes completed across scoped runs. Three earlier attempts
+remain failed: exact selectors stopped on the annotated Copy draft row, an
+incorrect Unread-lane expectation and a Context-title/composer substring
+collision. Narrow harness corrections preserved the product, generic matching
+and state assertions. The final context-only continuation passed in 9.868 seconds:
+child-local exact-file fault injection proved the read was blocked while real
+Esc, an independent exact Unicode draft save/restore and an internal-tab source
+change remained usable. After release, only the newly requested source painted.
+Durable/native/journal, caret, original pending identity and no-replay checks
+passed. Navigator pointer checks separately passed two cycles in both populated
+and empty Settled fixtures.
+
+These are scoped debug results, not one uninterrupted 28-check pass. The debug
+artifact's original source and runtime snapshots remain frozen; its runtime
+harness selector migrations are recorded separately.
+
+Subsequent UI source review found two pointer-navigation regressions: a
+conditional scope control could inherit the question list's previous hit target,
+and compact project navigation removed its clickable global return. Focused
+regressions reproduced both before correction. Scope controls now retain stable
+interaction slots, and global return remains clickable in compact layouts.
+The corrected tests cover queued Down/click input at both responsive placements
+and populated/empty project returns at 46×22 and 40×12 while retaining source,
+form/report and unsent draft. The corrected source passed 223 Rust tests,
+workspace/vendor formatting, both Clippy checks and the official Rust/Cargo
+1.92.0 all-target/all-feature compile check.
+
+These corrected inputs were subsequently frozen in R3 below. The earlier debug
+and R2 results do not certify later UI changes; no M4 switch has occurred.
+
+Fresh consequential review found stale form ownership after closing the last tab
+and inaccessible keyboard scrolling in Recovery detail with choices. Both failed
+their new regressions before the small corrections and passed afterward. The
+copy test also established that its first command can initialize the current
+reading bookmark; its baseline now establishes that bookmark through a separate
+normal action, retaining full durable/native state equality around each copy.
+
+### Third frozen candidate (R3)
+
+The distinct R3 release is `t3oxide 0.11.0 · Rust / SLT`, SHA-256
+`6674f76ed994592377f056e6c0cbdf70235ba7d1069a318b256ff6bd61e8b199`,
+9,237,072 bytes on macOS ARM64. Its 318-file source manifest has SHA-256
+`33aee3faee9b3e16a480814730229b411c473057a02c9473a66876a0ae88881b`.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Production-entry PTY | One uninterrupted run passed all 28 checks in 59.500 seconds, including the mandatory exact-file context gate and Navigator pointer cycles in both fixtures. All 23 product children exited normally. Source, protected payloads, runtime and gate inputs matched before/after; all eight stable context snapshots retained full durable/native/journal equality. This is synthetic endpoint evidence. |
+| Physical Rex | Controlled-fixture resize, exact clipboard/draft preservation, populated/empty Navigator cycles, search, commands, three distinct sends and an explicitly reviewed answer completed. The four operations received exact controlled-fixture ACKs; genuine-native ACK qualification on the final artifact remains pending. |
+| Retained failures | Selecting an empty project replaced a selected report with an older retained Form. Compact global navigation retained a misleading project title. Earlier physical pointers did nothing until an unmodified Esc; the delivery/focus cause remains unresolved. A separate PTY diagnostic stopped on its startup precondition before pointer input. |
+| Preservation and visual review | Clipboard items/types/bytes, drafts, prior session layouts and the named R2 window were restored. An initial unnamed transient panel was absent at handback and remains a recorded caveat. Three blind reviewers and the separate judge ranked R3 first; candidate scores span 7–8.5, below the acceptance bar. The judge froze its independent assessment before reading the council. No M4 switch occurred. |
+
+The subsequent source revision preserves the selected detail when an empty
+destination has no selection, without changing the report's original source.
+It also labels the global graph at compact heights while retaining independent
+Browse scope. Both regressions failed against the R3 code before correction and
+passed afterward. The report regression uses actual Library and graph pointers,
+an older retained question, exact report/source/revision, empty Browse counts,
+global return and an unchanged Unicode draft. The compact regression checks the
+global title at 46×22 and 40×12.
+
+This later source passed 224 Rust tests, workspace/vendor formatting, both Clippy
+checks and the official Rust/Cargo 1.92.0 all-target/all-feature compile check.
+The minimum-version check did not execute tests. R3's frozen binary and evidence
+remain unchanged; the two later corrections require a new artifact and affected
+physical/visual acceptance.
+
+The next UI revision improves selected conversation titles and shared source
+labels, distinguishes a browse cursor from attached content, fits complete
+compact tab/count controls, bounds the search query and separates question
+progress from choice position. Library shortening affects display labels only;
+the original content/source/revision remains available. Sparse graph spacing
+uses the accepted layout library's public configuration while retaining the
+existing viewport and shared paint/hit geometry.
+
+Fresh source review found one P2 in that revision: a wheel event could hide a
+source line and shift its interaction slot to another conversation before a
+queued click. A regression under production SLT activation boundaries, with
+controller Highlight acceptance, clicked A2's displayed source line and opened
+A3 before correction. The source line now retains its interaction slot at zero
+height when hidden; the same sequence opens only A2 afterward. This reproduced
+defect is separate from R3's unresolved physical pointer no-ops.
+
+After that correction, all eight navigator regressions and the integrated
+230 Rust tests passed, with workspace/vendor formatting, both Clippy checks
+and the official Rust/Cargo 1.92.0 all-target/all-feature compile check. The
+minimum-version check did not execute tests. Retained-state resize coverage
+includes 140×38, 100×31, 86×31, 70×22, 40×12 and wide restoration. This later
+source still requires its own immutable artifact, production-entry PTY and
+physical/native/visual acceptance.
+
+### First frozen candidate (R1)
+
+The first frozen candidate is
+`t3oxide 0.11.0 · Rust / SLT`, SHA-256
+`6b3ec23b109602ad376717210bf3bbe511c7267ec96ccdd82d8ab77fcd44ab10`,
+9,203,856 bytes on macOS ARM64. Its source manifest covers 317 files and has
+SHA-256 `befbe98e0b009d1f68ba719bf35bd23b495d97ebdb7486abf75e51ff077f2b40`.
+Later source changes are outside that artifact's results.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Frozen-candidate source checks | 185 Rust tests, workspace/vendor formatting and both Clippy checks passed with Rust/Cargo 1.99.1. Unchanged shared inputs retained the passing 259 Node and 5 Python results. |
+| Production-entry PTY | All 24 checks passed on the exact frozen candidate. Binary, source, adapter, fixture, harness and packaged-file hashes matched before and after. This is synthetic endpoint evidence. |
+| Declared minimum Rust | Rust/Cargo 1.92.0 compiled production and test targets with all features on a later, unchanged 317-file snapshot. Subsequent UI/vendor changes still need reconciliation. This was a compile check, without test execution. |
+| Physical Rex with controlled fixtures | Resize retained the exact multiline Unicode draft and independent internal-tab drafts. Form validation, explicit review and acknowledged submission were observed. The editor also reproduced a hidden draft prefix above blank rows, and the review clipped its second answer. These remain failures for this artifact. |
+| Physical Rex with native T3 | A disposable two-field answer received its original source ACK. Ctrl+Enter, portable Send and pointer Send each produced one distinct native dispatch/reply. Plain Enter inserted one newline; slash completion opened Help without dispatch. No pending operation remained in the disposable source. |
+| Clipboard | Native source copy and normal Ctrl+A/C copied exact bytes. Cmd+A/C copied the draft only in the preexisting manual Rex editing mode; normal Cmd+A/C copied the terminal. The new whole-draft action needs physical verification on the next artifact. |
+| Visual review | Three independent reviewers and a separate judge ranked the candidate first against the preserved baseline and fixed established-TUI references. The acceptance bar was not met; layout, spacing, controls and navigation corrections continue. |
+| Installed adoption | No correction-pass M4 switch has occurred. The previous deployment described below remains historical evidence. |
+
+Failed-first source regressions now cover the editor viewport, unresolved
+inherited-content graph identity and keyboard access to complete answer reviews.
+The production PTY suite gained an editor-paint check that correctly fails
+the first frozen candidate and a whole-draft copy check. R2 passed both in its
+complete release run and the controlled physical retest. That later evidence
+does not change the first candidate's failed results.
+
+Current limits remain explicit: metadata refresh covers a bounded loaded window;
+definitive removal requires a complete first-page scope. Native dependency edges
+and coverage are unavailable, so live synthesis remains unknown. Native answer
+preflight has no server-side revision CAS. Local context can retain already-loaded
+completed evidence automatically and retrieve its retained full source; this does
+not scan unloaded transcripts or establish a complete inventory. No latency or
+resource-saving claim follows from these checks.
+
+## Prior SLT deployment — historical evidence
 
 Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`
 and relevant later preserved UX behavior into the isolated SLT client. The
@@ -293,3 +593,29 @@ In this workload, median client RSS was **81.2% lower**, and summed process-tree
 Reproduce with the commands in [contract evidence](rust-contracts.md#verification-fixtures); use `--baseline` for the isolated Go comparison. [Developer](evidence/developer.txt) and [AgentBox](evidence/agentbox.txt) captures contain synthetic data. These are terminal-text captures, not physical screenshots or paint measurements.
 
 Installed authentication, actual SSH routes, provider execution and native terminal behavior still require the machines that own those resources. macOS target checks do not replace those checks. Updated companion files enable `inclusiveThreadList`; older protocol-compatible helpers may omit collapsed children from loaded metadata. Native server search remains separately available when advertised. No installed T3 service, productive thread, user configuration or user state was accessed or changed by these fixtures.
+
+The R8 pointer-tab real-App regression reproduces a blocked Ctrl+Enter Send before the correction and passes after it: pointer activation restores composer focus, while keyboard arrows retain the conversation-tab composite. The fixture verifies the original source, complete Unicode draft and interior caret before Send, one pending operation and matching acknowledgement/native effect with the exact original text, and preservation of the other draft, independent uncertain recovery and existing host journal. The retained keyboard and A/B tab-cycle regression also passes. This is source-fixture evidence only; a fresh binary, full29, native, graph and visual acceptance remain pending. R7 native Enter-pair ordering remains qualified OPEN without an established causal source defect.
+
+R9 adds five real-App SLT regressions with activation boundaries. The baseline reproduces the retained 40×12 form hiding its review action and a nonempty Unicode composer leaving no transcript body. The correction keeps Open form and Open in A visible with context off/on, preserves exact request/source, draft and interior caret, independent pending operations, native bytes/modes and an acknowledged host journal, and rejects changed, unavailable, submitting, uncertain and acknowledged offers. Compact transcript decoration yields to body rows; context geometry settles before scroll feedback. The complete graph focus route and measured-divider drag pass as positive conservation checks: arrows select without activating, Tab away/back retains graph paint, Enter selects the original Empty project identity among duplicate Atlas labels, and the default 30-cell/manual 42-cell widths survive resize. These are source-fixture results; new-binary, native, full terminal, visual and integrated acceptance remain pending. R7 native Enter-pair ordering remains OPEN/INCONCLUSIVE.
+
+The 2026-11-06 keyboard and divider corrections passed **275 Rust tests**
+(260 library and 15 integration), workspace/vendor formatting, both Clippy
+checks, the locked Rust/Cargo **1.92.0** all-target/all-feature compile check and
+`git diff --check`. The retained keyboard regression covers focused scrolling,
+source/geometry rebinding, manual/follow intent and context changes. The new
+real-App divider regression fails on unchanged production: the requested
+42-cell navigator is allocated only 41 visible cells, losing its right border
+and starting the main pane one cell early. Rounding the native split's grow
+weight upward preserves the complete navigator, one-cell divider and right-pane
+border; paint rounding is excluded from keyboard preference deltas. Default 30
+and manual 42 survive the 140→86→70→40→140 resize cycle; actual Tab traversal
+checks divider arrows at 140 and 129 columns, and resize cancels a captured drag.
+The regression preserves exact Unicode drafts/interior carets, manual/follow
+intent, nonempty independent pending and pendingStops, the complete durable
+state, native bytes/modes and acknowledged host journals. Prior tests remain
+unchanged; contemporaneous fail-first archives and logs are retained. The
+274-test checkpoint and immutable R9 full29 are baseline evidence; runtime
+inputs and strict 195 assertions are unchanged. No binary was rebuilt or run
+in this source lane. New-binary, targeted runtime, native, graph and visual
+acceptance remain pending; the historical native Enter pair remains
+OPEN/INCONCLUSIVE. Optimization remains separate and held.

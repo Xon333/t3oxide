@@ -82,7 +82,7 @@ def fixture(directory, mixed=False, **options):
 
 
 class Terminal:
-    def __init__(self, binary, config, state, thread="thread-a", mode=None, columns=140, rows=38, environment=None, profile="fixture"):
+    def __init__(self, binary, config, state, thread="thread-a", mode=None, columns=140, rows=38, environment=None, profile="fixture", pass_fds=()):
         import pty
         self.master, slave = pty.openpty()
         self.columns, self.rows = columns, rows
@@ -105,7 +105,7 @@ class Terminal:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         self.process = subprocess.Popen(arguments, stdin=slave, stdout=slave, stderr=slave,
                                         cwd=ROOT, env={**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor", **(environment or {})},
-                                        preexec_fn=terminal_session, close_fds=True)
+                                        preexec_fn=terminal_session, close_fds=True, pass_fds=pass_fds)
         os.close(slave)
 
     @property

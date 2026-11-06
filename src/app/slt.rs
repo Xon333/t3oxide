@@ -3,6 +3,39 @@ use super::*;
 use crate::slt_ui::{self, Action, SurfaceState};
 
 impl App {
+    pub(super) fn remember_answer_delivery(
+        &mut self,
+        profile: usize,
+        operation: &str,
+        fields: &Value,
+        phase: AnswerPhase,
+    ) {
+        let Ok(source) = crate::attention::Source::from_request(
+            &self.environments[profile].environment_id,
+            &string(fields, "threadId"),
+            &json!({"id":fields["requestId"],"revision":fields["revision"]}),
+        ) else {
+            return;
+        };
+        if let Some(previous) = self
+            .answer_deliveries
+            .iter()
+            .find(|receipt| receipt.source == source)
+            && previous.operation != operation
+            && !matches!(phase, AnswerPhase::Submitting)
+        {
+            return;
+        }
+        self.answer_deliveries
+            .retain(|receipt| receipt.source != source);
+        self.answer_deliveries.push_front(AnswerDelivery {
+            source,
+            operation: operation.into(),
+            phase,
+        });
+        self.answer_deliveries.truncate(64);
+    }
+
     pub(super) fn preserve_open_form(&mut self) -> Result<()> {
         self.flush_form()?;
         self.save_question_draft()?;
@@ -37,6 +70,11 @@ impl App {
         let shared = Arc::new(Mutex::new(self));
         let outcome = loop {
             let controller = shared.clone();
+            // Keep ownership outside SLT's wake channel: a suspended or failed
+            // terminal loop can discard wakes, but cannot discard a write ACK.
+            let pending = Arc::new(Mutex::new(None));
+            let (forwarded, retained) = bounded(128);
+            let delivered = retained.clone();
             let (mouse, rx) = {
                 let app = shared.lock().expect("SLT controller lock poisoned");
                 (app.mouse, app.rx.clone())
@@ -52,94 +90,114 @@ impl App {
                 .idle_redraw(false)
                 .max_fps(60);
             let session = runtime.block_on(async {
-                let run =
-                    ::slt::run_async_with(config, move |ui, events: &mut Vec<Background>| {
-                        let mut app = controller.lock().expect("SLT controller lock poisoned");
-                        for event in events.drain(..) {
-                            if let Err(error) = app.handle(event) {
-                                app.error(error);
-                            }
-                        }
-                        if app
-                            .save_at
-                            .is_some_and(|deadline| Instant::now() >= deadline)
-                            && let Err(error) = app.schedule_save()
-                        {
-                            app.draft_error = error.to_string();
-                            app.save_at = Some(Instant::now() + Duration::from_millis(500));
+                let run = ::slt::run_async_with(config, move |ui, events: &mut Vec<()>| {
+                    let mut app = controller.lock().expect("SLT controller lock poisoned");
+                    events.clear();
+                    for event in delivered.try_iter().take(128) {
+                        if let Err(error) = app.handle(event) {
                             app.error(error);
                         }
-                        if app
-                            .form_save_at
-                            .is_some_and(|deadline| Instant::now() >= deadline)
-                            && let Err(error) = app.flush_form()
-                        {
+                    }
+                    app.refresh_metadata_if_due(Instant::now());
+                    if app
+                        .save_at
+                        .is_some_and(|deadline| Instant::now() >= deadline)
+                        && let Err(error) = app.schedule_save()
+                    {
+                        app.draft_error = error.to_string();
+                        app.save_at = Some(Instant::now() + Duration::from_millis(500));
+                        app.error(error);
+                    }
+                    if app
+                        .form_save_at
+                        .is_some_and(|deadline| Instant::now() >= deadline)
+                        && let Err(error) = app.flush_form()
+                    {
+                        app.error(error);
+                    }
+                    if let Err(error) = app.open_pending_question() {
+                        app.error(error);
+                    }
+                    let start_attention = app.args.mode == "b";
+                    let state = ui.use_state_keyed("t3oxide.surface", || {
+                        let mut state = SurfaceState::new();
+                        state.attention_mode = start_attention;
+                        state
+                    });
+                    let mut surface = std::mem::take(state.get_mut(ui));
+                    app.populate_surface(&mut surface);
+                    let view = app.view();
+                    let modal = app.modal();
+                    let App {
+                        composer,
+                        modal_editor,
+                        ..
+                    } = &mut *app;
+                    let actions = slt_ui::draw(
+                        ui,
+                        &view,
+                        composer,
+                        modal_editor,
+                        modal.as_ref(),
+                        &mut surface,
+                    );
+                    app.observe_slt_layout(&surface);
+                    if !actions.is_empty() {
+                        // Controller actions change the next frame's widgets,
+                        // focus or editor even when no worker/input wakes us.
+                        ui.request_frame();
+                    }
+                    for action in actions {
+                        if let Err(error) = app.surface_action(action, &mut surface) {
                             app.error(error);
                         }
-                        if let Err(error) = app.open_pending_question() {
-                            app.error(error);
-                        }
-                        let start_attention = app.args.mode == "b";
-                        let state = ui.use_state_keyed("t3oxide.surface", || {
-                            let mut state = SurfaceState::new();
-                            state.attention_mode = start_attention;
-                            state
-                        });
-                        let mut surface = std::mem::take(state.get_mut(ui));
-                        app.populate_surface(&mut surface);
-                        let view = app.view();
-                        let modal = app.modal();
-                        let App {
-                            composer,
-                            modal_editor,
-                            ..
-                        } = &mut *app;
-                        let actions = slt_ui::draw(
-                            ui,
-                            &view,
-                            composer,
-                            modal_editor,
-                            modal.as_ref(),
-                            &mut surface,
-                        );
-                        app.observe_slt_layout(&surface);
-                        if !actions.is_empty() {
-                            // Controller actions change the next frame's widgets,
-                            // focus or editor even when no worker/input wakes us.
-                            ui.request_frame();
-                        }
-                        for action in actions {
-                            if let Err(error) = app.surface_action(action, &mut surface) {
-                                app.error(error);
-                            }
-                        }
-                        if modal.is_none() && app.dialog.is_some() && !surface.attention_mode {
-                            // The modal captures its return focus next frame. Keep
-                            // subsequent typing in this conversation's next draft.
-                            ui.focus_by_name("composer");
-                        }
-                        if let Some(text) = app.clipboard_request.take() {
-                            ui.copy_to_clipboard(text);
-                        }
-                        *state.get_mut(ui) = surface;
-                        if let Some(deadline) =
-                            app.save_at.into_iter().chain(app.form_save_at).min()
-                        {
-                            ui.request_frame_after(
-                                deadline.saturating_duration_since(Instant::now()),
-                            );
-                        }
-                        if app.quit || app.pending_external_edit {
-                            ui.quit();
-                        }
-                    })?;
+                    }
+                    if modal.is_none() && app.dialog.is_some() && !surface.attention_mode {
+                        // The modal captures its return focus next frame. Keep
+                        // subsequent typing in this conversation's next draft.
+                        ui.focus_by_name("composer");
+                    }
+                    if let Some(text) = app.clipboard_request.take() {
+                        ui.copy_to_clipboard(text);
+                    }
+                    *state.get_mut(ui) = surface;
+                    if let Some(deadline) = app
+                        .save_at
+                        .into_iter()
+                        .chain(app.form_save_at)
+                        .chain(Some(app.metadata_refresh_at))
+                        .min()
+                    {
+                        ui.request_frame_after(deadline.saturating_duration_since(Instant::now()));
+                    }
+                    if app.quit || app.pending_external_edit {
+                        ui.quit();
+                    }
+                })?;
                 let sender = run.sender();
+                let forwarding = pending.clone();
                 // This bridge reads only worker messages. SLT alone reads the terminal.
                 let bridge = thread::spawn(move || {
                     while !sender.is_closed() {
                         match rx.recv_timeout(Duration::from_millis(100)) {
-                            Ok(event) => {
-                                if sender.blocking_send(event).is_err() {
+                            Ok(mut event) => {
+                                loop {
+                                    match forwarded.send_timeout(event, Duration::from_millis(100))
+                                    {
+                                        Ok(()) => break,
+                                        Err(crossbeam_channel::SendTimeoutError::Timeout(
+                                            returned,
+                                        )) if !sender.is_closed() => event = returned,
+                                        Err(error) => {
+                                            *forwarding
+                                                .lock()
+                                                .expect("SLT delivery lock poisoned") =
+                                                Some(error.into_inner());
+                                            return;
+                                        }
+                                    }
+                                }
+                                if sender.blocking_send(()).is_err() {
                                     break;
                                 }
                             }
@@ -153,6 +211,12 @@ impl App {
                 result
             });
             let mut app = shared.lock().expect("SLT controller lock poisoned");
+            let overflow = pending.lock().expect("SLT delivery lock poisoned").take();
+            for event in retained.try_iter().chain(overflow) {
+                if let Err(error) = app.handle(event) {
+                    app.error(error);
+                }
+            }
             if session.is_err() || app.quit || !app.pending_external_edit {
                 break session;
             }
@@ -162,6 +226,7 @@ impl App {
             }
         };
         let mut app = shared.lock().expect("SLT controller lock poisoned");
+        let context = app.drain_context();
         let form = app.preserve_open_form();
         let draft = app.flush_draft();
         let ui = app.save_ui();
@@ -172,12 +237,34 @@ impl App {
             connection.close();
         }
         outcome?;
+        context?;
         form?;
         draft?;
         ui
     }
 
     pub(super) fn search_projects(&mut self) {
+        let source = self.workspace.project_scope.clone().or_else(|| {
+            let source = self.active.as_ref()
+                .map(|active| self.source(active.profile, &active.thread))
+                .or_else(|| self.selected_thread().map(|row| self.source(row.profile, &row.id)))?;
+            domain::valid_id(&source.project_id).then(|| {
+                let env = &self.environments[source.profile];
+                json!({"profileId":env.id,"environmentId":env.environment_id,"projectId":source.project_id})
+            })
+        });
+        if let Some(source) = source {
+            if let Err(error) =
+                self.workspace_dispatch(workspace::WorkspaceAction::SearchScope(Some(source)))
+            {
+                self.error(error);
+            }
+        } else {
+            self.search_scopes();
+        }
+    }
+
+    pub(super) fn search_scopes(&mut self) {
         let mut choices = Vec::new();
         let mut projects = self.project_sources();
         projects.sort_by(|left, right| {
@@ -219,12 +306,17 @@ impl App {
                     .any(|(p, id)| *p == profile && id == thread)
             {
                 self.tabs.push((profile, thread.into()));
+                let title = string(tab, "title");
+                if !title.trim().is_empty() && title.len() <= 512 {
+                    self.tab_titles
+                        .insert((profile, thread.into()), domain::plain(&title));
+                }
             }
         }
         Ok(())
     }
 
-    fn source(&self, profile: usize, thread: &str) -> slt_ui::Source {
+    pub(super) fn source(&self, profile: usize, thread: &str) -> slt_ui::Source {
         let row = self
             .threads
             .iter()
@@ -300,6 +392,43 @@ impl App {
     }
 
     pub(super) fn populate_surface(&mut self, surface: &mut SurfaceState) {
+        surface.direct_effort_option = self
+            .model_edit
+            .as_ref()
+            .is_some_and(|edit| edit.option_origin == Some(ModelOptionOrigin::Direct));
+        surface.answer_delivery = self
+            .answer_deliveries
+            .iter()
+            .filter_map(|receipt| {
+                receipt
+                    .source
+                    .key()
+                    .ok()
+                    .map(|key| (key, receipt.phase.as_str().into()))
+            })
+            .collect();
+        let in_flight = self.in_flight.lock().expect("mutation lanes lock poisoned");
+        for pending in self
+            .state
+            .pending_records()
+            .into_iter()
+            .filter(|pending| pending.record["op"] == "answer")
+        {
+            if let Ok(source) = crate::attention::Source::from_request(
+                &pending.environment_id,
+                &string(&pending.record, "threadId"),
+                &json!({"id":pending.record["requestId"],"revision":pending.record["revision"]}),
+            ) && let Ok(key) = source.key()
+            {
+                let phase = if in_flight.contains(&(pending.environment_id, pending.stop)) {
+                    "submitting"
+                } else {
+                    "uncertain"
+                };
+                surface.answer_delivery.insert(key, phase.into());
+            }
+        }
+        drop(in_flight);
         surface.transcript_jump = None;
         if let Some((source, key, digest, inner)) = self.workspace.pending_jump.clone() {
             if source.check(self).is_ok()
@@ -336,7 +465,9 @@ impl App {
                     .iter()
                     .find(|row| row.profile == *profile && row.id == *thread)
                     .map(|row| row.title.clone())
-                    .unwrap_or_else(|| thread.clone());
+                    .filter(|title| !title.trim().is_empty())
+                    .or_else(|| self.tab_titles.get(&(*profile, thread.clone())).cloned())
+                    .unwrap_or_else(|| "Conversation".into());
                 slt_ui::Tab {
                     key: format!("{profile}\0{thread}"),
                     title,
@@ -344,6 +475,19 @@ impl App {
                 }
             })
             .collect();
+        // Inherited messages can arrive before their source's metadata page.
+        // Resolve presentation metadata independently of the message revision.
+        let content_sources: Vec<_> = self
+            .loaded_contents
+            .iter()
+            .map(|content| self.source(content.source.profile, &content.source.thread))
+            .collect();
+        for (content, source) in self.loaded_contents.iter_mut().zip(content_sources) {
+            if domain::valid_id(&source.project_id) {
+                content.source = source;
+            }
+        }
+        surface.contents = self.loaded_contents.iter().cloned().collect();
         surface.source = self
             .active
             .as_ref()
@@ -463,6 +607,9 @@ impl App {
                 });
             }
         }
+        if surface.loading_question.as_ref() != surface.selected_question.as_ref() {
+            surface.loading_question = None;
+        }
         if surface.loading_question.is_some()
             && let Some(active) = &self.active
             && !active.navigating
@@ -482,29 +629,9 @@ impl App {
                 surface.retained_question = Some(question.clone());
             }
         }
-        // Current native request offers expose no dependency edges or coverage.
-        // Keep the synthesis role source-qualified without inventing independence.
-        let qualified: Vec<_> = surface
-            .questions
-            .iter()
-            .filter_map(|question| {
-                let revision = string(&question.request, "revision");
-                (!revision.is_empty()).then(|| crate::attention_rank::SourceId {
-                    environment_id: question.source.environment.clone(),
-                    thread_id: question.source.thread.clone(),
-                    request_id: string(&question.request, "id"),
-                    revision,
-                })
-            })
-            .collect();
-        surface.dependency_status = match crate::attention_rank::rank(
-            &qualified,
-            &[],
-            crate::attention_rank::EvidenceCoverage::Unknown,
-        ) {
-            Ok(_) => "Dependencies · unknown".into(),
-            Err(error) => format!("Dependencies unavailable · {error}"),
-        };
+        // No supported native source supplies request dependency edges or
+        // coverage. Preserve admission order; do not run a graph on invented data.
+        surface.dependency_status = "Dependencies · unknown".into();
     }
 
     pub(super) fn observe_slt_layout(&mut self, surface: &SurfaceState) {
@@ -563,6 +690,12 @@ impl App {
         action: Action,
         surface: &mut SurfaceState,
     ) -> Result<()> {
+        if !matches!(
+            action,
+            Action::DraftChanged | Action::ModalEditChanged | Action::Highlight(_) | Action::Stop
+        ) {
+            self.preserve_open_form()?;
+        }
         match action {
             Action::Highlight(index) => {
                 self.focus = Focus::Navigator;
@@ -596,6 +729,7 @@ impl App {
                 self.open(profile, thread)?;
             }
             Action::CloseTab(key) => {
+                self.invalidate_context_view();
                 self.preserve_open_form()?;
                 self.flush_draft()?;
                 let position = self
@@ -621,6 +755,9 @@ impl App {
                         {
                             connection.close();
                         }
+                        // Drafts were saved while their source was still attached.
+                        self.request_edit = None;
+                        self.dialog = None;
                         self.composer = ui::editor("", &self.theme, "Write a message…");
                         self.generation = self.generation.saturating_add(1);
                     }
@@ -686,6 +823,7 @@ impl App {
                         .is_some_and(|env| env.environment_id == item.source.environment),
                     "Source environment changed"
                 );
+                surface.selected_question = Some(item.key.clone());
                 surface.loading_question = Some(item.key);
                 if self.active.as_ref().is_none_or(|active| {
                     active.profile != item.source.profile || active.thread != item.source.thread
@@ -728,8 +866,20 @@ impl App {
             Action::ModalSubmit => self.accept_surface_dialog()?,
             Action::CloseModal => {
                 self.preserve_open_form()?;
-                self.dialog = None;
-                self.cancel_modal_read();
+                if matches!(
+                    self.modal().and_then(|modal| modal.model),
+                    Some(ui::ModelDialog::OptionValues { .. })
+                ) && self.model_edit.as_ref().is_some_and(|edit| {
+                    edit.option_origin == Some(ModelOptionOrigin::Configuration)
+                }) {
+                    self.model_menu()?;
+                } else {
+                    if let Some(edit) = &mut self.model_edit {
+                        edit.option_origin = None;
+                    }
+                    self.dialog = None;
+                    self.cancel_modal_read();
+                }
             }
             Action::CopyId => {
                 if let Some(active) = &self.active {

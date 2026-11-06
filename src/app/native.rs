@@ -239,7 +239,8 @@ impl App {
                 self.save_launch()?;
                 self.launch_menu()?;
             }
-            ReadKind::Models(scope) => {
+            ReadKind::Models(scope) | ReadKind::Effort(scope) => {
+                let effort = matches!(kind, ReadKind::Effort(_));
                 let a = self.active.as_ref().context("Conversation closed")?;
                 ensure!(
                     value["threadId"] == a.thread,
@@ -252,20 +253,46 @@ impl App {
                 let desired = self
                     .model_edit
                     .take()
-                    .filter(|e| e.catalog.is_null())
-                    .map(|e| e.selection);
+                    .filter(|e| {
+                        e.environment_id == self.environments[a.profile].environment_id
+                            && (e.catalog.is_null()
+                                || effort
+                                    && e.scope == scope
+                                    && e.catalog["threadId"] == a.thread
+                                    && e.original == value["current"])
+                    })
+                    .map(|e| e.selection)
+                    .or_else(|| {
+                        if effort && scope == ModelScope::Next {
+                            let key = format!(
+                                "{}/{}",
+                                self.environments[a.profile].environment_id, a.thread
+                            );
+                            let selection =
+                                self.state.snapshot()["modelOverrides"][key]["selection"].clone();
+                            selection.is_object().then_some(selection)
+                        } else {
+                            None
+                        }
+                    });
                 let selection = desired.unwrap_or_else(|| value["current"].clone());
                 ensure!(
                     selection["instanceId"] == value["current"]["instanceId"],
                     "Favorite belongs to another native provider instance"
                 );
                 self.model_edit = Some(ModelEdit {
+                    option_origin: None,
+                    environment_id: self.environments[a.profile].environment_id.clone(),
                     scope,
                     original: value["current"].clone(),
                     selection,
                     catalog: value,
                 });
-                self.model_menu()?;
+                if effort {
+                    self.effort_menu()?;
+                } else {
+                    self.model_menu()?;
+                }
             }
             ReadKind::Review => self.read_review(value)?,
             ReadKind::Activity => {
@@ -496,11 +523,8 @@ impl App {
             "Input exceeds the editor limit"
         );
         match target {
-            InputTarget::ContextRevisit(row) => self.state.set_draft(
-                &row.source.environment_id,
-                &format!("context-revisit-{}", row.id),
-                text,
-            )?,
+            InputTarget::Search => self.search_query = text.to_owned(),
+            InputTarget::ContextRevisit(row) => self.context_revisit_edited(row, text)?,
             InputTarget::LaunchTitle => {
                 ensure!(text.len() <= 512, "Title exceeds 512 bytes");
                 self.launch.as_mut().context("Launch form expired")?.title = text.to_owned();
@@ -540,36 +564,38 @@ impl App {
     pub(super) fn submit_text(&mut self, target: InputTarget) -> Result<()> {
         let text = self.modal_editor.lines().join("\n");
         self.preserve_form_edit(&target, &text)?;
-        self.dialog = None;
-        match target {
-            InputTarget::ContextRevisit(row) => self.context_revisit(&row, &text)?,
-            InputTarget::ContextQuery(scope) => self.context_recall(scope, &text, false, 0)?,
-            InputTarget::Search => {
-                self.filter = text;
-                self.refresh(false, true)?;
-            }
-            InputTarget::LoadedSearch => self.loaded_search(&text)?,
-            InputTarget::LaunchTitle | InputTarget::LaunchMessage => self.launch_menu()?,
-            InputTarget::Batch => self.prepare_batch(&text)?,
-            InputTarget::Question => self.question_next()?,
-            InputTarget::Favorite => {
-                let name = text.trim();
-                ensure!(
-                    !name.is_empty() && name.len() <= 80,
-                    "Favorite needs a name of at most 80 bytes"
-                );
-                let edit = self.model_edit.as_ref().context("Model review expired")?;
-                let profile = if edit.scope == ModelScope::Launch {
-                    self.launch
-                        .as_ref()
-                        .context("Launch review expired")?
-                        .profile
-                } else {
-                    self.active.as_ref().context("Conversation closed")?.profile
-                };
-                let env = self.environments[profile].environment_id.clone();
-                let selection = edit.selection.clone();
-                self.state.update(|v| {
+        self.invalidate_context_view();
+        let previous = self.dialog.take();
+        let result = (|| {
+            match target {
+                InputTarget::ContextRevisit(row) => self.context_revisit(&row, &text)?,
+                InputTarget::ContextQuery(scope) => self.context_recall(scope, &text, false, 0)?,
+                InputTarget::Search => {
+                    self.filter = text;
+                    self.refresh(false, true)?;
+                }
+                InputTarget::LoadedSearch => self.loaded_search(&text)?,
+                InputTarget::LaunchTitle | InputTarget::LaunchMessage => self.launch_menu()?,
+                InputTarget::Batch => self.prepare_batch(&text)?,
+                InputTarget::Question => self.question_next()?,
+                InputTarget::Favorite => {
+                    let name = text.trim();
+                    ensure!(
+                        !name.is_empty() && name.len() <= 80,
+                        "Favorite needs a name of at most 80 bytes"
+                    );
+                    let edit = self.model_edit.as_ref().context("Model review expired")?;
+                    let profile = if edit.scope == ModelScope::Launch {
+                        self.launch
+                            .as_ref()
+                            .context("Launch review expired")?
+                            .profile
+                    } else {
+                        self.active.as_ref().context("Conversation closed")?.profile
+                    };
+                    let env = self.environments[profile].environment_id.clone();
+                    let selection = edit.selection.clone();
+                    self.state.update(|v| {
                     if !v["modelPresets"].is_object() {
                         v["modelPresets"] = json!({});
                     }
@@ -585,11 +611,16 @@ impl App {
                     v["modelPresets"][&env] = json!(presets);
                     Ok(())
                 })?;
-                self.model_menu()?;
+                    self.model_menu()?;
+                }
+                InputTarget::Command => self.command(&text)?,
             }
-            InputTarget::Command => self.command(&text)?,
+            Ok(())
+        })();
+        if result.is_err() && self.dialog.is_none() {
+            self.dialog = previous;
         }
-        Ok(())
+        result
     }
     pub(super) fn toggle_workspace(&mut self) -> Result<()> {
         let l = self.launch.as_mut().context("Launch review expired")?;
@@ -694,6 +725,8 @@ impl App {
     pub(super) fn launch_models(&mut self) -> Result<()> {
         let l = self.launch.as_ref().context("Launch review expired")?;
         self.model_edit = Some(ModelEdit {
+            option_origin: None,
+            environment_id: self.environments[l.profile].environment_id.clone(),
             scope: ModelScope::Launch,
             catalog: l.defaults["catalog"].clone(),
             original: l.defaults["modelSelection"].clone(),
@@ -702,6 +735,9 @@ impl App {
         self.model_menu()
     }
     pub(super) fn model_menu(&mut self) -> Result<()> {
+        if let Some(edit) = &mut self.model_edit {
+            edit.option_origin = None;
+        }
         let edit = self.model_edit.as_ref().context("Model review expired")?;
         let selected = string(&edit.selection, "model");
         let mut choices = Vec::new();
@@ -795,6 +831,37 @@ impl App {
         }
         self.model_menu()
     }
+    fn effort_menu(&mut self) -> Result<()> {
+        let edit = self.model_edit.as_ref().context("Model review expired")?;
+        let id = array(&edit.catalog, "models")
+            .iter()
+            .find(|model| model["slug"] == edit.selection["model"])
+            .and_then(|model| {
+                // Use documented native identities, never a label guess.
+                // The host still owns every choice and its native label.
+                let mut options = array(model, "options").iter().filter(|option| {
+                    matches!(option["id"].as_str(), Some("reasoningEffort" | "effort"))
+                        && option["type"] == "select"
+                        && !array(option, "options").is_empty()
+                });
+                let option = options.next()?;
+                options.next().is_none().then(|| string(option, "id"))
+            });
+        if let Some(id) = id {
+            self.choose_option(&id)?;
+            self.model_edit
+                .as_mut()
+                .context("Model review expired")?
+                .option_origin = Some(ModelOptionOrigin::Direct);
+        } else {
+            self.menu(
+                "Effort unavailable",
+                "",
+                vec![Choice::new("Model", "", Intent::Command("model".into()))],
+            );
+        }
+        Ok(())
+    }
     pub(super) fn choose_option(&mut self, id: &str) -> Result<()> {
         let edit = self.model_edit.as_ref().context("Model review expired")?;
         let model = array(&edit.catalog, "models")
@@ -827,11 +894,24 @@ impl App {
                 ));
             }
         }
+        let staged = array(&edit.selection, "options")
+            .iter()
+            .find(|value| value["id"] == id)
+            .map(|value| &value["value"]);
+        for choice in &mut choices {
+            if let Intent::OptionValue(_, value) = &choice.intent {
+                choice.checked = staged.map_or(value.is_null(), |current| current == value);
+            }
+        }
         self.menu(
             string(option, "label"),
             string(option, "description"),
             choices,
         );
+        self.model_edit
+            .as_mut()
+            .context("Model review expired")?
+            .option_origin = Some(ModelOptionOrigin::Configuration);
         Ok(())
     }
     pub(super) fn apply_model(&mut self) -> Result<()> {
@@ -897,6 +977,7 @@ impl App {
         Ok(())
     }
     pub(super) fn review_request(&mut self, request: Value) -> Result<()> {
+        self.preserve_open_form()?;
         self.ensure_request(&request)?;
         match string(&request, "kind").as_str() {
             "approval_request" => {
@@ -946,6 +1027,10 @@ impl App {
                         answers.insert(string(q, "id"), answer.clone());
                     }
                 }
+                // The editor still belongs to the previous question. Retire it
+                // before changing the request/index so constructors cannot flush
+                // its bytes into a different field on the new form.
+                self.dialog = None;
                 self.request_edit = Some(RequestEdit {
                     request,
                     index: 0,
@@ -978,7 +1063,7 @@ impl App {
         self.ensure_request(&edit.request)?;
         let qs = array(&edit.request, "questions");
         if edit.index >= qs.len() {
-            let preview = serde_json::to_string_pretty(&edit.answers)?;
+            let preview = question_review(qs, &edit.answers);
             self.menu(
                 "Review answers",
                 preview,
@@ -1125,6 +1210,49 @@ impl App {
         self.request_edit = None;
         Ok(())
     }
+}
+
+fn question_review(questions: &[Value], answers: &serde_json::Map<String, Value>) -> String {
+    questions
+        .iter()
+        .map(|question| {
+            let mut lines = Vec::new();
+            let header = string(question, "header");
+            if !header.is_empty() {
+                lines.push(header);
+            }
+            let wording = string(question, "question");
+            if !wording.is_empty() {
+                lines.push(wording);
+            }
+            let answer = answers.get(&string(question, "id"));
+            let values = match answer {
+                Some(Value::Array(values)) => values.iter().collect::<Vec<_>>(),
+                Some(value) => vec![value],
+                None => Vec::new(),
+            };
+            if values.is_empty() {
+                lines.push("—".into());
+            }
+            for value in values {
+                let label = array(question, "options")
+                    .iter()
+                    .find(|option| {
+                        let offered = option
+                            .get("value")
+                            .filter(|value| value.is_string())
+                            .unwrap_or(&option["label"]);
+                        offered == value
+                    })
+                    .map(|option| string(option, "label"))
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or_else(|| value.as_str().unwrap_or("").to_owned());
+                lines.push(label);
+            }
+            lines.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn validate_selection(selection: &Value, catalog: &Value) -> Result<()> {

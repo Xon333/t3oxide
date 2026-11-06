@@ -127,7 +127,7 @@ pub(crate) struct BatchBinding {
 }
 #[derive(Default)]
 pub(crate) struct WorkspaceState {
-    project_scope: Option<Value>,
+    pub(super) project_scope: Option<Value>,
     minimum_priority: u64,
     search: String,
     ranks: Value,
@@ -309,6 +309,7 @@ impl App {
                 })?;
             }
             "copy" => self.copy_menu(args)?,
+            "copy-draft" => self.copy_menu("draft")?,
             "project" | "browse-scope" => self.project_scope_menu()?,
             "priority" => self.rank_menu(false)?,
             "project-order" => self.rank_menu(true)?,
@@ -368,7 +369,11 @@ impl App {
                     "Search conversations",
                     "",
                     InputTarget::Search,
-                    self.filter.clone(),
+                    if self.search_query.is_empty() {
+                        self.filter.clone()
+                    } else {
+                        self.search_query.clone()
+                    },
                 );
             }
             WorkspaceAction::SearchScope(scope) => {
@@ -377,7 +382,11 @@ impl App {
                     "Search conversations",
                     "",
                     InputTarget::Search,
-                    self.filter.clone(),
+                    if self.search_query.is_empty() {
+                        self.filter.clone()
+                    } else {
+                        self.search_query.clone()
+                    },
                 );
             }
             WorkspaceAction::Scope(scope) => {
@@ -603,6 +612,8 @@ impl App {
             } => {
                 source.check(self)?;
                 self.model_edit = Some(ModelEdit {
+                    option_origin: None,
+                    environment_id: source.environment.clone(),
                     scope,
                     catalog: Value::Null,
                     original: Value::Null,
