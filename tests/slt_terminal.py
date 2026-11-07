@@ -444,6 +444,13 @@ def run(binary, directory):
         terminal.send(F2)
         terminal.wait("Prompt")
         click(terminal, "Search")
+        terminal.wait("Switch conversation")
+        terminal.paste("refactor")
+        terminal.wait("Finished refactor")
+        assert "Scope" not in terminal.text, "the quick switcher has no compulsory scope step"
+        assert len(native_payloads(paths)) == 1, "quick filtering cannot dispatch a mutation"
+        terminal.send(ESC)
+        terminal.command("search")
         terminal.wait("Search conversations")
         terminal.wait("Scope")
         terminal.paste("refactor")
@@ -451,7 +458,7 @@ def run(binary, directory):
         terminal.wait("Finished refactor")
         assert len(native_payloads(paths)) == 1, "search remains read-only"
         terminal.send(ESC)
-        click(terminal, "Search")
+        terminal.command("search")
         click(terminal, "Scope")
         terminal.wait("Empty project")
         terminal.send(ESC)
@@ -475,7 +482,7 @@ def run(binary, directory):
         "conversation tabs autosave independent drafts and restore them after restart",
         "Ctrl+Enter Press+Release dispatches exactly one native send with no added newline",
         "typed command Enter opens help without dispatch or newline and retains unsent text",
-        "search starts with current-project text entry and Scope retains a zero-question project",
+        "Search opens a direct fuzzy switcher; explicit native search retains current-project entry and zero-question scope",
     ]
 
 

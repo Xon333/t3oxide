@@ -6139,6 +6139,225 @@ fn r9_input(
 }
 
 #[test]
+fn switcher_slt_highlight_survives_metadata_refresh_and_reorder() {
+    for list_focus in [false, true] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open(0);
+        fixture.app.command("switch").unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        if list_focus {
+            transcript_tab_to(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                "modal-choices",
+                false,
+            );
+        }
+        // The same thread ID exists in both environments: preserve the whole source.
+        let target = fixture
+            .app
+            .dialog
+            .as_ref()
+            .unwrap()
+            .choices
+            .iter()
+            .position(|c| matches!(&c.intent, Intent::Open(1, id) if id == "thread-a"))
+            .unwrap();
+        assert!(target > 0);
+        for _ in 0..target {
+            r9_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Down)
+                    .build(),
+            );
+        }
+        fixture.app.refresh(false, false).unwrap();
+        assert!(
+            fixture
+                .app
+                .dialog
+                .as_ref()
+                .unwrap()
+                .description
+                .contains("Loading")
+        );
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        let selected_source = |app: &App| {
+            let dialog = app.dialog.as_ref().unwrap();
+            match &dialog.choices[dialog.selected].intent {
+                Intent::Open(profile, thread) => (*profile, thread.clone()),
+                _ => panic!("switcher source intent"),
+            }
+        };
+        assert_eq!(
+            selected_source(&fixture.app),
+            (1, "thread-a".into()),
+            "loading admission lost the SLT highlight, list_focus={list_focus}"
+        );
+        fixture.drain_pages();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        assert_eq!(selected_source(&fixture.app), (1, "thread-a".into()));
+        let old_index = fixture.app.dialog.as_ref().unwrap().selected;
+        fixture.app.hosts[1].page.threads.rotate_left(1);
+        fixture.app.rebuild();
+        fixture.app.observe_slt_layout(&surface);
+        assert_eq!(
+            selected_source(&fixture.app),
+            (1, "thread-a".into()),
+            "an old surface stamp must not overwrite the refreshed identity"
+        );
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        assert_eq!(selected_source(&fixture.app), (1, "thread-a".into()));
+        assert_ne!(fixture.app.dialog.as_ref().unwrap().selected, old_index);
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Enter)
+                .build(),
+        );
+        let active = fixture.app.active.as_ref().unwrap();
+        assert_eq!((active.profile, active.thread.as_str()), (1, "thread-a"));
+        assert!(fixture.app.dialog.is_none());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture.app.active.as_ref().unwrap().navigating {
+            let event = fixture
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("switcher destination attachment");
+            fixture.app.handle(event).unwrap();
+        }
+    }
+}
+
+#[test]
+fn switcher_slt_query_edit_resets_the_ranked_selection() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.app.command("switch").unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend =
+        crate::slt_ui::tests::ResizableBackend::new(70, 22).with_activation_boundaries();
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Down)
+            .build(),
+    );
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().paste("thread-").build(),
+    );
+    assert_eq!(fixture.app.dialog.as_ref().unwrap().selected, 0);
+    let expected = match &fixture.app.dialog.as_ref().unwrap().choices[0].intent {
+        Intent::Open(profile, id) => (*profile, id.clone()),
+        _ => panic!("first ranked source"),
+    };
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+    );
+    let active = fixture.app.active.as_ref().unwrap();
+    assert_eq!((active.profile, active.thread.clone()), expected);
+}
+
+#[test]
+fn switcher_slt_same_title_reentry_focuses_query_and_preserves_drafts() {
+    for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open(0);
+        fixture
+            .app
+            .replace_text("Unrelated 日本語 draft\ninterior caret".into());
+        fixture.app.composer.move_cursor(CursorMove::Back);
+        fixture.app.flush_draft().unwrap();
+        let draft = fixture.app.text();
+        let caret = fixture.app.composer.cursor();
+        let pending = json!({"id":"original-uncertain", "environmentId":"native-1", "threadId":"thread-a", "op":"send", "message":"retained"});
+        fixture
+            .app
+            .state
+            .save_pending("native-1", false, pending)
+            .unwrap();
+        fixture.app.state.save_pending("native-0", true,
+            json!({"id":"original-stop", "environmentId":"native-0", "threadId":"thread-review", "runId":"retained-run", "op":"stop"})).unwrap();
+        let saved = fixture.app.state.snapshot();
+        let native = fixture
+            .native_states
+            .iter()
+            .map(|p| fs::read(p).ok())
+            .collect::<Vec<_>>();
+        fixture.app.command("switch").unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(width, height).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        transcript_tab_to(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            "modal-choices",
+            false,
+        );
+        let focus = r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_with(::slt::KeyCode::Char('f'), ::slt::KeyModifiers::CONTROL)
+                .key('j')
+                .paste(" 日本語 café e\u{301}")
+                .build(),
+        );
+        assert_eq!(focus.as_deref(), Some("modal-editor"), "{width}x{height}");
+        assert_eq!(
+            fixture.app.modal_editor.lines().join("\n"),
+            "j 日本語 café e\u{301}"
+        );
+        assert!(matches!(
+            fixture.app.dialog.as_ref().unwrap().kind,
+            DialogKind::Switcher
+        ));
+        let active = fixture.app.active.as_ref().unwrap();
+        assert_eq!((active.profile, active.thread.as_str()), (0, "thread-a"));
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        let after = fixture.app.state.snapshot();
+        for field in ["drafts", "pending", "pendingStops"] {
+            assert_eq!(after[field], saved[field], "{field} at {width}x{height}");
+        }
+        assert_eq!(
+            fixture
+                .native_states
+                .iter()
+                .map(|p| fs::read(p).ok())
+                .collect::<Vec<_>>(),
+            native
+        );
+    }
+}
+
+#[test]
 fn r9_compact_retained_form_keeps_review_and_source_actions_without_mutation() {
     for context in [false, true] {
         for keyboard in [false, true] {

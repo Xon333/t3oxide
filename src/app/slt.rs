@@ -664,6 +664,18 @@ impl App {
     }
 
     pub(super) fn observe_slt_layout(&mut self, surface: &SurfaceState) {
+        if let Some((stamp, selected)) = surface.modal_selection()
+            && self
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| matches!(dialog.kind, DialogKind::Switcher))
+            && self
+                .modal()
+                .is_some_and(|modal| modal.action_stamp == stamp)
+            && let Some(dialog) = &mut self.dialog
+        {
+            dialog.selected = selected.min(dialog.choices.len().saturating_sub(1));
+        }
         self.context_selection = surface.attention_mode.then(|| context::Selection {
             source: surface.selected_source().cloned(),
             content: surface
@@ -911,7 +923,7 @@ impl App {
                 if self
                     .dialog
                     .as_ref()
-                    .is_some_and(|d| matches!(d.kind, DialogKind::Palette))
+                    .is_some_and(|d| matches!(d.kind, DialogKind::Palette | DialogKind::Switcher))
                 {
                     self.filter_palette();
                 } else {
@@ -960,7 +972,7 @@ impl App {
         if let Some(dialog) = self.dialog.clone() {
             match dialog.kind {
                 DialogKind::Text(target) => self.submit_text(target)?,
-                DialogKind::Menu | DialogKind::Palette => {
+                DialogKind::Menu | DialogKind::Palette | DialogKind::Switcher => {
                     if let Some(choice) = dialog.choices.get(dialog.selected) {
                         self.dispatch(choice.intent.clone())?;
                     }

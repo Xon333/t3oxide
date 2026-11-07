@@ -16,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 pub(super) struct State {
     choices: ListState,
     search: TextInputState,
+    fuzzy_title: String,
     description: ScrollState,
     detail: ScrollState,
     choice_detail: ScrollState,
@@ -748,14 +749,22 @@ pub(super) fn draw(
     actions: &mut Vec<Action>,
 ) {
     if modal.model.is_some() {
+        state.dialog.fuzzy_title.clear();
         draw_model(ctx, modal, state, actions);
         return;
     }
     state.dialog.model.expanded = false;
     state.dialog.model.configuration = None;
+    let switcher = modal.editor && modal.title == "Switch conversation";
     let palette = modal.editor && modal.title == "Commands";
+    let fuzzy = palette || switcher;
     let search = modal.editor && modal.title == "Search conversations";
-    let opening = state.modal_stamp.is_none();
+    let opening = state.modal_stamp.is_none() || fuzzy && state.dialog.fuzzy_title != modal.title;
+    if fuzzy {
+        state.dialog.fuzzy_title.clone_from(&modal.title);
+    } else {
+        state.dialog.fuzzy_title.clear();
+    }
     let changed = state.modal_stamp != Some(modal.action_stamp);
     let natural_width = modal
         .items
@@ -766,7 +775,7 @@ pub(super) fn draw(
         .max(36);
     let width = ctx.width().saturating_sub(4).clamp(
         1,
-        if palette {
+        if fuzzy {
             60
         } else if !modal.editor && modal.detail.is_empty() {
             natural_width.min(64)
@@ -836,12 +845,17 @@ pub(super) fn draw(
             .position(|index| *index == state.modal_selected)
             .unwrap_or(0),
     );
-    if palette {
+    if fuzzy {
         let value = legacy.lines().join(" ");
         if state.dialog.search.value != value {
             state.dialog.search.set_value(value);
         }
-        state.dialog.search.placeholder = "Search commands".into();
+        state.dialog.search.placeholder = if switcher {
+            "Find loaded conversations"
+        } else {
+            "Search commands"
+        }
+        .into();
     } else if modal.editor {
         sync_editor(&mut state.modal_editor, legacy);
         state.modal_editor.wrap_width = Some(if search {
@@ -851,6 +865,7 @@ pub(super) fn draw(
         });
     }
 
+    let mut query_changed = false;
     ctx.modal(|ctx| {
         let theme = *ctx.theme();
         ctx.group("t3oxide.modal")
@@ -861,7 +876,8 @@ pub(super) fn draw(
             .focus_within_border_fg(theme.primary)
             .bg(theme.bg)
             .align(Align::Start)
-            .p(1)
+            .px(1)
+            .py(u32::from(!switcher || height >= 14))
             .gap(spacing)
             .col(|ctx| {
                 ctx.container().w(inner_width).bg(theme.surface).row(|ctx| {
@@ -916,7 +932,9 @@ pub(super) fn draw(
                         });
                 }
 
-                let editor_rows = if palette || search {
+                let editor_rows = if switcher {
+                    1
+                } else if palette || search {
                     3
                 } else if modal.editor {
                     let visual_rows =
@@ -925,14 +943,24 @@ pub(super) fn draw(
                 } else {
                     0
                 };
-                if palette {
+                if fuzzy {
                     let focused = ctx.register_focusable_named("modal-editor");
-                    palette_navigation(ctx, focused, modal, state, actions);
+                    if !switcher || !changed {
+                        palette_navigation(ctx, focused, modal, state, actions);
+                    }
                     let mut response = slt::Response::default();
                     ctx.group("t3oxide.query").w(inner_width).col(|ctx| {
                         response = ctx.text_input(&mut state.dialog.search);
                     });
                     if response.changed {
+                        query_changed = true;
+                        if switcher {
+                            // A queued Enter belongs to the old query, never
+                            // the row that filtering will put at that index.
+                            actions.retain(|action| {
+                                !matches!(action, Action::ModalChoice(_) | Action::ModalSubmit)
+                            });
+                        }
                         *legacy = ui::editor(&state.dialog.search.value, "violet", "");
                         state.modal_selected = 0;
                         state.dialog.choices.set_selected_index(0);
@@ -1015,10 +1043,11 @@ pub(super) fn draw(
                     }
                     // The list uses one focus slot and its own row hit map.
                     // A changed offer may have different actions at old coordinates.
-                    let activate = !changed && response.clicked;
+                    let activate = !changed && !query_changed && response.clicked;
                     if activate
                         || focused
                             && !changed
+                            && !query_changed
                             && (ctx.consume_key_code(KeyCode::Enter) || ctx.consume_key(' '))
                     {
                         actions.push(Action::ModalChoice(selected));
@@ -1043,7 +1072,11 @@ pub(super) fn draw(
                                     .to_lowercase()
                                     .contains(&word.to_lowercase())
                             }));
-                    let description_rows = if palette {
+                    let description_rows = if switcher {
+                        wrapped_rows(&description, inner_width)
+                            .min(3)
+                            .min(available.saturating_sub(list_rows).max(1))
+                    } else if palette {
                         // A secondary match must not recenter the modal and
                         // move rows underneath an already queued pointer.
                         available.saturating_sub(list_rows).clamp(1, 2)
@@ -1101,6 +1134,8 @@ pub(super) fn draw(
                         inner_width,
                         available,
                     );
+                } else if switcher {
+                    ctx.text("No loaded matches").dim();
                 } else if palette {
                     ctx.text("No matching commands").dim();
                 }
@@ -1127,7 +1162,7 @@ pub(super) fn draw(
                         if secondary_button(ctx, "Close").clicked && !changed {
                             actions.push(Action::CloseModal);
                         }
-                        if modal.editor && !palette {
+                        if modal.editor && !fuzzy {
                             ctx.spacer();
                             ctx.register_focusable_named("modal-submit");
                             if primary_button(ctx, "Continue", true).clicked && !changed {
@@ -1141,7 +1176,7 @@ pub(super) fn draw(
             });
     });
     state.modal_stamp = Some(modal.action_stamp);
-    if opening || changed && !palette {
+    if opening || changed && !fuzzy {
         let focus = if modal.editor {
             "modal-editor".into()
         } else if footer_actions.contains(&state.modal_selected) {
@@ -2380,5 +2415,184 @@ mod tests {
         );
         assert!(matches!(actions.as_slice(), [Action::ModalChoice(0)]));
         assert_eq!(editor.lines().join("\n"), "Retained draft");
+    }
+}
+
+#[cfg(test)]
+mod switcher_tests {
+    use super::*;
+
+    #[test]
+    fn narrow_switcher_keeps_selected_source_details_visible() {
+        let mut backend = slt::TestBackend::new(40, 12);
+        let mut state = SurfaceState::new();
+        let mut editor = ui::editor("", "violet", "");
+        let modal = ui::Modal {
+            title: "Switch conversation".into(),
+            description: "Incomplete · Loaded conversations only · 1 match".into(),
+            editor: true,
+            action_stamp: 1,
+            items: vec![ui::ModalItem {
+                label: "Same conversation · Same project · Same environment".into(),
+                description: "Environment: fixture-env\nProject: project-a\nThread: thread-review"
+                    .into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new());
+                ctx.focus_by_name("modal-choice-detail");
+            });
+        }
+        backend.run_with_events(
+            slt::EventBuilder::new().key_code(KeyCode::End).build(),
+            |ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new());
+            },
+        );
+        backend.assert_contains("Thread: thread-review");
+    }
+
+    #[test]
+    fn switcher_entry_from_command_choices_focuses_the_query() {
+        let mut backend = slt::TestBackend::new(70, 22);
+        let mut state = SurfaceState::new();
+        let mut editor = ui::editor("switch", "violet", "");
+        let mut modal = ui::Modal {
+            title: "Commands".into(),
+            editor: true,
+            action_stamp: 1,
+            items: vec![ui::ModalItem {
+                label: "Switch conversation".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new());
+                ctx.focus_by_name("modal-choices");
+            });
+        }
+        // Choosing a command can replace its modal without an intervening
+        // frame with no modal. The new switcher still owns the next typing.
+        modal.title = "Switch conversation".into();
+        modal.action_stamp = 2;
+        modal.items[0].label = "Same conversation".into();
+        editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new()));
+        }
+        let mut actions = Vec::new();
+        backend.run_with_events(
+            slt::EventBuilder::new().paste("thread-review").build(),
+            |ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+            },
+        );
+        assert_eq!(editor.lines().join(""), "thread-review");
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, Action::ModalEditChanged))
+        );
+    }
+
+    #[test]
+    fn switcher_query_and_refresh_must_settle_before_keyboard_activation_at_all_sizes() {
+        for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+            let mut backend = slt::TestBackend::new(width, height);
+            let mut state = SurfaceState::new();
+            let mut editor = ui::editor("", "violet", "");
+            let mut modal = ui::Modal {
+                title: "Switch conversation".into(),
+                description: "Loaded conversations only · incomplete".into(),
+                editor: true,
+                action_stamp: 1,
+                items: vec![ui::ModalItem {
+                    label: "Same title · Same project · Same environment".into(),
+                    description: "Environment: native-1\nProject: project-1\nThread: shared-thread"
+                        .into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            for _ in 0..3 {
+                backend.render(|ctx| draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new()));
+            }
+            backend.assert_contains("Switch conversation");
+            let mut actions = Vec::new();
+            backend.run_with_events(
+                slt::EventBuilder::new()
+                    .paste("native-1")
+                    .key_code(KeyCode::Enter)
+                    .build(),
+                |ctx| draw(ctx, &modal, &mut editor, &mut state, &mut actions),
+            );
+            assert_eq!(editor.lines().join(""), "native-1", "{width}x{height}");
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::ModalEditChanged))
+            );
+            assert!(
+                !actions
+                    .iter()
+                    .any(|a| matches!(a, Action::ModalChoice(_) | Action::ModalSubmit))
+            );
+            // A refreshed row at the same index cannot consume an old Enter.
+            modal.items[0].description =
+                "Environment: native-2\nProject: project-2\nThread: shared-thread".into();
+            modal.action_stamp = 2;
+            actions.clear();
+            backend.run_with_events(
+                slt::EventBuilder::new().key_code(KeyCode::Enter).build(),
+                |ctx| {
+                    draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+                },
+            );
+            assert!(
+                !actions
+                    .iter()
+                    .any(|a| matches!(a, Action::ModalChoice(_) | Action::ModalSubmit))
+            );
+            actions.clear();
+            backend.run_with_events(
+                slt::EventBuilder::new().key_code(KeyCode::Enter).build(),
+                |ctx| {
+                    draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+                },
+            );
+            assert!(
+                matches!(actions.as_slice(), [Action::ModalChoice(0)]),
+                "{width}x{height}: {actions:?}"
+            );
+            modal.items.clear();
+            modal.action_stamp = 3;
+            for _ in 0..3 {
+                backend.render(|ctx| draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new()));
+            }
+            actions.clear();
+            backend.run_with_events(
+                slt::EventBuilder::new().key_code(KeyCode::Enter).build(),
+                |ctx| {
+                    draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+                },
+            );
+            assert!(
+                actions.is_empty(),
+                "empty results cannot open or submit: {actions:?}"
+            );
+            actions.clear();
+            backend.run_with_events(
+                slt::EventBuilder::new().key_code(KeyCode::Esc).build(),
+                |ctx| {
+                    draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+                },
+            );
+            assert!(matches!(actions.as_slice(), [Action::CloseModal]));
+        }
     }
 }

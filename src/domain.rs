@@ -516,6 +516,12 @@ pub const ACTIONS: &[Action] = &[
         key: "",
     },
     Action {
+        name: "switch",
+        label: "Switch conversation",
+        description: "Fuzzy find loaded conversations and open the exact source in an internal tab",
+        key: "Ctrl+F · /switch · /threads",
+    },
+    Action {
         name: "env",
         label: "Environment scope",
         description: "Browse one or all configured environments",
@@ -543,7 +549,7 @@ pub const ACTIONS: &[Action] = &[
         name: "search",
         label: "Search server conversations",
         description: "Explicit native recent-message search; results are bounded",
-        key: "Ctrl+F",
+        key: "/search",
     },
     Action {
         name: "search-scope",

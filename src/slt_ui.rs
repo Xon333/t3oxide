@@ -166,6 +166,10 @@ pub struct SurfaceState {
 }
 
 impl SurfaceState {
+    pub(crate) fn modal_selection(&self) -> Option<(u64, usize)> {
+        self.modal_stamp.map(|stamp| (stamp, self.modal_selected))
+    }
+
     pub(crate) fn selected_content(&self) -> Option<&ContentItem> {
         attention::selected_content(self)
     }
@@ -686,7 +690,7 @@ fn draw_header(
             }
             Some(1) => state.attention_mode = false,
             Some(2) => state.attention_mode = true,
-            Some(3) => actions.push(Action::Command("search".into())),
+            Some(3) => actions.push(Action::Command("switch".into())),
             Some(4) => actions.push(Action::Command("palette".into())),
             Some(5) => {
                 toggle_context(state, width);
@@ -954,7 +958,7 @@ fn draw_tabs(ctx: &mut Context, state: &mut SurfaceState, width: u32, actions: &
         let add = ctx.interaction();
         ctx.text(" + ").dim();
         if add.clicked {
-            actions.push(Action::Command("search".into()));
+            actions.push(Action::Command("switch".into()));
         }
     });
     if ctx.focused_name() == Some("conversation-tabs") && ctx.consume_key_code(KeyCode::Delete) {
@@ -1668,7 +1672,10 @@ fn global_actions(
             KeyCode::Char('s') if control => Some(Action::Stop),
             KeyCode::Char('q') if command => Some(Action::Command("quit".into())),
             KeyCode::Char('p') if command => Some(Action::Command("palette".into())),
-            KeyCode::Char('f') if command => Some(Action::Command("search".into())),
+            KeyCode::Char('f') if command => {
+                ctx.focus_by_name("modal-editor");
+                Some(Action::Command("switch".into()))
+            }
             KeyCode::Char('r') if control => Some(Action::Command("refresh".into())),
             KeyCode::Char('y') if control => Some(Action::Command("requests".into())),
             KeyCode::Char('i') if command => Some(Action::CopyId),

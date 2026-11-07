@@ -1,5 +1,61 @@
 # Rust / SLT verification
 
+## Internal fuzzy switcher — 2026-11-07
+
+Search, Ctrl+F, the internal-tab add control, `/switch` and `/threads` now open
+one compact fuzzy picker over loaded conversations. The existing matcher ranks
+titles, project/environment labels and exact source IDs; selection opens the
+original source through the existing internal-tab path. Loading, unavailable
+and incomplete inventories stay labelled. Explicit native message search
+remains available through `/search` and Commands, with its existing scope.
+
+Final source passed **315 Rust tests** (300 library, 15 integration),
+workspace/vendor formatting and both Clippy checks. Root qualification found
+and corrected two gaps beyond the initial delegate regressions: entry from
+Commands could leave typing outside the query, and vertical padding hid source
+details at 40×12. Both have retained failing regressions and passing corrections.
+Consequential review found two further integration defects, both reproduced
+before correction: metadata refresh could restore the controller's old row,
+and same-title Ctrl+F re-entry could retain list focus. The settled SLT highlight
+now feeds back only under a matching source stamp; metadata rebuilds preserve
+the exact environment/thread while query edits reset ranked selection. Explicit
+Ctrl+F entry requests query focus. Real-App regressions cover query/list arrows,
+loading admission/completion, reordering, stale surface rejection, exact
+cross-environment attachment and queued typing/paste at all three sizes.
+The fresh arm64 release is **9,635,808 bytes**, SHA256
+`5a19636a0146fb3a26cf73dc2f5124b8c32d66dc35283bf19ff700dd6fd956a7`;
+version and strict signature verification passed. No dependency changed; the
+prior minimum-version check remains scoped evidence for unchanged Rust APIs.
+
+The earlier controlled PTY invocation passed **19 checks** and retained 12 frames.
+At 140×38, 70×22 and 40×12, keyboard navigation reached exact source details;
+filtering duplicate titles by thread ID attached the intended fixture source
+and restored the original tab draft on return. Fresh fixture subscriptions
+verified exact thread IDs independently of clipped transcript headers. Empty
+Enter was inert, and original draft/pending records stayed exact. Shared
+Commands, focus, explicit native search, input ordering and restart checks also
+passed. All seven product processes were normally waited with exit zero; the
+tracked source set remained unchanged during that invocation.
+
+The corrected release then passed three affected PTY scenarios at 140×38,
+70×22 and 40×12, retaining six frames. An actual metadata read preserves a
+non-first highlight; same-title Ctrl+F accepts queued typing/paste and attaches
+the selected original source only after Enter. Drafts, nonempty pending and
+pendingStops remain exact, with zero native mutation dispatches. All three
+processes exited zero after normal waits, and source bytes remained fixed.
+The first correction qualification stopped on an incorrect harness expectation:
+`jthread-review` still fuzzy-matches the project-qualified review source. Its
+exact query bytes were already visible; the corrected assertion passes without
+a product change. Both invocations remain retained.
+
+These are synthetic adapter/SLT checks and terminal-cell captures, using the
+retained pyte underline compatibility and rasterizer. Small labels can elide;
+full identity remains in scrollable selected-source detail. Earlier failed
+invocations remain retained, including two incorrect transcript-text locators.
+No installed native service, physical Rex, M4 or whole-product visual acceptance
+is established. Both consequential review findings are corrected and verified;
+historical R9 acceptance and the other open UI/native/backend limits remain.
+
 ## Finite Rex/SSH qualification — 2026-11-07
 
 One real M1 Rex→OMV check used a synthetic source fixture and opaque target,

@@ -98,6 +98,45 @@ impl App {
         self.filter_palette();
         self.dirty = true;
     }
+    pub(super) fn switcher(&mut self) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
+        self.modal_editor = ui::editor("", &self.theme, "Find a loaded conversation…");
+        self.dialog = Some(Dialog {
+            title: "Switch conversation".into(),
+            description: String::new(),
+            detail: String::new(),
+            choices: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            kind: DialogKind::Switcher,
+            footer: "Type to filter · ↑↓ choose · Enter open tab · Esc close".into(),
+        });
+        self.filter_palette();
+    }
+
+    pub(super) fn refresh_switcher(&mut self) {
+        let selected = self.dialog.as_ref().and_then(|dialog| {
+            dialog.choices.get(dialog.selected).and_then(|choice| {
+                if let Intent::Open(profile, thread) = &choice.intent {
+                    Some((*profile, thread.clone()))
+                } else {
+                    None
+                }
+            })
+        });
+        self.filter_palette();
+        if let Some((profile, thread)) = selected
+            && let Some(dialog) = &mut self.dialog
+        {
+            dialog.selected = dialog.choices.iter().position(|choice| {
+                matches!(&choice.intent, Intent::Open(p, id) if *p == profile && id == &thread)
+            }).unwrap_or(0);
+        }
+    }
+
     pub(super) fn filter_palette(&mut self) {
         use nucleo_matcher::{
             Config, Matcher, Utf32Str,
@@ -112,6 +151,115 @@ impl App {
         );
         let mut matcher = Matcher::new(Config::DEFAULT);
         let mut scratch = Vec::new();
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|d| matches!(d.kind, DialogKind::Switcher))
+        {
+            let mut matches: Vec<_> = self
+                .threads
+                .iter()
+                .enumerate()
+                .filter_map(|(index, thread)| {
+                    let env = self.environments.get(thread.profile)?;
+                    let label = format!("{} · {} · {}", thread.title, thread.project, env.label);
+                    let description = format!(
+                        "Environment: {} · profile: {}\nProject: {}\nThread: {}",
+                        env.environment_id,
+                        env.id,
+                        if thread.project_id.is_empty() {
+                            "unavailable"
+                        } else {
+                            &thread.project_id
+                        },
+                        thread.id,
+                    );
+                    let text = format!("{label} {description}");
+                    pattern
+                        .score(Utf32Str::new(&text, &mut scratch), &mut matcher)
+                        .map(|score| {
+                            (
+                                score,
+                                index,
+                                Choice::new(
+                                    label,
+                                    description,
+                                    Intent::Open(thread.profile, thread.id.clone()),
+                                ),
+                            )
+                        })
+                })
+                .collect();
+            matches.sort_by_key(|(score, index, _)| (std::cmp::Reverse(*score), *index));
+            let mut labels = HashMap::new();
+            for (_, _, choice) in &matches {
+                *labels.entry(choice.label.clone()).or_insert(0) += 1;
+            }
+            for (_, index, choice) in &mut matches {
+                if labels[&choice.label] > 1 {
+                    let thread = &self.threads[*index];
+                    let env = &self.environments[thread.profile];
+                    choice.label = format!(
+                        "{}/{}/{} · {}",
+                        env.environment_id, thread.project_id, thread.id, choice.label
+                    );
+                }
+            }
+            let mut qualifications = Vec::new();
+            for (env, host) in self.environments.iter().zip(&self.hosts) {
+                let status = if !host.error.is_empty() {
+                    Some("unavailable; incomplete")
+                } else if host.loading {
+                    Some("loading; incomplete")
+                } else if host.page.observed_at.is_empty() {
+                    Some("not loaded; incomplete")
+                } else if host.page.more
+                    || host.page.next_cursor.is_some()
+                    || host.windowed
+                    || host.page.search
+                    || host.page.navigation_pins_only
+                    || !host.page.inclusive_children
+                {
+                    Some("incomplete")
+                } else {
+                    None
+                };
+                if let Some(status) = status {
+                    qualifications
+                        .push(format!("{} [{}]: {status}", env.label, env.environment_id));
+                }
+            }
+            let coverage = if self.environments.is_empty()
+                || self.hosts.iter().any(|host| !host.error.is_empty())
+            {
+                "Unavailable sources; incomplete · "
+            } else if self.hosts.iter().any(|host| host.loading) {
+                "Loading; incomplete · "
+            } else if !qualifications.is_empty() {
+                "Incomplete · "
+            } else {
+                ""
+            };
+            let mut description = format!(
+                "{coverage}Loaded conversations only · {} matches. /search uses native server search.",
+                matches.len()
+            );
+            if self.environments.is_empty() {
+                description.push_str(" No environments loaded; inventory unavailable.");
+            }
+            if !qualifications.is_empty() {
+                description.push('\n');
+                description.push_str(&qualifications.join(" · "));
+            }
+            if let Some(dialog) = &mut self.dialog {
+                dialog.choices = matches.into_iter().map(|(_, _, choice)| choice).collect();
+                dialog.selected = 0;
+                dialog.scroll = 0;
+                dialog.description = description;
+            }
+            self.dirty = true;
+            return;
+        }
         let mut matches: Vec<_> = domain::ACTIONS
             .iter()
             .enumerate()
@@ -381,7 +529,8 @@ impl App {
                 .collect();
                 self.menu("Views", "Dev conversations", choices);
             },
-            "env" | "switch" | "threads" => {
+            "switch" | "threads" => self.switcher(),
+            "env" => {
                 let mut choices = vec![Choice::new(
                     "All environments",
                     "Keep unavailable sources visible",

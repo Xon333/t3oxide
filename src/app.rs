@@ -224,6 +224,7 @@ impl Choice {
 pub(super) enum DialogKind {
     Menu,
     Palette,
+    Switcher,
     Text(InputTarget),
     Detail,
 }
@@ -937,12 +938,18 @@ impl App {
             })();c.close();result})();
             let _=tx.send(Background::Page{profile,generation,append,result:result.map_err(|e|e.to_string())});
         });
-        if let Err(e) = task {
+        if let Err(error) = &task {
             host.loading = false;
-            host.error = e.to_string();
-            return Err(e);
+            host.error = error.to_string();
         }
-        Ok(())
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|d| matches!(d.kind, DialogKind::Switcher))
+        {
+            self.refresh_switcher();
+        }
+        task
     }
 
     pub(super) fn rebuild(&mut self) {
@@ -985,6 +992,13 @@ impl App {
             &unread,
         );
         self.workspace_order();
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|d| matches!(d.kind, DialogKind::Switcher))
+        {
+            self.refresh_switcher();
+        }
         self.selected = previous
             .and_then(|key| {
                 self.visible
@@ -2423,6 +2437,14 @@ impl App {
                 )
                     .hash(&mut identity);
             }
+            if matches!(d.kind, DialogKind::Switcher) {
+                self.modal_editor.lines().hash(&mut identity);
+                d.description.hash(&mut identity);
+                for choice in &d.choices {
+                    choice.label.hash(&mut identity);
+                    choice.description.hash(&mut identity);
+                }
+            }
             model.hash(&mut identity);
             for (choice, item) in d.choices.iter().zip(&items) {
                 format!("{:?}", choice.intent).hash(&mut identity);
@@ -2437,7 +2459,10 @@ impl App {
                 selected: d.selected,
                 scroll: d.scroll,
                 detail: d.detail.clone(),
-                editor: matches!(d.kind, DialogKind::Text(_) | DialogKind::Palette),
+                editor: matches!(
+                    d.kind,
+                    DialogKind::Text(_) | DialogKind::Palette | DialogKind::Switcher
+                ),
                 footer: d.footer.clone(),
                 action_stamp: identity.finish(),
                 model,

@@ -9,7 +9,9 @@
 | Next / previous control | Tab / Shift+Tab |
 | Select / open list item | Up/Down; Enter or click |
 | Commands | Ctrl+P; Commands |
-| Search current project | Ctrl+F; Search |
+| Switch conversation | Search; Ctrl+F; tab +; /switch; /threads |
+| Browse environments | /env |
+| Search server conversations | /search; Commands → Search server conversations |
 | Change search scope | Scope in Search; /search-scope |
 | Prompt newline | Enter |
 | Send in Rex | Ctrl+Enter |
@@ -73,3 +75,9 @@ follow-up. Acceptance by T3 is distinct from completed work.
 `/check-result` reads the original attempt; it never reruns it. Unknown results,
 changed source and excerpts stay labelled. Finished task panes close only after
 evidence is retained and their process exit is observed; uncertain panes remain.
+
+The conversation switcher fuzzy-matches loaded titles, projects, environments and exact IDs.
+Enter opens the selected source in an internal tab; Escape leaves the current draft intact.
+Selected source details retain exact environment, profile, project and thread IDs.
+Loading, unavailable and incomplete inventories are labelled; this is not global search.
+Use /search separately for native server search.
