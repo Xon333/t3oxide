@@ -456,6 +456,18 @@ pub struct Action {
 }
 pub const ACTIONS: &[Action] = &[
     Action {
+        name: "check",
+        label: "Run check",
+        description: "One finite check beside this pane; retain output and selected source for a targeted follow-up",
+        key: "",
+    },
+    Action {
+        name: "check-result",
+        label: "Check result",
+        description: "Read the original attempt and its finding without rerunning",
+        key: "",
+    },
+    Action {
         name: "context",
         label: "Context records",
         description: "Recall captured decisions, evidence, journals and local open loops",

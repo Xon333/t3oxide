@@ -64,6 +64,8 @@ pub struct ContentItem {
     pub markdown: String,
     pub revision: String,
     pub truncated: bool,
+    /// Original serialized native row, shared across per-frame view snapshots.
+    pub full_source: std::sync::Arc<[u8]>,
 }
 
 /// UI intent. Only the controller may dispatch or acknowledge native operations.
@@ -76,6 +78,15 @@ pub enum Action {
     CloseTab(String),
     Lane(String),
     Command(String),
+    CaptureContent {
+        key: String,
+        revision: String,
+        source: Source,
+    },
+    ContextSource {
+        source: Source,
+        resume: bool,
+    },
     Answer(AttentionItem),
     InspectQuestion(AttentionItem),
     Send,
@@ -120,6 +131,8 @@ pub struct SurfaceState {
     modal_selected: usize,
     navigator: navigator::State,
     sidebar_hidden: Option<bool>,
+    explorer_return_focus: Option<String>,
+    compact_return_focus: Option<String>,
     navigation_split: SplitPaneState,
     sidebar_width: Option<u32>,
     applied_layout: Option<ui::LayoutMode>,
@@ -149,6 +162,13 @@ pub struct SurfaceState {
 }
 
 impl SurfaceState {
+    pub(crate) fn selected_content(&self) -> Option<&ContentItem> {
+        attention::selected_content(self)
+    }
+
+    pub(crate) fn selected_source(&self) -> Option<&Source> {
+        attention::selected_source(self)
+    }
     pub fn new() -> Self {
         Self {
             internal_tabs: true,
@@ -198,7 +218,8 @@ pub fn draw(
         && !pointer_tab_activation
         && state.focused_control.as_deref() == Some("conversation-tabs");
     state.transcript_layout = None;
-    state.overlay_open = modal.is_some() || state.context_expanded;
+    state.overlay_open =
+        modal.is_some() || state.context_expanded || attention::navigation_open(state);
     if state.composer_key != state.active_key {
         if !state.composer_key.is_empty() {
             state.tab_editors.insert(
@@ -216,7 +237,13 @@ pub fn draw(
         state.command_escape = None;
         state.command_open = false;
         if !retain_tab_focus {
-            ctx.focus_by_name("composer");
+            ctx.focus_by_name(
+                if !state.attention_mode && sidebar_visible(state) && geometry.0 < 74 {
+                    "navigator"
+                } else {
+                    "composer"
+                },
+            );
         }
         ctx.request_frame();
     }
@@ -254,69 +281,29 @@ pub fn draw(
             draw_header(ctx, view, state, &mut actions);
             let footer_height = 1 + u32::from(!view.notice.is_empty());
             let body_height = height.saturating_sub(1 + footer_height).max(1);
-            let context_side = state.show_context && width >= 112;
-            let context_bottom = state.show_context && !context_side;
-            let compact_context = context_bottom && height < 18;
-            let context_height = if compact_context {
-                1
-            } else if context_bottom {
-                (body_height / 3)
-                    .clamp(4, 9)
-                    .min(body_height.saturating_sub(6))
-            } else {
-                0
-            };
+            let context_side =
+                state.show_context && width >= 112 && view.layout != ui::LayoutMode::Focus;
             let content_width = width.saturating_sub(if context_side { 27 } else { 0 });
-            let content_height = body_height.saturating_sub(context_height);
-            ctx.container().h(content_height).row(|ctx| {
-                ctx.container()
-                    .w(content_width)
-                    .h(content_height)
-                    .col(|ctx| {
-                        if state.attention_mode {
-                            attention::draw(
-                                ctx,
-                                view,
-                                state,
-                                content_width,
-                                content_height,
-                                &mut actions,
-                            );
-                        } else {
-                            draw_conversations(
-                                ctx,
-                                view,
-                                composer,
-                                state,
-                                content_width,
-                                content_height,
-                                &mut actions,
-                            );
-                        }
-                    });
+            ctx.container().h(body_height).row(|ctx| {
+                ctx.container().w(content_width).h(body_height).col(|ctx| {
+                    if state.attention_mode {
+                        attention::draw(ctx, view, state, content_width, body_height, &mut actions);
+                    } else {
+                        draw_conversations(
+                            ctx,
+                            view,
+                            composer,
+                            state,
+                            content_width,
+                            body_height,
+                            &mut actions,
+                        );
+                    }
+                });
                 if context_side {
-                    draw_context(ctx, view, state, 27, content_height, &mut actions);
+                    draw_context(ctx, view, state, 27, body_height, &mut actions);
                 }
             });
-            if context_bottom && context_height > 0 {
-                if compact_context {
-                    ctx.container().h(1).row(|ctx| {
-                        ctx.register_focusable_named("context-disclosure");
-                        if secondary_button(ctx, "Context ▾").clicked {
-                            state.context_expanded = true;
-                            ctx.request_frame();
-                        }
-                        if let Some(source) =
-                            attention::selected_source(state).or(state.source.as_ref())
-                        {
-                            ctx.text(format!("{} · {}", source.environment_label, source.project))
-                                .truncate();
-                        }
-                    });
-                } else {
-                    draw_context(ctx, view, state, width, context_height, &mut actions);
-                }
-            }
             ctx.row(|ctx| {
                 ctx.text(&view.status).dim().truncate().grow(1);
                 if view.pending > 0 && ctx.button(format!("Recovery {}", view.pending)).clicked {
@@ -344,7 +331,7 @@ pub fn draw(
             );
             if secondary_button(ctx, "Close").clicked || ctx.consume_key_code(KeyCode::Esc) {
                 state.context_expanded = false;
-                ctx.focus_by_name("context-disclosure");
+                ctx.focus_by_name("toolbar");
                 ctx.request_frame();
             }
         });
@@ -354,7 +341,12 @@ pub fn draw(
     } else {
         state.modal_stamp = None;
     }
-    global_actions(ctx, modal.is_some(), state, &mut actions);
+    global_actions(
+        ctx,
+        modal.is_some() || state.context_expanded || attention::navigation_open(state),
+        state,
+        &mut actions,
+    );
     if modal.is_none() {
         if retain_tab_focus {
             ctx.focus_by_name("conversation-tabs");
@@ -362,7 +354,11 @@ pub fn draw(
         }
         if state.last_attention_mode != state.attention_mode {
             let target = if state.attention_mode {
-                state.attention_focus.as_deref().unwrap_or("attention-list")
+                if state.sidebar_hidden == Some(false) && height >= 15 {
+                    state.attention_focus.as_deref().unwrap_or("attention-list")
+                } else {
+                    "attention-navigation"
+                }
             } else {
                 state.conversation_focus.as_deref().unwrap_or("composer")
             };
@@ -373,13 +369,25 @@ pub fn draw(
         if let Some(name) = restore_focus {
             // Responsive panes can add named controls before the old focus slot.
             // Re-resolve that name through SLT after the new layout is registered.
-            let navigator_visible = !state
-                .sidebar_hidden
-                .unwrap_or(width < 78 || view.layout == ui::LayoutMode::Focus);
-            let name = if (name.starts_with("navigator") || name == "pane-divider")
-                && !navigator_visible
-            {
-                "composer".into()
+            let navigator_visible = sidebar_visible(state);
+            let compact_picker = !state.attention_mode && navigator_visible && width < 74;
+            let name = if compact_picker
+                && matches!(
+                    name.as_str(),
+                    "composer" | "composer-tools" | "transcript" | "pane-divider"
+                ) {
+                state.compact_return_focus = Some(name);
+                "navigator".into()
+            } else if !compact_picker && !state.attention_mode {
+                state.compact_return_focus.take().unwrap_or_else(|| {
+                    if (name.starts_with("navigator") || name == "pane-divider")
+                        && !navigator_visible
+                    {
+                        "composer".into()
+                    } else {
+                        name
+                    }
+                })
             } else {
                 name
             };
@@ -637,9 +645,7 @@ fn draw_header(
         if width >= 80 {
             ctx.text("T3oxide ").fg(primary);
         }
-        let sidebar = !state
-            .sidebar_hidden
-            .unwrap_or(width < 78 || view.layout == ui::LayoutMode::Focus);
+        let sidebar = sidebar_visible(state);
         let items = [
             ("☰", sidebar, true),
             ("A", !state.attention_mode, true),
@@ -648,7 +654,8 @@ fn draw_header(
             (if width < 60 { "⌘" } else { "Commands" }, false, true),
             (
                 if width < 50 { "ⓘ" } else { "Context" },
-                state.show_context,
+                state.context_expanded
+                    || (state.show_context && width >= 112 && view.layout != ui::LayoutMode::Focus),
                 true,
             ),
         ];
@@ -659,7 +666,7 @@ fn draw_header(
             &items,
         ) {
             Some(0) => {
-                toggle_sidebar(state, width);
+                toggle_sidebar(ctx, state);
                 ctx.request_frame();
             }
             Some(1) => state.attention_mode = false,
@@ -667,7 +674,7 @@ fn draw_header(
             Some(3) => actions.push(Action::Command("search".into())),
             Some(4) => actions.push(Action::Command("palette".into())),
             Some(5) => {
-                state.show_context = !state.show_context;
+                toggle_context(state, width);
                 ctx.request_frame();
             }
             _ => {}
@@ -675,11 +682,39 @@ fn draw_header(
     });
 }
 
-fn toggle_sidebar(state: &mut SurfaceState, width: u32) {
-    let hidden = state
-        .sidebar_hidden
-        .unwrap_or(width < 78 || state.applied_layout == Some(ui::LayoutMode::Focus));
-    state.sidebar_hidden = Some(!hidden);
+fn sidebar_visible(state: &SurfaceState) -> bool {
+    // Without an attachment, A falls back to its existing source picker.
+    !state.sidebar_hidden.unwrap_or(
+        state.attention_mode
+            || !state.active_key.is_empty()
+            || state.applied_layout == Some(ui::LayoutMode::Focus),
+    )
+}
+
+fn toggle_sidebar(ctx: &mut Context, state: &mut SurfaceState) {
+    let closing = sidebar_visible(state);
+    state.sidebar_hidden = Some(closing);
+    if !state.attention_mode {
+        let target = if closing {
+            state.compact_return_focus = None;
+            state
+                .explorer_return_focus
+                .take()
+                .unwrap_or_else(|| "composer".into())
+        } else {
+            state.explorer_return_focus = ctx.focused_name().map(str::to_owned);
+            "navigator".into()
+        };
+        ctx.focus_by_name(&target);
+    }
+}
+
+fn toggle_context(state: &mut SurfaceState, width: u32) {
+    if width < 112 || state.applied_layout == Some(ui::LayoutMode::Focus) {
+        state.context_expanded = !state.context_expanded;
+    } else {
+        state.show_context = !state.show_context;
+    }
 }
 
 fn draw_context(
@@ -744,9 +779,21 @@ fn draw_context(
             } else {
                 vec![
                     ("Copy ID", false, true),
-                    ("Records", false, true),
-                    ("Capture", false, true),
-                    ("Resume", false, true),
+                    (
+                        "Records",
+                        false,
+                        !state.attention_mode || attention::selected_source(state).is_some(),
+                    ),
+                    (
+                        "Capture",
+                        false,
+                        !state.attention_mode || attention::selected_content(state).is_some(),
+                    ),
+                    (
+                        "Resume",
+                        false,
+                        !state.attention_mode || attention::selected_source(state).is_some(),
+                    ),
                 ]
             };
             match action_bar(
@@ -764,12 +811,39 @@ fn draw_context(
                         actions.push(Action::CopyId);
                     }
                 }
-                Some(1) => actions.push(Action::Command("context".into())),
-                Some(2) => actions.push(Action::Command("context-save".into())),
-                Some(3) => actions.push(Action::Command("resume".into())),
+                Some(1) => context_source_action(state, false, actions),
+                Some(2) => {
+                    if state.attention_mode {
+                        if let Some(item) = attention::selected_content(state) {
+                            actions.push(Action::CaptureContent {
+                                key: item.key.clone(),
+                                revision: item.revision.clone(),
+                                source: item.source.clone(),
+                            });
+                        }
+                    } else {
+                        actions.push(Action::Command("context-save".into()));
+                    }
+                }
+                Some(3) => context_source_action(state, true, actions),
                 _ => {}
             }
         });
+}
+
+fn context_source_action(state: &SurfaceState, resume: bool, actions: &mut Vec<Action>) {
+    if state.attention_mode {
+        if let Some(source) = attention::selected_source(state) {
+            actions.push(Action::ContextSource {
+                source: source.clone(),
+                resume,
+            });
+        }
+    } else {
+        actions.push(Action::Command(
+            if resume { "resume" } else { "context" }.into(),
+        ));
+    }
 }
 
 fn draw_tabs(ctx: &mut Context, state: &mut SurfaceState, width: u32, actions: &mut Vec<Action>) {
@@ -929,9 +1003,7 @@ fn draw_conversations(
     let tabs_height = u32::from(!state.tabs.is_empty());
     draw_tabs(ctx, state, width, actions);
     let height = height.saturating_sub(tabs_height);
-    let sidebar = !state
-        .sidebar_hidden
-        .unwrap_or(width < 78 || view.layout == ui::LayoutMode::Focus);
+    let sidebar = sidebar_visible(state);
     if sidebar && width >= 74 {
         let attached_key = state.active_key.clone();
         let mut nav = std::mem::take(&mut state.navigator);
@@ -1048,6 +1120,16 @@ fn draw_conversations(
             &state.spinner,
             actions,
         );
+        if actions
+            .iter()
+            .any(|action| matches!(action, Action::Open(_)))
+        {
+            state.sidebar_hidden = Some(true);
+            state.explorer_return_focus = None;
+            state.compact_return_focus = None;
+            ctx.focus_by_name("composer");
+            ctx.request_frame();
+        }
     } else {
         draw_conversation(ctx, view, composer, state, width, height, actions);
     }
@@ -1541,29 +1623,38 @@ fn global_actions(
                 None
             }
             KeyCode::F(3) if !modal => {
-                toggle_sidebar(state, ctx.width());
+                toggle_sidebar(ctx, state);
                 consumed.push(index);
                 ctx.request_frame();
                 None
             }
             KeyCode::F(4) if !modal => {
-                state.show_context = !state.show_context;
+                toggle_context(state, ctx.width());
                 consumed.push(index);
                 ctx.request_frame();
                 None
             }
             KeyCode::F(6) if !modal => {
                 let mut panes = if state.attention_mode {
-                    vec!["attention-list", "project-navigation", "attention-content"]
+                    if state.sidebar_hidden == Some(false) && ctx.height() >= 15 {
+                        vec!["attention-list", "project-navigation", "attention-content"]
+                    } else {
+                        vec!["attention-navigation", "attention-content"]
+                    }
                 } else {
                     let mut names = Vec::new();
-                    if !state.sidebar_hidden.unwrap_or(ctx.width() < 78) {
+                    if sidebar_visible(state) {
                         names.push("navigator");
                     }
-                    names.extend(["transcript", "composer"]);
+                    if !sidebar_visible(state) || ctx.width() >= 74 {
+                        names.extend(["transcript", "composer"]);
+                    }
                     names
                 };
-                if state.show_context {
+                if state.show_context
+                    && ctx.width() >= 112
+                    && state.applied_layout != Some(ui::LayoutMode::Focus)
+                {
                     panes.push("context");
                 }
                 let current = ctx
@@ -1583,10 +1674,20 @@ fn global_actions(
                 None
             }
             KeyCode::Esc if modal => Some(Action::CloseModal),
+            KeyCode::Esc if !state.attention_mode && sidebar_visible(state) && ctx.width() < 74 => {
+                toggle_sidebar(ctx, state);
+                consumed.push(index);
+                ctx.request_frame();
+                None
+            }
             KeyCode::Esc => {
                 ctx.focus_by_name(if state.attention_mode {
-                    "attention-list"
-                } else if state.sidebar_hidden.unwrap_or(ctx.width() < 78) {
+                    if state.sidebar_hidden == Some(false) && ctx.height() >= 15 {
+                        "attention-list"
+                    } else {
+                        "attention-navigation"
+                    }
+                } else if !sidebar_visible(state) {
                     "composer"
                 } else {
                     "navigator"
@@ -1883,9 +1984,122 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn focused_attachment_keeps_composer_space_and_opens_narrow_context_on_demand() {
+        let mut backend = ResizableBackend::new(140, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "environment/thread".into();
+        let view = ui::View::default();
+        let draft = "Exact 日本語  \nUnsent";
+        let mut editor = ui::editor(draft, "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for (width, height) in [(140, 38), (70, 22), (40, 12), (140, 38)] {
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    assert!(ctx.measured_layout_rect("t3oxide.navigator").is_none());
+                    assert!(ctx.measured_layout_rect("t3oxide.context").is_none());
+                    if let Some(rect) = ctx.measured_layout_rect("t3oxide.composer") {
+                        assert_eq!(rect.width, width, "composer at {width}x{height}");
+                    }
+                });
+            }
+            backend.assert_contains("Send");
+            backend.assert_contains("Model");
+            assert_eq!(editor.lines().join("\n"), draft);
+            if width == 40 {
+                backend.run_with_events(
+                    slt::EventBuilder::new().key_code(KeyCode::F(4)).build(),
+                    |ctx| {
+                        draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    },
+                );
+                for _ in 0..3 {
+                    backend.render(|ctx| {
+                        draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    });
+                }
+                backend.assert_contains("Copy ID");
+                assert!(state.context_expanded);
+                backend.run_with_events(
+                    slt::EventBuilder::new().key_code(KeyCode::Esc).build(),
+                    |ctx| {
+                        draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    },
+                );
+                assert!(!state.context_expanded);
+                assert_eq!(editor.lines().join("\n"), draft);
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_explorer_owns_focus_and_returns_to_the_original_composer() {
+        for (width, height) in [(40, 12), (70, 22), (140, 38)] {
+            let mut backend = slt::TestBackend::new(width, height);
+            let mut state = SurfaceState::new();
+            state.active_key = "env/thread".into();
+            let view = ui::View::default();
+            let draft = "Exact 日本語 café  ";
+            let mut editor = ui::editor(draft, "violet", "");
+            let mut modal_editor = ui::editor("", "violet", "");
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                });
+            }
+            let caret = (state.composer.cursor_row, state.composer.cursor_col);
+            for open in [true, false] {
+                let close_key = if !open && width < 74 {
+                    KeyCode::Esc
+                } else {
+                    KeyCode::F(3)
+                };
+                backend.run_with_events(
+                    slt::EventBuilder::new().key_code(close_key).build(),
+                    |ctx| {
+                        assert!(
+                            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state)
+                                .is_empty()
+                        );
+                    },
+                );
+                for _ in 0..3 {
+                    backend.render(|ctx| {
+                        assert!(
+                            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state)
+                                .is_empty()
+                        );
+                    });
+                }
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    assert_eq!(
+                        ctx.focused_name(),
+                        Some(if open { "navigator" } else { "composer" })
+                    );
+                });
+                assert_eq!(sidebar_visible(&state), open);
+                assert_eq!(editor.lines().join("\n"), draft);
+                assert_eq!(
+                    (state.composer.cursor_row, state.composer.cursor_col),
+                    caret
+                );
+            }
+        }
+    }
+
+    #[test]
     fn sidebar_resize_keeps_default_width_and_restores_an_explicit_native_drag() {
         let mut backend = ResizableBackend::new(140, 38);
         let mut state = SurfaceState::new();
+        state.applied_layout = Some(ui::LayoutMode::Split);
+        state.sidebar_hidden = Some(false);
         state.active_key = "environment/thread".into();
         let view = ui::View::default();
         let mut editor = ui::editor("retained draft", "violet", "");
@@ -1952,7 +2166,7 @@ pub(crate) mod tests {
             }
             assert_eq!(
                 focused.last().unwrap().as_deref(),
-                Some("composer"),
+                Some(if width < 74 { "navigator" } else { "composer" }),
                 "{width}x{height}: {focused:?}"
             );
             assert_eq!(state.sidebar_width, Some(preferred));
@@ -2183,7 +2397,7 @@ pub(crate) mod tests {
             }
             backend.assert_contains("Projects");
             backend.assert_contains("Release guide");
-            backend.assert_contains("Context");
+            backend.assert_contains(if width < 50 { "ⓘ" } else { "Context" });
             assert_eq!(
                 attention::selected_content(&state).unwrap().key,
                 "env/thread/report"
@@ -2241,6 +2455,8 @@ pub(crate) mod tests {
         let draft = "  café 日本語\nsecond line  \n\n";
         let mut backend = slt::TestBackend::new(100, 31);
         let mut state = SurfaceState::new();
+        state.applied_layout = Some(ui::LayoutMode::Split);
+        state.sidebar_hidden = Some(false);
         state.active_key = "environment/current-thread".into();
         let view = ui::View::default();
         let mut editor = ui::editor(draft, "violet", "");
@@ -2326,6 +2542,8 @@ pub(crate) mod tests {
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
             let mut backend = slt::TestBackend::new(86, 31);
             let mut state = SurfaceState::new();
+            state.applied_layout = Some(ui::LayoutMode::Split);
+            state.sidebar_hidden = Some(false);
             state.active_key = "env/thread".into();
             let view = ui::View::default();
             let mut editor = ui::editor("café 日本語\nnext line", "violet", "");
@@ -2394,6 +2612,8 @@ pub(crate) mod tests {
         for (width, height) in [(86, 31), (140, 38)] {
             let mut backend = slt::TestBackend::new(width, height);
             let mut state = SurfaceState::new();
+            state.applied_layout = Some(ui::LayoutMode::Split);
+            state.sidebar_hidden = Some(false);
             state.active_key = "env/thread".into();
             let view = ui::View::default();
             let mut editor = ui::editor("retained draft", "violet", "");
@@ -2609,6 +2829,8 @@ pub(crate) mod tests {
     fn graph_mouse_navigation_retains_content_and_exact_source() {
         use slt::{EventBuilder, TestBackend};
         let mut state = SurfaceState::new();
+        state.applied_layout = Some(ui::LayoutMode::Split);
+        state.sidebar_hidden = Some(false);
         state.attention_mode = true;
         let source = Source {
             profile: 2,
@@ -2767,6 +2989,8 @@ pub(crate) mod tests {
             request: serde_json::json!({"id":"request", "question":"Original question wording"}),
         };
         let mut state = SurfaceState::new();
+        state.applied_layout = Some(ui::LayoutMode::Split);
+        state.sidebar_hidden = Some(false);
         state.attention_mode = true;
         state.projects.push(Source {
             project_id: "idle".into(),

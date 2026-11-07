@@ -2439,7 +2439,7 @@ fn slt_direct_effort_cancel_restores_invoker_and_panes_without_phantom_model() {
             .key_code(::slt::KeyCode::F(3))
             .build(),
     );
-    backend.assert_not_contains("Unread");
+    backend.assert_contains("Unread");
     model_tail_input(
         &mut backend,
         &mut fixture,
@@ -2448,7 +2448,7 @@ fn slt_direct_effort_cancel_restores_invoker_and_panes_without_phantom_model() {
             .key_code(::slt::KeyCode::F(3))
             .build(),
     );
-    backend.assert_contains("Unread");
+    backend.assert_not_contains("Unread");
     model_tail_input(
         &mut backend,
         &mut fixture,
@@ -3316,6 +3316,106 @@ fn obsolete_navigation_ack_cannot_unlock_the_current_live_transition() {
         .unwrap();
     assert!(!fixture.app.active.as_ref().unwrap().navigating);
     assert!(fixture.app.active.as_ref().unwrap().navigation.is_none());
+}
+
+#[test]
+fn library_capture_freezes_selected_source_instead_of_active_conversation() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let selected = fixture.app.loaded_contents.front().unwrap().clone();
+    let original = selected.full_source.to_vec();
+    assert!(!original.is_empty());
+    fixture.open_thread(1, "thread-review");
+    fixture.app.replace_text("unrelated composer draft".into());
+    fixture.app.flush_draft().unwrap();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::CaptureContent {
+                key: selected.key.clone(),
+                revision: selected.revision.clone(),
+                source: selected.source.clone(),
+            },
+            &mut surface,
+        )
+        .unwrap();
+    let intent = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| choice.label == "Decision")
+        .unwrap()
+        .intent
+        .clone();
+    let Intent::Context(context::Action::Record(captured)) = &intent else {
+        panic!("capture record")
+    };
+    assert_eq!(captured.source.environment_id, "native-0");
+    assert_eq!(captured.full_source, original);
+    fixture.drain_context_work();
+    fixture.app.dispatch(intent).unwrap();
+    fixture.drain_context_work();
+    assert_eq!(fixture.app.text(), "unrelated composer draft");
+    assert!(fixture.native_states.iter().all(|file| !file.exists()));
+    let pack = fixture.context_pack(crate::context_store::Query::new(
+        crate::context_store::Scope {
+            environment_id: "native-0".into(),
+            project_id: Some("project-a".into()),
+            thread_id: Some("thread-review".into()),
+        },
+    ));
+    assert!(pack.rows.iter().any(
+        |row| matches!(row.kind, crate::context_store::Kind::Decision)
+            && row.source.revision == selected.revision
+    ));
+}
+
+#[test]
+fn library_capture_refuses_stale_excerpt_or_missing_original_without_fallback() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open_thread(0, "thread-review");
+    let selected = fixture.app.loaded_contents.front().unwrap().clone();
+    assert!(
+        fixture
+            .app
+            .context_capture_content(&selected.key, "stale", &selected.source)
+            .is_err()
+    );
+    let mut other = selected.source.clone();
+    other.environment = "wrong-native-environment".into();
+    assert!(
+        fixture
+            .app
+            .context_capture_content(&selected.key, &selected.revision, &other)
+            .is_err()
+    );
+    for change in 0..3 {
+        let item = fixture
+            .app
+            .loaded_contents
+            .iter_mut()
+            .find(|item| item.key == selected.key)
+            .unwrap();
+        *item = selected.clone();
+        match change {
+            0 => item.truncated = true,
+            1 => item.full_source = std::sync::Arc::from([]),
+            _ => item.markdown.push_str("changed"),
+        }
+        assert!(
+            fixture
+                .app
+                .context_capture_content(&selected.key, &selected.revision, &selected.source)
+                .is_err()
+        );
+    }
+    assert!(fixture.native_states.iter().all(|file| !file.exists()));
 }
 
 #[test]
@@ -5402,6 +5502,14 @@ fn r8_pointer_tab_restores_composer_and_sends_original_unicode_draft_once() {
     fixture.app.flush_draft().unwrap();
     let caret = fixture.app.composer.cursor();
     assert_ne!(caret, (1, draft.lines().last().unwrap().chars().count()));
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(3))
+            .build(),
+    );
     let (x, y) = backend
         .find_text("Finished refactor")
         .expect("navigator source");
@@ -5522,6 +5630,24 @@ fn r8_actual_tab_cycle_keeps_source_tab_owner_and_original_drafts() {
         model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new()).as_deref(),
         Some("composer")
     );
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(3))
+            .build(),
+    );
+    for _ in 0..2 {
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::F(6))
+                .build(),
+        );
+    }
     let mut owners = Vec::new();
     for _ in 0..30 {
         let owner = model_tail_input(
@@ -6054,6 +6180,14 @@ fn r9_actual_divider_drag_retains_default_and_manual_width_across_resize() {
     let mut backend =
         crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
     r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(3))
+            .build(),
+    );
     let mut nav = None;
     backend.render(|ctx| {
         fixture.draw_slt(ctx, &mut surface);
@@ -6108,6 +6242,14 @@ fn r9_complete_graph_focus_cycle_uses_original_project_identity() {
     let mut backend =
         crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
     r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    r9_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::F(3))
+            .build(),
+    );
     assert_eq!(
         surface
             .projects
@@ -6741,6 +6883,14 @@ fn r9_manual_divider_paints_exact_cells_and_conserves_recovery() {
         let mut backend =
             crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
         r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::F(3))
+                .build(),
+        );
         if !follow {
             let (x, y) = backend.find_text("Earlier").unwrap();
             r9_input(
@@ -6975,5 +7125,289 @@ fn r9_manual_divider_paints_exact_cells_and_conserves_recovery() {
         for (root, files) in journals {
             assert_eq!(root.exists().then(|| r9_files(&root)), files);
         }
+    }
+}
+
+#[test]
+fn partial_and_final_check_returns_keep_distinct_exact_context_history() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(0);
+    let mut payloads = Vec::new();
+    for (phase, text) in [("unknown", "prefix"), ("exit-observed", "final bytes")] {
+        let envelope = json!({"requestSha256":"same-request","command":{"state":phase},
+            "wrapper":{"state":phase},"binding":{"host":"fixture","worktree":"/fixture"},"payload":text});
+        payloads.push(serde_json::to_vec(&envelope).unwrap());
+        fixture.app.state.update(|saved| {
+            saved["checkAttempts"] = json!({"observation":{
+                "target":{"environmentId":"native-0","projectId":"project-a","threadId":"thread-a"},
+                "phase":"collected","evidence":envelope
+            }});
+            Ok(())
+        }).unwrap();
+        fixture.app.check_done("observation", Ok(())).unwrap();
+        fixture.drain_context_work();
+        fixture.app.dialog = None;
+    }
+    let pack = fixture.context_pack(crate::context_store::Query::new(
+        crate::context_store::Scope {
+            environment_id: "native-0".into(),
+            project_id: Some("project-a".into()),
+            thread_id: Some("thread-a".into()),
+        },
+    ));
+    let rows: Vec<_> = pack
+        .rows
+        .iter()
+        .filter(|row| row.source.item_id.as_deref() == Some("observation"))
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].source.revision, rows[1].source.revision);
+    fixture.app.drain_context().unwrap();
+    let store = crate::context_store::Store::open(&context_path(&fixture)).unwrap();
+    for bytes in payloads {
+        assert!(
+            rows.iter()
+                .any(|row| store.source(&row.id).unwrap().bytes == bytes)
+        );
+    }
+    assert!(fixture.native_states.iter().all(|path| !path.exists()));
+}
+
+#[test]
+fn check_follow_up_send_preserves_same_byte_drafts_and_model_overrides_across_environments() {
+    for active_profile in [0, 1] {
+        let mut fixture = Fixture::new(500);
+        fixture.load_pages();
+        fixture.open(active_profile);
+        let message = "Exact check follow-up 日本語 café  \nsecond line  ";
+        fixture.app.replace_text(message.into());
+        fixture
+            .app
+            .composer
+            .move_cursor(ratatui_textarea::CursorMove::Back);
+        fixture.app.flush_draft().unwrap();
+        let selection = json!({"instanceId":"fixture-provider","model":"fixture-fast","options":[{"id":"reasoningEffort","value":"high"}]});
+        fixture.app.state.update(|saved| {
+            for profile in [0, 1] {
+                saved["modelOverrides"][format!("native-{profile}/thread-a")] =
+                    json!({"id":format!("original-override-{profile}"),"selection":selection});
+            }
+            saved["checkAttempts"] = json!({"follow-up":{
+                "target":{"environmentId":"native-0","projectId":"project-a","threadId":"thread-a"},
+                "followUp":message,"delivery":"auto","phase":"collected"
+            }});
+            Ok(())
+        }).unwrap();
+        let overrides = fixture.app.state.snapshot()["modelOverrides"].clone();
+        if active_profile == 1 {
+            let saved = fixture.app.state.snapshot();
+            let caret = fixture.app.composer.cursor();
+            let refused = fixture.app.check_send("follow-up").unwrap_err();
+            assert!(refused.to_string().contains("Mutation target changed"));
+            assert_eq!(fixture.app.state.snapshot(), saved);
+            assert_eq!(fixture.app.composer.cursor(), caret);
+            assert_eq!(fixture.app.text(), message);
+            assert!(fixture.native_states.iter().all(|path| !path.exists()));
+            // Returning explicitly establishes the original verified native target.
+            fixture.open(0);
+            fixture.app.replace_text(message.into());
+            fixture
+                .app
+                .composer
+                .move_cursor(ratatui_textarea::CursorMove::Back);
+            fixture.app.flush_draft().unwrap();
+        }
+        let caret = fixture.app.composer.cursor();
+        let source = fixture.app.source(0, "thread-a");
+        fixture.app.check_send("follow-up").unwrap();
+        let pending = fixture.app.state.pending("native-0", false).unwrap();
+        assert_eq!(pending["threadId"], "thread-a");
+        assert_eq!(pending["message"], message);
+        assert_eq!(pending["t3oxideCheckFollowUp"], "follow-up");
+        assert!(pending.get("modelOverrideId").is_none());
+        assert!(fixture.app.state.pending("native-1", false).is_none());
+        let event = fixture.next_mutation();
+        assert!(
+            matches!(&event, Background::Mutation { context, op, fields, result: Ok(_), .. }
+            if context.profile == 0 && op == "send" && fields["threadId"] == "thread-a" && fields["message"] == message)
+        );
+        fixture.app.handle(event).unwrap();
+        assert_eq!(fixture.app.text(), message);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(
+            fixture
+                .app
+                .state
+                .draft(&format!("native-{active_profile}"), "thread-a"),
+            message
+        );
+        assert_eq!(fixture.app.source(0, "thread-a"), source);
+        assert_eq!(fixture.app.active.as_ref().unwrap().profile, 0);
+        assert_eq!(fixture.app.state.snapshot()["modelOverrides"], overrides);
+        assert!(fixture.app.state.pending("native-0", false).is_none());
+        assert_eq!(
+            fixture.app.state.snapshot()["checkAttempts"]["follow-up"]["phase"],
+            "acknowledged"
+        );
+        assert!(fixture.app.check_send("follow-up").is_err());
+        let original = crate::check_evidence::Attempt::new(crate::check_evidence::Launch {
+            source:json!({"environmentId":"native-0","projectId":"project-a","threadId":"thread-a","sourceRevision":"fixture"}),
+            environment:fixture.app.environments[0].clone(),
+            worktree:fixture.directory.path().to_string_lossy().into_owned(),
+            argv:vec!["/usr/bin/true".into()],source_paths:vec!["selected.rs".into()],timeout_seconds:1,
+            rex:crate::check_evidence::RexContext {executable:"/usr/bin/true".into(),session:"fixture".into(),block:"fixture".into(),server:None},
+        }).unwrap();
+        fixture.app.state.update(|saved| {
+            let record=&mut saved["checkAttempts"]["follow-up"];
+            record["attempt"]=serde_json::to_value(&original)?;
+            record["evidence"]=json!({"requestSha256":"fixture","command":{"state":"unknown"},"wrapper":{"state":"unknown"}});
+            record["sequence"]=json!(1);
+            Ok(())
+        }).unwrap();
+        let receipt =
+            fixture.app.state.snapshot()["checkAttempts"]["follow-up"]["operationId"].clone();
+        fixture.app.check_command("check-result", "").unwrap();
+        assert!(
+            fixture.app.check_io.contains("follow-up"),
+            "accepted partial evidence still admits a read"
+        );
+        let admitted = fixture.app.state.snapshot();
+        fixture.app.check_command("check-result", "").unwrap();
+        assert_eq!(
+            fixture.app.state.snapshot(),
+            admitted,
+            "duplicate read coalesces"
+        );
+        loop {
+            let event = fixture.app.rx.recv_timeout(Duration::from_secs(8)).unwrap();
+            let completed =
+                matches!(&event,Background::Check {attempt,result:Err(_)} if attempt=="follow-up");
+            fixture.app.handle(event).unwrap();
+            if completed {
+                break;
+            }
+        }
+        assert_eq!(
+            fixture.app.state.snapshot()["checkAttempts"]["follow-up"]["operationId"],
+            receipt
+        );
+        assert_eq!(
+            fixture.app.state.snapshot()["checkAttempts"]["follow-up"]["phase"],
+            "acknowledged"
+        );
+        assert!(!fixture.app.check_io.contains("follow-up"));
+        fixture
+            .app
+            .state
+            .update(|saved| {
+                saved["checkAttempts"]["follow-up"]["phase"] = json!("collected");
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            fixture.app.check_send("follow-up").is_err(),
+            "native receipt independently blocks a duplicate after collection state changes"
+        );
+        assert!(fixture.app.state.pending_records().is_empty());
+        let native: Value =
+            serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+        assert_eq!(native["effects"], 1);
+        assert_eq!(native["receipts"].as_object().unwrap().len(), 1);
+        assert!(
+            !fixture.native_states[1].exists(),
+            "same thread ID in the active other environment must not receive the check"
+        );
+    }
+}
+
+#[test]
+fn selected_b_context_commands_keep_records_and_protected_drafts_in_the_selected_source() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(1);
+    fixture
+        .app
+        .replace_text("Active A draft must stay private to A".into());
+    fixture.app.flush_draft().unwrap();
+    let caret = fixture.app.composer.cursor();
+    let draft = "Protected B 日本語 draft  \n";
+    fixture
+        .app
+        .state
+        .set_draft("native-0", "thread-a", draft)
+        .unwrap();
+    let input = context_input("selected-b-evidence");
+    fixture
+        .app
+        .context_action(context::Action::Record(input.clone()))
+        .unwrap();
+    fixture.drain_context_work();
+    fixture.app.context_selection = Some(context::Selection {
+        source: Some(fixture.app.source(0, "thread-a")),
+        content: Some(("selected-b-evidence".into(), input.source.revision.clone())),
+    });
+    fixture.app.active.as_mut().unwrap().requests.push(json!({
+        "id":"active-a-request", "revision":"a".repeat(64), "prompt":"Active A request must stay in A"
+    }));
+    let before = fixture.app.state.snapshot();
+    for command in ["context", "resume"] {
+        fixture.app.command(command).unwrap();
+        let pack = loop {
+            let event = next_context(&mut fixture);
+            let pack = match &event {
+                Background::Context(context_worker::Event::Finished(done)) => match &done.result {
+                    Ok(context_worker::Output::Pack(pack)) => Some((**pack).clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            fixture.app.handle(event).unwrap();
+            if let Some(pack) = pack {
+                break pack;
+            }
+        };
+        assert_eq!(pack.scope, context_scope());
+        assert!(pack.rows.iter().any(|row| row.text == input.text));
+        assert!(
+            pack.rows
+                .iter()
+                .all(|row| row.source.environment_id == "native-0")
+        );
+        if command == "resume" {
+            assert!(pack.native_records.iter().any(|row| matches!(
+                row.kind,
+                crate::context_store::NativeKind::Draft
+            ) && row.summary == draft));
+            assert!(
+                pack.native_records
+                    .iter()
+                    .all(|row| row.source.environment_id == "native-0")
+            );
+            assert!(
+                !fixture
+                    .app
+                    .dialog
+                    .as_ref()
+                    .unwrap()
+                    .detail
+                    .contains("Active A draft must stay private to A")
+            );
+        }
+        assert!(
+            !fixture
+                .app
+                .dialog
+                .as_ref()
+                .unwrap()
+                .detail
+                .contains("Active A request must stay in A")
+        );
+        assert_eq!(fixture.app.active.as_ref().unwrap().profile, 1);
+        assert_eq!(fixture.app.text(), "Active A draft must stay private to A");
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.state.snapshot(), before);
+        assert!(fixture.app.state.pending_records().is_empty());
+        assert!(fixture.native_states.iter().all(|path| !path.exists()));
     }
 }

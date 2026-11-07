@@ -480,6 +480,7 @@ impl State {
                 "saved operation identity changed; refusing another action's acknowledgement"
             );
             let op = old["op"].as_str().unwrap_or("");
+            let check_follow_up = old["t3oxideCheckFollowUp"].as_str();
             object_mut(value, lane(stop))?.remove(environment);
             if op == "send" {
                 if !message.is_empty() && old["message"] == message {
@@ -487,13 +488,15 @@ impl State {
                 }
                 let overrides = object_mut(value, "modelOverrides")?;
                 let override_key = key(environment, thread);
-                if overrides.get(&override_key).is_some_and(|v| {
-                    v["id"] == old["modelOverrideId"] && !old["modelOverrideId"].is_null()
-                }) {
+                if check_follow_up.is_none()
+                    && overrides.get(&override_key).is_some_and(|v| {
+                        v["id"] == old["modelOverrideId"] && !old["modelOverrideId"].is_null()
+                    })
+                {
                     overrides.remove(&override_key);
                 }
             }
-            if op == "send" || op == "launch" {
+            if (op == "send" && check_follow_up.is_none()) || op == "launch" {
                 let draft_thread = if op == "launch" {
                     format!("\0new/{thread}")
                 } else {
@@ -569,6 +572,19 @@ impl State {
                 } else {
                     drafts.insert(key(environment, thread), json!(text));
                 }
+            }
+            if let Some(attempt) = check_follow_up {
+                let record = value["checkAttempts"]
+                    .get_mut(attempt)
+                    .context("Check follow-up lost its retained attempt")?;
+                ensure!(
+                    record["target"]["environmentId"] == environment
+                        && record["target"]["threadId"] == thread
+                        && record["followUp"] == message,
+                    "Check acknowledgement changed its original target or text"
+                );
+                record["phase"] = json!("acknowledged");
+                record["operationId"] = json!(id);
             }
             Ok(())
         })

@@ -302,6 +302,8 @@ mod tests {
             ..Source::default()
         };
         let mut surface = SurfaceState::new();
+        surface.applied_layout = Some(ui::LayoutMode::Split);
+        surface.sidebar_hidden = Some(false);
         surface.active_key = "native-env/thread-a".into();
         surface.source = Some(source.clone());
         surface.tabs = vec![Tab {

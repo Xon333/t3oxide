@@ -3,8 +3,8 @@
 | Action | Input |
 | --- | --- |
 | Conversations / questions and reports | A / B; F2 |
-| Sidebar | F3 |
-| Context sidebar | F4 |
+| Navigation / optional graph | F3; compact picker closes after Open or Esc |
+| Context | F4; compact screens use a detail overlay |
 | Next / previous pane | F6 / Shift+F6 |
 | Next / previous control | Tab / Shift+Tab |
 | Select / open list item | Up/Down; Enter or click |
@@ -24,6 +24,7 @@
 | Settle / restore | Ctrl+T; /settle; /unsettle |
 | Close tab, retain draft | Cmd+W / Ctrl+W when forwarded; tab close |
 | Context records / capture / resume | /context; /context-save; /resume |
+| Finite check / retained result | /check; /check-result |
 | Help | F1; ?; /help |
 | Save and exit | Ctrl+Q; /quit |
 
@@ -46,3 +47,29 @@ Recovery retains uncertain operations with their original identity and payload.
 Reconcile explicitly; success appears only after acknowledgement. Exiting or
 disconnecting does not stop native work. Sent and rejected text stays in Prompt
 recall; subsequent edits belong to a separate draft.
+
+## Finite checks
+
+`/check` opens one source-pinned command form. Use, for example,
+`--source src/parser.rs -- cargo test parser`. The current native workspace is
+the default execution directory; `--cwd /absolute/worktree` overrides it on that
+profile's execution host. `--timeout 300` sets a 1–900 second limit. Arguments
+are parsed without shell expansion; pipelines require an explicitly chosen
+shell command.
+
+In Rex this creates a pane below the invoking pane in the same workspace. It
+uses inherited session/block context and the maintained CLI. `T3OXIDE_REX` can
+select an absolute CLI path; PATH and the standard macOS Rex installation are
+also checked. An unqualified remote Rex server or missing pane context refuses
+before launching. Remote native profiles use their existing SSH route and
+keep execution-host paths separate from the display Mac.
+
+The original attempt retains bounded output and selected source bytes. The
+result and a saved finding stay together; review the staged follow-up, then
+choose Send follow-up. The ordinary composer, caret and one-message model
+override remain independent. Sending requires the original conversation to be
+attached with a verified writable connection; switching away retains the staged
+follow-up. Acceptance by T3 is distinct from completed work.
+`/check-result` reads the original attempt; it never reruns it. Unknown results,
+changed source and excerpts stay labelled. Finished task panes close only after
+evidence is retained and their process exit is observed; uncertain panes remain.

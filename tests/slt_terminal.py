@@ -208,6 +208,7 @@ def whole_prompt_copy(binary, directory):
         bookmark_after_paste(first, "thread-a", "Active implementation")
         copy_result(lambda: terminal.send(COPY_DRAFT), first)
 
+        terminal.send(F3)  # Explicit source explorer; attached A starts focused.
         click(terminal, "Finished refactor")
         terminal.wait("Inspect Finished refactor")
         focus_prompt(terminal)
@@ -319,6 +320,7 @@ def commands_pointer_and_copy(binary, directory):
     terminal = Terminal(binary, paths["config"], paths["state"], columns=86, rows=31, environment=PTY_ENV)
     try:
         terminal.wait("Ready for review")
+        terminal.send(F3)
         for label in ["Unread", "Running", "Pins", "Settled", "Project", "Env", "Model", "Effort", "Send"]:
             terminal.wait(label)
         click(terminal, "Env")
@@ -413,6 +415,7 @@ def run(binary, directory):
             terminal.resize(columns, rows)
             draft_is(terminal, paths, draft)
             assert not native_payloads(paths), "resize cannot dispatch or normalize a draft"
+        terminal.send(F3)
         click(terminal, "Finished refactor")
         terminal.wait("Inspect Finished refactor")
         terminal.paste("independent tab draft")
@@ -482,10 +485,8 @@ def answers(binary, directory, uncertain=False):
     terminal = Terminal(binary, paths["config"], paths["state"], mode="b", environment=PTY_ENV)
     try:
         terminal.wait("Forms")
+        click(terminal, "Forms")
         click(terminal, "Question to answer")
-        terminal.wait("What should happen next?")
-        terminal.wait("Ready for review")
-        click(terminal, "Answer")
         terminal.wait("Question 1 / 1")
         dialog_action(terminal, "Question 1 / 1", "Next")
         terminal.wait("Next step requires an answer")
@@ -588,9 +589,9 @@ def focus_and_panes(binary, directory):
         assert not native_payloads(paths), "opening Effort cannot select a native model"
         terminal.send(ESC)
         terminal.send(F3)
-        assert "Unread" not in terminal.text, terminal.text
-        terminal.send(F3)
         terminal.wait("Unread")
+        terminal.send(F3)
+        assert "Unread" not in terminal.text, terminal.text
         terminal.send(F4)
         terminal.wait("Copy ID")
         terminal.send(F4)
@@ -603,7 +604,7 @@ def focus_and_panes(binary, directory):
         terminal.send(F6)  # Transcript -> composer.
         terminal.paste("+pane")
         draft_is(terminal, paths, "focus-draft+tab+pane")
-        terminal.send(F6 + END + UP + DOWN + ENTER)  # Navigator arrows, then open last source.
+        terminal.send(F3 + END + UP + DOWN + ENTER)  # Explorer focuses its source list.
         terminal.wait("Inspect Finished refactor")
         focus_prompt(terminal)
         terminal.paste("keyboard-source-draft")
@@ -652,8 +653,11 @@ def library_without_questions(binary, directory):
         terminal.send(F2)
         terminal.wait("Forms 0")
         terminal.wait("Library")
+        click(terminal, "Projects")
         click(terminal, "Empty project", last=True)
+        terminal.send(ESC)
         click(terminal, "Library")
+        click(terminal, "Research · wrapping evidence")
         terminal.wait("wrapping evidence")
         terminal.wait("Retained original source.")
         terminal.wait("Source")
@@ -1048,6 +1052,7 @@ def navigator_lane_pointer(binary, directory):
             before = draft_is(terminal, paths, draft)
             native = json.loads(paths["native"].read_text())
             assert native["effects"] == 0 and not native_payloads(paths)
+            terminal.send(F3)
             for _ in range(2):
                 click(terminal, "Settled")
                 wait_rows(("No conversations",) if empty else ("Settled work",),

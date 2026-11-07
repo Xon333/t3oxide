@@ -166,6 +166,7 @@ impl App {
 
     fn dispatch_intent(&mut self, intent: Intent) -> Result<()> {
         match intent {
+            Intent::CheckSend(attempt) => self.check_send(&attempt)?,
             Intent::Context(action) => self.context_action(action)?,
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
             Intent::Command(command) => self.command(&command)?,
@@ -348,6 +349,9 @@ impl App {
             .split_once(' ')
             .unwrap_or((command.trim().trim_start_matches('/'), ""));
         if self.context_command(name, args)? {
+            return Ok(());
+        }
+        if self.check_command(name, args)? {
             return Ok(());
         }
         match name {

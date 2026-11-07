@@ -20,11 +20,24 @@ Use a current stable Rust toolchain (declared minimum 1.92), existing environmen
 
 Search starts with a project and supports environment/name/native-content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
 
+An attached conversation uses the available transcript/composer area by default.
+F3 exposes navigation when needed; on compact screens it is a temporary picker.
+Internal tabs remain available. B opens Forms, Library and Projects directly;
+the graph remains available on demand. Context uses F4 and a compact overlay
+where a permanent sidebar would crowd the content.
+
 **B** groups actual native human questions by project. Its persistent project-navigation region changes level in place; returning globally retains the selected project and content. Supporting Markdown and supported Mermaid flowcharts remain separate from navigation; unsupported diagram types retain their source. Open in A retains source identity. Answers autosave against the exact source/request revision, validate native values, and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID.
 
 Loaded completed assistant envelopes are retained as source-qualified evidence. `/context-find` searches their full retained source; explicit `/context-save` records typed decisions, evidence, journals or local open loops. `/resume` adds protected drafts, original operations and native questions without executing them. [Context controls](docs/context-controls.md) describe durability, provenance, totals and degradation. Native offers currently supply no qualified dependency edges, so live dependency synthesis remains unavailable and queue admission order is preserved.
 
 The revised presentation preferences live under `sltUi`; old presentation preferences remain recoverable without overriding this contract. Existing accounts, manual names, drafts and uncertain operations are preserved. Internal tabs are always available, including inside Rex.
+
+`/check` connects one finite check, its actual selected source bytes and a human
+finding to a staged follow-up for the original native conversation. It reuses
+the execution host's existing `t3-check` and Rex pane placement. The client owns
+the bounded evidence return, with command, wrapper and unknown outcomes kept
+separate. See [the check flow](docs/shortcuts.md#finite-checks); this source
+increment has a separate installed-host qualification boundary.
 
 ## Input
 

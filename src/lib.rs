@@ -1,6 +1,7 @@
 pub mod app;
 pub mod attention;
 pub mod attention_rank;
+pub mod check_evidence;
 pub mod cli;
 pub mod config;
 pub mod context_store;

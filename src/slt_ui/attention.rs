@@ -35,6 +35,10 @@ pub(super) struct State {
     navigation_cursor: usize,
 }
 
+pub(super) fn navigation_open(state: &SurfaceState) -> bool {
+    state.attention.navigation_open.is_some()
+}
+
 pub(super) fn selected_source(state: &SurfaceState) -> Option<&Source> {
     match state.attention.selected.as_ref()? {
         Selection::Question(key) => state
@@ -80,7 +84,7 @@ pub(super) fn draw(
     initialize_selection(state);
     let width = width.max(1);
     let height = height.max(1);
-    if height < 12 {
+    if height < 12 || state.sidebar_hidden != Some(false) || navigation_open(state) {
         let in_scope = |source: &Source| {
             state
                 .selected_project
@@ -98,81 +102,59 @@ pub(super) fn draw(
             .filter(|item| in_scope(&item.source))
             .count();
         let strip = if width < 52 { 2 } else { 1 };
-        ctx.container().w(width).h(height).col(|ctx| {
-            ctx.container().h(strip).col(|ctx| {
-                let items = [
-                    (
-                        format!("Forms {forms}"),
-                        state.attention.tabs.selected == 0,
-                        true,
-                    ),
-                    (
-                        format!("Library {library}"),
-                        state.attention.tabs.selected == 1,
-                        true,
-                    ),
-                    (
-                        if state.graph_global {
-                            "Projects · All"
-                        } else {
-                            "Projects"
-                        }
-                        .into(),
-                        false,
-                        true,
-                    ),
-                    (
-                        "All projects".into(),
-                        state.graph_global,
-                        !state.graph_global,
-                    ),
-                ];
-                let refs: Vec<_> = items
-                    .iter()
-                    .map(|(label, selected, enabled)| (label.as_str(), *selected, *enabled))
-                    .collect();
-                match action_bar(
-                    ctx,
-                    "attention-navigation",
-                    &mut state.attention.navigation_cursor,
-                    &refs,
-                ) {
-                    Some(index @ 0..=1) => {
-                        state.attention.tabs.selected = index;
-                        state.attention.rows.clear();
-                        let selected =
-                            if index == 1 {
-                                state
-                                    .contents
-                                    .iter()
-                                    .find(|item| {
-                                        state.selected_project.as_ref().is_none_or(|project| {
-                                            *project == item.source.project_key()
-                                        })
-                                    })
-                                    .map(|item| Selection::Content(item.key.clone()))
+        let navigating = navigation_open(state);
+        ctx.disabled(navigating, |ctx| {
+            ctx.container().w(width).h(height).col(|ctx| {
+                ctx.container().h(strip).col(|ctx| {
+                    let items = [
+                        (
+                            format!("Forms {forms}"),
+                            state.attention.tabs.selected == 0,
+                            true,
+                        ),
+                        (
+                            format!("Library {library}"),
+                            state.attention.tabs.selected == 1,
+                            true,
+                        ),
+                        (
+                            if state.graph_global {
+                                "Projects · All"
                             } else {
-                                state
-                                    .questions
-                                    .iter()
-                                    .find(|item| {
-                                        state.selected_project.as_ref().is_none_or(|project| {
-                                            *project == item.source.project_key()
-                                        })
-                                    })
-                                    .map(|item| Selection::Question(item.key.clone()))
-                            };
-                        if let Some(selected) = selected {
-                            select(state, selected, false, actions);
+                                "Projects"
+                            }
+                            .into(),
+                            false,
+                            true,
+                        ),
+                        (
+                            "All projects".into(),
+                            state.graph_global,
+                            !state.graph_global,
+                        ),
+                    ];
+                    let refs: Vec<_> = items
+                        .iter()
+                        .map(|(label, selected, enabled)| (label.as_str(), *selected, *enabled))
+                        .collect();
+                    match action_bar(
+                        ctx,
+                        "attention-navigation",
+                        &mut state.attention.navigation_cursor,
+                        &refs,
+                    ) {
+                        Some(index @ 0..=1) => {
+                            state.attention.tabs.selected = index;
+                            state.attention.rows.clear();
+                            state.attention.navigation_open = Some(false);
                         }
-                        state.attention.navigation_open = Some(false);
+                        Some(2) => state.attention.navigation_open = Some(true),
+                        Some(3) => state.graph_global = true,
+                        _ => {}
                     }
-                    Some(2) => state.attention.navigation_open = Some(true),
-                    Some(3) => state.graph_global = true,
-                    _ => {}
-                }
+                });
+                draw_canvas(ctx, state, width, height.saturating_sub(strip), actions);
             });
-            draw_canvas(ctx, state, width, height.saturating_sub(strip), actions);
         });
         if let Some(graph) = state.attention.navigation_open {
             ctx.modal(|ctx| {
@@ -499,7 +481,21 @@ fn draw_library(
                 // Cursor movement selects content locally; only a form activation asks
                 // the controller to re-read its live source before answering.
                 let selection = row.clone();
-                select(state, selection, activate, actions);
+                select(state, selection.clone(), false, actions);
+                if activate {
+                    if let Selection::Question(key) = selection
+                        && let Some(question) = state.questions.iter().find(|item| item.key == key)
+                        && !matches!(
+                            question_delivery(state, question),
+                            Some("submitting" | "uncertain" | "acknowledged")
+                        )
+                    {
+                        actions.push(Action::Answer(question.clone()));
+                    }
+                    if state.attention.navigation_open.take().is_some() {
+                        ctx.focus_by_name("attention-navigation");
+                    }
+                }
                 ctx.request_frame();
             }
         });
@@ -724,21 +720,8 @@ fn draw_question(
     let current = state.questions.iter().find(|live| live.key == question.key);
     let unchanged = current
         .is_some_and(|live| live.request == question.request && live.source == question.source);
-    let delivery = crate::attention::Source::from_request(
-        &question.source.environment,
-        &question.source.thread,
-        &question.request,
-    )
-    .and_then(|source| source.key())
-    .ok()
-    .and_then(|key| state.answer_delivery.get(&key))
-    .map(String::as_str)
-    .filter(|phase| {
-        matches!(
-            *phase,
-            "submitting" | "uncertain" | "acknowledged" | "rejected"
-        )
-    });
+    let retained_delivery = question_delivery(state, question).map(str::to_owned);
+    let delivery = retained_delivery.as_deref();
     let answer_blocked =
         !unchanged || matches!(delivery, Some("submitting" | "uncertain" | "acknowledged"));
     let compact = height < 6 || width < 40;
@@ -827,6 +810,24 @@ fn draw_question(
             state.attention_mode = false;
         }
     });
+}
+
+fn question_delivery<'a>(state: &'a SurfaceState, question: &AttentionItem) -> Option<&'a str> {
+    crate::attention::Source::from_request(
+        &question.source.environment,
+        &question.source.thread,
+        &question.request,
+    )
+    .and_then(|source| source.key())
+    .ok()
+    .and_then(|key| state.answer_delivery.get(&key))
+    .map(String::as_str)
+    .filter(|phase| {
+        matches!(
+            *phase,
+            "submitting" | "uncertain" | "acknowledged" | "rejected"
+        )
+    })
 }
 
 fn delivery_feedback(
@@ -1175,6 +1176,13 @@ mod tests {
     use serde_json::json;
     use slt::{EventBuilder, TestBackend};
 
+    fn explorer_state() -> SurfaceState {
+        let mut state = SurfaceState::new();
+        state.applied_layout = Some(ui::LayoutMode::Split);
+        state.sidebar_hidden = Some(false);
+        state
+    }
+
     fn source(project: &str) -> Source {
         Source {
             environment: "environment-a".into(),
@@ -1195,6 +1203,7 @@ mod tests {
             markdown: markdown.into(),
             revision: reports::content_revision(markdown),
             truncated: false,
+            ..ContentItem::default()
         }
     }
 
@@ -1229,8 +1238,258 @@ mod tests {
     }
 
     #[test]
-    fn r8_small_context_keeps_navigation_and_retained_source_addressable() {
+    fn focused_form_picker_returns_focus_without_changing_the_attached_draft() {
+        for (width, height) in [(40, 12), (70, 22), (140, 38)] {
+            let mut state = SurfaceState::new();
+            state.active_key = "other-environment/thread".into();
+            state.attention_mode = true;
+            state.questions = vec![delivery_question()];
+            let original = state.questions[0].clone();
+            let draft = "Attached A 日本語 draft  ";
+            let mut editor = ui::editor(draft, "violet", "");
+            let mut modal = ui::editor("", "violet", "");
+            let mut backend = TestBackend::new(width, height);
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    assert!(
+                        super::super::draw(
+                            ctx,
+                            &ui::View::default(),
+                            &mut editor,
+                            &mut modal,
+                            None,
+                            &mut state
+                        )
+                        .is_empty()
+                    );
+                });
+            }
+            let caret = (state.composer.cursor_row, state.composer.cursor_col);
+            let (x, y) = backend
+                .find_text("Forms 1")
+                .expect("direct Forms disclosure");
+            backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+                assert!(
+                    super::super::draw(
+                        ctx,
+                        &ui::View::default(),
+                        &mut editor,
+                        &mut modal,
+                        None,
+                        &mut state
+                    )
+                    .is_empty()
+                );
+            });
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    super::super::draw(
+                        ctx,
+                        &ui::View::default(),
+                        &mut editor,
+                        &mut modal,
+                        None,
+                        &mut state,
+                    );
+                });
+            }
+            assert!(navigation_open(&state));
+            backend.render(|ctx| {
+                super::super::draw(
+                    ctx,
+                    &ui::View::default(),
+                    &mut editor,
+                    &mut modal,
+                    None,
+                    &mut state,
+                );
+                assert!(ctx.focus_by_name("attention-list"));
+            });
+            backend.render(|ctx| {
+                super::super::draw(
+                    ctx,
+                    &ui::View::default(),
+                    &mut editor,
+                    &mut modal,
+                    None,
+                    &mut state,
+                );
+                assert_eq!(ctx.focused_name(), Some("attention-list"));
+            });
+            backend.run_with_events(EventBuilder::new().key_code(KeyCode::Esc).build(), |ctx| {
+                assert!(
+                    super::super::draw(
+                        ctx,
+                        &ui::View::default(),
+                        &mut editor,
+                        &mut modal,
+                        None,
+                        &mut state
+                    )
+                    .is_empty()
+                );
+            });
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    super::super::draw(
+                        ctx,
+                        &ui::View::default(),
+                        &mut editor,
+                        &mut modal,
+                        None,
+                        &mut state,
+                    );
+                });
+            }
+            backend.render(|ctx| {
+                super::super::draw(
+                    ctx,
+                    &ui::View::default(),
+                    &mut editor,
+                    &mut modal,
+                    None,
+                    &mut state,
+                );
+                assert_eq!(ctx.focused_name(), Some("attention-navigation"));
+            });
+            assert!(!navigation_open(&state));
+            assert_eq!(editor.lines().join("\n"), draft);
+            assert_eq!(
+                (state.composer.cursor_row, state.composer.cursor_col),
+                caret
+            );
+            let retained = state.retained_question.as_ref().unwrap();
+            assert_eq!(retained.key, original.key);
+            assert_eq!(retained.source, original.source);
+            assert_eq!(retained.request, original.request);
+        }
+    }
+
+    #[test]
+    fn focused_form_picker_opens_native_review_without_graph_or_submission() {
         let mut state = SurfaceState::new();
+        state.attention_mode = true;
+        state.questions = vec![delivery_question()];
+        let expected = state.questions[0].clone();
+        let mut backend = TestBackend::new(70, 22);
+        for _ in 0..3 {
+            render(&mut backend, &mut state);
+        }
+        backend.assert_contains("Choose a release");
+        backend.render(|ctx| {
+            draw(
+                ctx,
+                &ui::View::default(),
+                &mut state,
+                70,
+                22,
+                &mut Vec::new(),
+            );
+            assert!(ctx.measured_layout_rect("t3oxide.library").is_none());
+            assert!(ctx.measured_layout_rect("t3oxide.projects").is_none());
+        });
+        let (x, y) = backend.find_text("Forms 1").expect("direct Forms picker");
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            draw(
+                ctx,
+                &ui::View::default(),
+                &mut state,
+                70,
+                22,
+                &mut Vec::new(),
+            );
+        });
+        for _ in 0..3 {
+            render(&mut backend, &mut state);
+        }
+        assert!(navigation_open(&state));
+        let (x, y) = backend
+            .find_text("Release scope")
+            .expect("native request in picker");
+        let mut actions = Vec::new();
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            draw(ctx, &ui::View::default(), &mut state, 70, 22, &mut actions);
+        });
+        assert!(matches!(actions.as_slice(), [Action::Answer(item)]
+            if item.key == expected.key && item.source == expected.source
+                && item.request == expected.request));
+        assert!(!navigation_open(&state));
+        let retained = state
+            .retained_question
+            .as_ref()
+            .expect("request retained after review");
+        assert_eq!(retained.key, expected.key);
+        assert_eq!(retained.source, expected.source);
+        assert_eq!(retained.request, expected.request);
+    }
+
+    #[test]
+    fn focused_library_disclosure_preserves_the_retained_request_until_selection() {
+        let mut state = SurfaceState::new();
+        state.questions = vec![delivery_question()];
+        state.contents = vec![content(
+            "Alpha",
+            "guide",
+            "guide",
+            "Release guide",
+            "Evidence",
+        )];
+        let mut backend = TestBackend::new(70, 22);
+        for _ in 0..3 {
+            render(&mut backend, &mut state);
+        }
+        let expected = state
+            .retained_question
+            .as_ref()
+            .map(|item| (item.key.clone(), item.source.clone(), item.request.clone()));
+        let (x, y) = backend
+            .find_text("Library 1")
+            .expect("direct evidence picker");
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            draw(
+                ctx,
+                &ui::View::default(),
+                &mut state,
+                70,
+                22,
+                &mut Vec::new(),
+            );
+        });
+        for _ in 0..3 {
+            render(&mut backend, &mut state);
+        }
+        assert_eq!(
+            state
+                .retained_question
+                .as_ref()
+                .map(|item| { (item.key.clone(), item.source.clone(), item.request.clone()) }),
+            expected
+        );
+        assert!(selected_content(&state).is_none());
+        backend.assert_contains("Release guide");
+        backend.run_with_events(EventBuilder::new().key_code(KeyCode::Esc).build(), |ctx| {
+            draw(
+                ctx,
+                &ui::View::default(),
+                &mut state,
+                70,
+                22,
+                &mut Vec::new(),
+            );
+        });
+        assert!(!navigation_open(&state));
+        assert_eq!(
+            state
+                .retained_question
+                .as_ref()
+                .map(|item| { (item.key.clone(), item.source.clone(), item.request.clone()) }),
+            expected
+        );
+    }
+
+    #[test]
+    fn r8_small_context_keeps_navigation_and_retained_source_addressable() {
+        let mut state = explorer_state();
         state.attention_mode = true;
         state.show_context = true;
         state.questions = vec![delivery_question()];
@@ -1250,7 +1509,7 @@ mod tests {
         backend.assert_contains("Forms 1");
         backend.assert_contains("Library 1");
         backend.assert_contains("Projects");
-        backend.assert_contains("Context");
+        backend.assert_contains("ⓘ");
         let (x, y) = backend.find_text("Projects").unwrap();
         surface_frame(
             &mut backend,
@@ -1271,7 +1530,7 @@ mod tests {
         for _ in 0..3 {
             surface_frame(&mut backend, &mut state, &mut editor, vec![]);
         }
-        let (x, y) = backend.find_text("Context ▾").unwrap();
+        let (x, y) = backend.find_text("ⓘ").unwrap();
         surface_frame(
             &mut backend,
             &mut state,
@@ -1297,7 +1556,7 @@ mod tests {
 
     #[test]
     fn r8_short_form_action_follows_content_and_retained_source() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.questions = vec![delivery_question()];
         let mut backend = TestBackend::new(140, 38);
         for _ in 0..3 {
@@ -1320,7 +1579,7 @@ mod tests {
     #[test]
     fn review_scope_control_cannot_steal_a_queued_question_click() {
         for width in [100, 140] {
-            let mut state = SurfaceState::new();
+            let mut state = explorer_state();
             state.attention_mode = true;
             state.show_context = false;
             state.questions = ["First request", "Second request"]
@@ -1375,7 +1634,7 @@ mod tests {
             assert_eq!(state.selected_question.as_ref(), Some(&expected.key));
             assert_eq!(selected_source(&state), Some(&expected.source));
             assert!(
-                matches!(actions.as_slice(), [Action::InspectQuestion(item)]
+                matches!(actions.as_slice(), [Action::Answer(item)]
                     if item.key == expected.key && item.source == expected.source
                         && item.request == expected.request),
                 "queued row click at width {width} must retain its source: {actions:?}"
@@ -1387,7 +1646,7 @@ mod tests {
     #[test]
     fn review_empty_project_preserves_report_after_retaining_a_question() {
         for (width, height) in [(140, 38), (100, 31)] {
-            let mut state = SurfaceState::new();
+            let mut state = explorer_state();
             state.attention_mode = true;
             state.show_context = false;
             state.active_key = "environment-a/original-source".into();
@@ -1492,7 +1751,7 @@ mod tests {
         for (width, height) in [(46, 22), (40, 12)] {
             for project in ["Alpha", "Empty"] {
                 for form in [false, true] {
-                    let mut state = SurfaceState::new();
+                    let mut state = explorer_state();
                     state.attention_mode = true;
                     state.show_context = false;
                     state.active_key = "environment-a/original-source".into();
@@ -1603,7 +1862,7 @@ mod tests {
 
     #[test]
     fn unresolved_content_does_not_disable_valid_project_navigation() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.projects = vec![source("Alpha")];
         let mut inherited = content(
             "",
@@ -1641,7 +1900,7 @@ mod tests {
 
     #[test]
     fn library_is_independent_of_questions_and_keeps_selection_through_context_and_resize() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.contents = vec![
             content(
                 "Alpha",
@@ -1698,7 +1957,7 @@ mod tests {
 
     #[test]
     fn graph_changes_projects_and_returns_to_global_without_clearing_the_selected_report() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.projects = vec![source("Alpha"), source("Beta")];
         state.contents = vec![
             content(
@@ -1775,7 +2034,7 @@ mod tests {
 
     #[test]
     fn changed_request_keeps_source_visible_but_cannot_answer_a_stale_offer() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         let question = AttentionItem {
             key: "native-request-a".into(),
             source: source("Alpha"),
@@ -1818,7 +2077,7 @@ mod tests {
 
     #[test]
     fn delivery_detail_does_not_highlight_an_unrelated_remaining_permission() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.selected_project = Some(source("Alpha").project_key());
         let question = delivery_question();
         let key = crate::attention::Source::from_request(
@@ -1888,7 +2147,7 @@ mod tests {
 
     #[test]
     fn compact_report_leaf_is_not_duplicated_or_retargeted_by_a_queued_graph_click() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.attention_mode = true;
         state.active_key = "environment-a/original".into();
         state.projects = vec![source("Alpha"), source("Empty project")];
@@ -2008,7 +2267,7 @@ mod tests {
 
     #[test]
     fn compact_browse_tabs_keep_complete_counts_and_report_identity_through_resize() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.attention_mode = true;
         state.questions = vec![delivery_question()];
         state.contents = vec![content(
@@ -2044,6 +2303,18 @@ mod tests {
             EventBuilder::new().click(x, y).build(),
         );
         assert!(actions.is_empty());
+        for _ in 0..3 {
+            surface_frame(&mut backend, &mut state, &mut editor, vec![]);
+        }
+        let (x, y) = backend
+            .find_text("Research · release")
+            .expect("retained report in Library picker");
+        surface_frame(
+            &mut backend,
+            &mut state,
+            &mut editor,
+            EventBuilder::new().click(x, y).build(),
+        );
         for _ in 0..3 {
             surface_frame(&mut backend, &mut state, &mut editor, vec![]);
         }
@@ -2121,7 +2392,7 @@ mod tests {
 
     #[test]
     fn project_ancestry_and_retained_report_survive_actual_resize_and_global_return() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.attention_mode = true;
         state.active_key = "environment-a/retained-thread".into();
         state.projects = vec![source("Empty project")];
@@ -2224,7 +2495,7 @@ mod tests {
 
     #[test]
     fn scoped_counts_and_graph_geometry_do_not_retarget_the_retained_form() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.projects = vec![source("Alpha"), source("Beta")];
         let alpha = delivery_question();
         let beta = AttentionItem {
@@ -2278,7 +2549,7 @@ mod tests {
 
     #[test]
     fn smallest_surface_prioritizes_question_and_opens_review_without_submitting() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         state.attention_mode = true;
         state.questions = vec![delivery_question()];
         let mut backend = super::super::tests::ResizableBackend::new(140, 38);
@@ -2342,7 +2613,7 @@ mod tests {
 
     #[test]
     fn retained_form_shows_authoritative_delivery_without_inferring_ack_from_queue_removal() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         let question = delivery_question();
         let source = crate::attention::Source::from_request(
             &question.source.environment,
@@ -2405,7 +2676,7 @@ mod tests {
 
     #[test]
     fn delivery_receipt_requires_the_exact_environment_thread_request_and_revision() {
-        let mut state = SurfaceState::new();
+        let mut state = explorer_state();
         let question = delivery_question();
         let source = crate::attention::Source::from_request(
             &question.source.environment,

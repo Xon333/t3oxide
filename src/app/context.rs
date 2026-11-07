@@ -54,6 +54,11 @@ pub(crate) struct ContextIo {
     revisit_version: u64,
 }
 
+pub(super) struct Selection {
+    pub source: Option<crate::slt_ui::Source>,
+    pub content: Option<(String, String)>,
+}
+
 impl App {
     fn context_worker(&mut self) -> &Worker {
         self.context_io.worker.get_or_insert_with(|| {
@@ -521,7 +526,154 @@ impl App {
         })
     }
 
+    pub(super) fn context_capture_content(
+        &self,
+        key: &str,
+        revision: &str,
+        selected: &crate::slt_ui::Source,
+    ) -> Result<store::RecordInput> {
+        ensure!(
+            self.environments
+                .get(selected.profile)
+                .is_some_and(|environment| { environment.environment_id == selected.environment })
+                && domain::valid_id(&selected.project_id),
+            "Selected source environment or project unavailable"
+        );
+        let item = self
+            .loaded_contents
+            .iter()
+            .find(|item| item.key == key && item.revision == revision && item.source == *selected)
+            .context("Selected source changed; select its retained revision again")?;
+        ensure!(
+            !item.truncated && !item.full_source.is_empty(),
+            "Source is an excerpt or its original bytes are unavailable"
+        );
+        let row: crate::projection::Row = serde_json::from_slice(&item.full_source)?;
+        let expected_key =
+            serde_json::to_string(&[&selected.environment, &selected.thread, &row.item_id])?;
+        ensure!(
+            expected_key == key
+                && row.source_thread_id == selected.thread
+                && row.kind == "assistant_message"
+                && !row.streaming
+                && !row.truncated
+                && row.text == item.markdown
+                && super::content::row_revision(&row)? == revision,
+            "Selected source identity, revision or complete bytes changed"
+        );
+        Ok(store::RecordInput {
+            source: Source {
+                environment_id: selected.environment.clone(),
+                project_id: selected.project_id.clone(),
+                thread_id: selected.thread.clone(),
+                item_id: Some(row.item_id),
+                request_id: None,
+                revision: revision.into(),
+                observed: json!({"retainedLoadedRow":true,"capturedItemOnly":true,
+                    "streaming":false,"truncated":false,"nativeFreshness":"unknown"}),
+            },
+            kind: Kind::Evidence,
+            text: row.text.chars().take(1200).collect(),
+            full_source: item.full_source.to_vec(),
+            supersedes: None,
+            revisit: None,
+        })
+    }
+
+    pub(super) fn context_capture_menu(&mut self, captured: store::RecordInput) -> Result<()> {
+        ensure!(
+            self.context_io.retry.is_none() && self.context_io.failed.is_none(),
+            "Original context write retained · /context-retry"
+        );
+        let detail = format!(
+            "{} / {} / {} @ {}",
+            captured.source.environment_id,
+            captured.source.project_id,
+            captured.source.thread_id,
+            captured.source.revision
+        );
+        let choices = [
+            ("Decision", Kind::Decision),
+            ("Evidence", Kind::Evidence),
+            ("Journal", Kind::Journal),
+            ("Local open loop", Kind::OpenLoop),
+        ]
+        .into_iter()
+        .map(|(label, kind)| {
+            Choice::new(
+                label,
+                "",
+                Intent::Context(Action::Record(store::RecordInput {
+                    kind,
+                    ..captured.clone()
+                })),
+            )
+        })
+        .collect();
+        self.menu("Capture source", &detail, choices);
+        Ok(())
+    }
+
     pub(super) fn context_command(&mut self, name: &str, args: &str) -> Result<bool> {
+        let selected = if matches!(
+            name,
+            "context" | "context-save" | "context-find" | "context-history" | "resume"
+        ) {
+            self.context_selection
+                .as_ref()
+                .map(|selection| {
+                    selection
+                        .source
+                        .clone()
+                        .context("Select a source before opening its context")
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let source = selected
+            .as_ref()
+            .map(|source| self.retained_context_scope(source))
+            .transpose()?;
+        self.context_command_scoped(name, args, source)
+    }
+
+    pub(super) fn context_selected_source(
+        &mut self,
+        selected: &crate::slt_ui::Source,
+        resume: bool,
+    ) -> Result<()> {
+        let source = self.retained_context_scope(selected)?;
+        self.context_command_scoped(if resume { "resume" } else { "context" }, "", Some(source))?;
+        Ok(())
+    }
+
+    fn retained_context_scope(&self, selected: &crate::slt_ui::Source) -> Result<Source> {
+        ensure!(
+            self.environments
+                .get(selected.profile)
+                .is_some_and(|environment| environment.environment_id == selected.environment)
+                && domain::valid_id(&selected.project_id)
+                && domain::valid_id(&selected.thread),
+            "Selected context source unavailable"
+        );
+        Ok(Source {
+            environment_id: selected.environment.clone(),
+            project_id: selected.project_id.clone(),
+            thread_id: selected.thread.clone(),
+            item_id: None,
+            request_id: None,
+            revision: "retained-source-scope".into(),
+            observed: json!({"retainedScope":true,"nativeFreshness":"unknown"}),
+        })
+    }
+
+    fn context_command_scoped(
+        &mut self,
+        name: &str,
+        args: &str,
+        selected: Option<Source>,
+    ) -> Result<bool> {
         if !matches!(
             name,
             "context"
@@ -537,7 +689,11 @@ impl App {
             self.retry_context_write()?;
             return Ok(true);
         }
-        let source = self.context_source()?;
+        let source = if let Some(source) = selected {
+            source
+        } else {
+            self.context_source()?
+        };
         let scope = Scope {
             environment_id: source.environment_id.clone(),
             project_id: Some(source.project_id.clone()),
@@ -545,30 +701,20 @@ impl App {
         };
         match name {
             "context-save" => {
-                ensure!(
-                    self.context_io.retry.is_none() && self.context_io.failed.is_none(),
-                    "Original context write retained · /context-retry"
-                );
-                let captured = self.context_capture(Kind::Evidence)?;
-                let choices = [
-                    ("Decision", Kind::Decision),
-                    ("Evidence", Kind::Evidence),
-                    ("Journal", Kind::Journal),
-                    ("Local open loop", Kind::OpenLoop),
-                ]
-                .into_iter()
-                .map(|(label, kind)| {
-                    Choice::new(
-                        label,
-                        "",
-                        Intent::Context(Action::Record(store::RecordInput {
-                            kind,
-                            ..captured.clone()
-                        })),
-                    )
-                })
-                .collect();
-                self.menu("Capture source", "", choices);
+                let captured = if let Some(selection) = &self.context_selection {
+                    let selected = selection
+                        .source
+                        .as_ref()
+                        .context("Selected source unavailable")?;
+                    let (key, revision) = selection
+                        .content
+                        .as_ref()
+                        .context("Select retained Library content before capture")?;
+                    self.context_capture_content(key, revision, selected)?
+                } else {
+                    self.context_capture(Kind::Evidence)?
+                };
+                self.context_capture_menu(captured)?;
             }
             "context-find" => self.text_dialog(
                 "Find context",
@@ -580,7 +726,15 @@ impl App {
                 let mut query = Query::new(scope);
                 query.text = args.into();
                 let mut records = Vec::new();
-                let text = self.text();
+                let active_matches = self.active.as_ref().is_some_and(|active| {
+                    self.environments[active.profile].environment_id == source.environment_id
+                        && active.thread == source.thread_id
+                });
+                let text = if active_matches {
+                    self.text()
+                } else {
+                    self.state.draft(&source.environment_id, &source.thread_id)
+                };
                 if !text.is_empty() {
                     let mut draft_source = source.clone();
                     draft_source.revision = crate::reports::content_revision(&text);
@@ -624,7 +778,7 @@ impl App {
                         });
                     }
                 }
-                if let Some(active) = &self.active {
+                if let Some(active) = self.active.as_ref().filter(|_| active_matches) {
                     for request in &active.requests {
                         let mut request_source = source.clone();
                         request_source.request_id = Some(string(request, "id"));

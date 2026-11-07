@@ -185,6 +185,49 @@ no latency/resource saving or hard cancellation deadline is claimed.
 
 ## Verification boundaries
 
+### Finite check evidence (A4, B3, S6)
+
+`src/check_evidence.rs` and `scripts/check-evidence.py` supply one finite caller
+and execution-host evidence asset. They do not change Fleet's `t3-check`, Rex
+configuration, native scheduling or the Node compatibility boundary. The
+controller saves the original native target, helper digest and unpredictable attempt identity
+before preparation, then the qualified host reference before a single launch.
+Rex creation observations are saved independently. Existing SSH profiles carry
+remote execution; local Rex layout ownership is qualified before creating a
+split. Display host and execution host are distinct.
+
+The helper has independent exclusive run/child start markers. Command output
+and selected regular-file bytes are bounded and retained outside source and
+temporary roots. One <=48 KiB JSON return carries exact base64 bytes, hashes,
+coverage and explicit unknown fields. Repository-wide HEAD/index/dirty identity
+and snapshot isolation remain unknown. Command exit, wrapper exit, teardown,
+pane creation and native acknowledgement are separate observations. Recovery
+reads the same attempt with its original hash-pinned helper, using the available
+host Python for inspection. Historical reads retain their original binding even
+when the worktree or live tools have changed; fresh execution still requires
+the original identities. Reads never install, prepare or launch another check.
+The caller's observation deadline does not terminate Fleet's cleanup owner.
+The same task-owned Rex helper keeps draining capped streams until wrapper exit;
+if cleanup hangs, the pane and its attempt stay retained with an unknown result.
+No automatic pane closure or replay resolves that uncertainty.
+
+`src/app/checks.rs` retains the result and a separate human finding in existing
+client State and admits each distinct returned envelope as its own Context
+revision. In-process reads coalesce per attempt and older read generations cannot
+replace newer evidence. Native acceptance is retained independently of later
+collection outcomes. Native
+follow-up uses the existing ordinary mutation lane with an origin discriminator;
+it cannot retire an unrelated composer draft or its staged model override.
+The explicit final send still validates original environment/project/thread and
+current writable native state, persists the operation and matches its receipt.
+It does not imply native task completion or automatic incorporation.
+
+Selected Library content retains its original serialized native row through
+shared immutable bytes. Context Capture validates its selected source/key/revision
+and freezes those bytes before kind selection. Records and Resume use that
+same source scope; an unrelated attached conversation cannot supply its draft
+or questions. Loaded evidence and durable Context history remain distinct.
+
 Rust unit tests exercise parser bounds, source identity, revision application, persistence/acknowledgement, keyboard semantics and rendering. Process tests exercise real child pipes, handshake rejection, deadlines, cancellation and Stop precedence. Deterministic native fixtures and PTY tests exercise both modes, resize, streaming, forms, native requests, failures and recovery through actual terminal bytes. Node/loopback tests exercise the retained native boundary and crash windows.
 
 These tests are implementation evidence, not claims that a user's machine has a particular credential, native version, SSH route, terminal keyboard mode or provider account. [Verification](rust-verification.md) records the commands and actual results separately from the remaining installed-host checks. Those checks require integration access; no unfinished frontend implementation is delegated to a local native agent.

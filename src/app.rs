@@ -1,6 +1,7 @@
 //! One event-driven client workspace. Background reads never acquire mutation
 //! authority; every write is journaled before it reaches the adapter.
 mod actions;
+mod checks;
 mod content;
 mod context;
 mod context_worker;
@@ -100,6 +101,10 @@ pub(super) enum Background {
         result: Result<(), String>,
     },
     Context(context_worker::Event),
+    Check {
+        attempt: String,
+        result: Result<(), String>,
+    },
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MutationContext {
@@ -137,6 +142,8 @@ pub(super) enum ModelScope {
 }
 #[derive(Clone, Debug)]
 pub(super) enum InputTarget {
+    CheckCommand(crate::slt_ui::Source),
+    CheckFinding(String),
     ContextQuery(crate::context_store::Scope),
     ContextRevisit(Box<crate::context_store::PackRow>),
     Search,
@@ -150,6 +157,7 @@ pub(super) enum InputTarget {
 }
 #[derive(Clone, Debug)]
 pub(super) enum Intent {
+    CheckSend(String),
     Context(context::Action),
     Workspace(workspace::WorkspaceAction),
     Command(String),
@@ -387,6 +395,8 @@ pub struct App {
     pub(super) context_capture_inflight: bool,
     pub(super) context_capture_status: String,
     pub(super) context_io: context::ContextIo,
+    context_selection: Option<context::Selection>,
+    check_io: HashSet<String>,
     #[cfg(test)]
     pub(super) context_test_barrier: Option<context::IoBarrier>,
     pub(super) return_positions: HashMap<String, (usize, bool, TextArea<'static>)>,
@@ -495,6 +505,8 @@ impl App {
             context_capture_inflight: false,
             context_capture_status: String::new(),
             context_io: context::ContextIo::default(),
+            context_selection: None,
+            check_io: HashSet::new(),
             #[cfg(test)]
             context_test_barrier: None,
             return_positions: HashMap::new(),
@@ -1085,6 +1097,7 @@ impl App {
 
     fn handle(&mut self, event: Background) -> Result<()> {
         match event {
+            Background::Check { attempt, result } => self.check_done(&attempt, result)?,
             Background::Context(event) => self.handle_context_event(event)?,
             Background::Saved {
                 key,
@@ -1654,6 +1667,14 @@ impl App {
             "Unknown mutation source or operation"
         );
         ensure!(fields.is_object(), "Invalid mutation payload");
+        let check_follow_up = fields.get("t3oxideCheckFollowUp").is_some();
+        if check_follow_up {
+            ensure!(
+                op == "send",
+                "Check follow-up must use the native send lane"
+            );
+            self.validate_check_send(profile, &fields, retry.is_some())?;
+        }
         let env = self.environments[profile].clone();
         let id = retry.clone().unwrap_or_else(wire::new_id);
         let stop = if retry.is_some() {
@@ -1831,7 +1852,7 @@ impl App {
             );
         }
         let submitted_version = self.draft_version;
-        let saved = if op == "send" && retry.is_none() {
+        let saved = if op == "send" && retry.is_none() && !check_follow_up {
             // Hold the autosave cache lock across the durable handoff so an old
             // save cannot resurrect submitted text as the next draft.
             let key = format!("{}/{}", env.environment_id, string(&fields, "threadId"));
@@ -1881,7 +1902,7 @@ impl App {
         let context = MutationContext {
             generation: self.generation,
             profile,
-            draft_version: if op == "send" && retry.is_none() {
+            draft_version: if op == "send" && retry.is_none() && !check_follow_up {
                 Some(submitted_version)
             } else {
                 None

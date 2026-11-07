@@ -523,6 +523,8 @@ impl App {
             "Input exceeds the editor limit"
         );
         match target {
+            InputTarget::CheckCommand(source) => self.check_save_command(source, text)?,
+            InputTarget::CheckFinding(attempt) => self.check_save_finding(attempt, text)?,
             InputTarget::Search => self.search_query = text.to_owned(),
             InputTarget::ContextRevisit(row) => self.context_revisit_edited(row, text)?,
             InputTarget::LaunchTitle => {
@@ -568,6 +570,18 @@ impl App {
         let previous = self.dialog.take();
         let result = (|| {
             match target {
+                InputTarget::CheckCommand(source) => {
+                    ensure!(
+                        self.active
+                            .as_ref()
+                            .is_some_and(|active| active.profile == source.profile
+                                && active.thread == source.thread)
+                            && self.source(source.profile, &source.thread) == source,
+                        "Check target changed; original command draft retained"
+                    );
+                    self.check_start(&text)?;
+                }
+                InputTarget::CheckFinding(attempt) => self.check_follow_up_review(&attempt)?,
                 InputTarget::ContextRevisit(row) => self.context_revisit(&row, &text)?,
                 InputTarget::ContextQuery(scope) => self.context_recall(scope, &text, false, 0)?,
                 InputTarget::Search => {

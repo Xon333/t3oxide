@@ -635,6 +635,12 @@ impl App {
     }
 
     pub(super) fn observe_slt_layout(&mut self, surface: &SurfaceState) {
+        self.context_selection = surface.attention_mode.then(|| context::Selection {
+            source: surface.selected_source().cloned(),
+            content: surface
+                .selected_content()
+                .map(|item| (item.key.clone(), item.revision.clone())),
+        });
         if let Some(focus) = surface.focus {
             self.focus = focus;
         }
@@ -771,6 +777,22 @@ impl App {
             Action::Command(command) if command == "internal-tabs" => {
                 self.save_ui()?;
             }
+            Action::Command(command) if surface.attention_mode && command == "context-save" => {
+                let item = surface
+                    .selected_content()
+                    .context("Select retained Library content before capture")?;
+                let captured =
+                    self.context_capture_content(&item.key, &item.revision, &item.source)?;
+                self.context_capture_menu(captured)?;
+            }
+            Action::Command(command)
+                if surface.attention_mode && matches!(command.as_str(), "context" | "resume") =>
+            {
+                let source = surface
+                    .selected_source()
+                    .context("Select a source before opening its context")?;
+                self.context_selected_source(source, command == "resume")?;
+            }
             Action::Command(command) => {
                 if command == "quit" {
                     self.preserve_open_form()?;
@@ -786,7 +808,21 @@ impl App {
                     self.command(&command)?;
                 }
             }
+            Action::CaptureContent {
+                key,
+                revision,
+                source,
+            } => {
+                let captured = self.context_capture_content(&key, &revision, &source)?;
+                self.context_capture_menu(captured)?;
+            }
+            Action::ContextSource { source, resume } => {
+                self.context_selected_source(&source, resume)?
+            }
             Action::Answer(item) => {
+                surface.selected_question = Some(item.key.clone());
+                surface.loading_question = Some(item.key.clone());
+                surface.retained_question = Some(item.clone());
                 let source = item.source;
                 ensure!(
                     self.environments

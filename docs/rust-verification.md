@@ -1,5 +1,54 @@
 # Rust / SLT verification
 
+## Rex-oriented source increment — 2026-11-07
+
+The accepted focused A/B presentation, selected-Library Capture/Records/Resume,
+and finite-check evidence/finding/follow-up paths are implemented in source.
+The corrected source passed **290 Rust tests** (275 library, 15 integration),
+workspace/vendor formatting, both Clippy checks and the Rust **1.92.0**
+all-target/all-feature compile check. Shared-boundary checks passed **259 Node
+checks and five measurement-tool tests**. The finite-helper fixture suite passed
+**16 tests**, including historical reads after cwd/tool changes, authentic old
+helper bytes, delayed wrapper cleanup and closed display pipes with capped
+retention. No expected failures are counted as passes.
+
+The cross-environment first-send guard remains intact. A refused follow-up
+preserves exact drafts, caret, overrides and state; explicit return to the
+original verified target admits one acknowledged native fixture send. Late or
+reversed evidence observations cannot retire native acceptance. Partial and
+final envelopes have distinct Context revisions and retain both exact payloads.
+Interrupted helper publication cannot leave a partial hash-addressed final asset.
+
+The caller's wait is bounded separately from Fleet's cleanup lifetime. If that
+wait expires, the original Rex task process continues draining capped wrapper
+output; the result and pane remain uncertain until actual exit. This is not a
+cleanup-time or teardown guarantee. Recovery uses the originally pinned helper
+and current host Python for read-only inspection, without requiring the old cwd
+or live wrapper/interpreter identity. Fresh execution retains strict preflight.
+
+A fresh isolated-target release build and its final focused rebuild produced an
+arm64 binary of **9,618,752 bytes**, final SHA256
+`92709c9e5cc2979aedd9bc14ad9cbdd63716ac73700977b9ffbd1a42d0569c18`.
+Version and strict code-signature checks passed. The release UI passed all
+**28 PTY checks** with all **195 assertions** retained on the preceding
+`a897335c7077e94190863fe083c5d3fa6cc0798ad9a0ff84c67523e7cacb034a`
+artifact. Subsequent changes affect finite-check recovery admission and embedded
+helper authentication, with focused regression coverage; SLT presentation/input
+source is unchanged. The two consequential reviews are complete. Root corrected
+the final two residuals: post-ACK partial-result reads and surviving asset
+publication links. Acknowledged partial attempts now admit read-only recovery;
+asset links are allowed only for authenticated helper identity, while request,
+record and blob inputs remain single-linked. The minimum-version compile check
+predates these small corrections; they introduce no new Rust APIs. Read-only M1 Rex
+metadata confirmed the local Unix endpoint and block-inspection shape. No new
+Rex pane, actual OMV wrapper check, native endpoint Send/Apply, M4 install, merge,
+service change or performance measurement has occurred in this increment.
+
+All **62 earlier feedback records** and **65 history entries** remain in the
+private carry-forward map. This increment does not close the remaining UI/UX
+hill-climb cases or admit a backend performance gain. Historical R9 acceptance
+remains **NOT_ACCEPTED**, with its native/graph/lifecycle limits unchanged.
+
 ## Active correction pass — 2026-11-05
 
 The latest R8 source checkpoint passed **267 Rust tests** (252 library and 15

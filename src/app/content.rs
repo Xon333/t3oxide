@@ -90,6 +90,7 @@ impl App {
                     .unwrap_or_else(|| "Agent output".into())
             });
             self.loaded_contents.retain(|item| item.key != key);
+            let full_source = serde_json::to_vec(&row)?.into();
             self.loaded_contents.push_front(ContentItem {
                 key,
                 source,
@@ -98,6 +99,7 @@ impl App {
                 markdown: row.text,
                 revision,
                 truncated: row.truncated,
+                full_source,
             });
         }
         self.loaded_contents.truncate(MAX_LOADED_CONTENT);
