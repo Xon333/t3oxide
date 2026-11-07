@@ -293,7 +293,7 @@ pub fn prepare(attempt: &Attempt) -> Result<PreparedAttempt> {
         &mut command,
         &input,
         Duration::from_secs(CONTROL_SECONDS),
-        &mut |_| Ok(()),
+        None,
     )?;
     ensure!(
         output.exit_code == Some(0),
@@ -399,7 +399,7 @@ os.execv(sys.executable,[sys.executable,path,'read','--attempt-dir',a,'--max-byt
         &mut command,
         &input,
         Duration::from_secs(CONTROL_SECONDS),
-        &mut |_| Ok(()),
+        None,
     )?;
     ensure!(
         output.exit_code == Some(0),
@@ -427,7 +427,7 @@ pub fn recover(attempt: &Attempt) -> Result<(PreparedAttempt, Evidence)> {
 fn qualify_layout_owner(rex: &RexContext) -> Result<()> {
     let mut command = rex.command();
     command.args(["whoami", "--json"]);
-    let output = execute(&mut command, &[], Duration::from_secs(10), &mut |_| Ok(()))?;
+    let output = execute(&mut command, &[], Duration::from_secs(10), None)?;
     ensure!(output.exit_code == Some(0), "Rex layout owner unavailable");
     let value: Value = serde_json::from_slice(&output.stdout)?;
     ensure!(
@@ -437,23 +437,25 @@ fn qualify_layout_owner(rex: &RexContext) -> Result<()> {
                 .is_some_and(|endpoint| endpoint.starts_with("unix://")),
         "Rex server execution host is not qualified as local; no pane or workload was launched"
     );
+    // Inspect includes the full block API, which can exceed the control limit.
+    // The maintained inventory supplies exact membership without that payload.
     let mut inspect = rex.command();
-    inspect.args([
-        "block",
-        "inspect",
-        "--session",
-        &rex.session,
-        &rex.block,
-        "--json",
-    ]);
-    let output = execute(&mut inspect, &[], Duration::from_secs(10), &mut |_| Ok(()))?;
+    inspect.args(["block", "ls", "--session", &rex.session, "--json"]);
+    let output = execute(&mut inspect, &[], Duration::from_secs(10), None)?;
     ensure!(
         output.exit_code == Some(0),
         "Original Rex pane is unavailable; no workload launched"
     );
     let value: Value = serde_json::from_slice(&output.stdout)?;
+    let blocks = value["blocks"]
+        .as_array()
+        .context("Rex pane inventory is malformed; no workload launched")?;
     ensure!(
-        value["block"]["block_id"] == rex.block,
+        blocks
+            .iter()
+            .filter(|block| block["block_id"] == rex.block)
+            .count()
+            == 1,
         "Rex pane identity changed; no workload launched"
     );
     Ok(())
@@ -497,21 +499,30 @@ pub fn close_finished(
         &id,
         "process",
     ]);
-    let output = execute(&mut inspect, &[], Duration::from_secs(10), &mut |_| Ok(()))?;
+    let output = execute(&mut inspect, &[], Duration::from_secs(10), None)?;
     ensure!(
         output.exit_code == Some(0),
         "Task pane process state unavailable; retained"
     );
     let value: Value = serde_json::from_slice(&output.stdout)?;
+    // terminal.process requires last_exit; child/foreground may be omitted.
+    // Only this owned shell=none terminal's positive exit record proves it ended.
+    let exited = value["last_exit"].as_object().is_some_and(|exit| {
+        exit.get("exit_code").and_then(Value::as_i64).is_some()
+            && exit.get("error").is_none_or(Value::is_string)
+            && exit
+                .keys()
+                .all(|key| matches!(key.as_str(), "exit_code" | "error"))
+    });
     ensure!(
-        value.get("child").is_some_and(Value::is_null)
-            && value.get("foreground").is_some_and(Value::is_null)
-            && value.get("last_exit").is_some_and(|value| !value.is_null()),
+        exited
+            && value.get("child").is_none_or(Value::is_null)
+            && value.get("foreground").is_none_or(Value::is_null),
         "Task pane has no verified final process state; retained"
     );
     let mut close = rex.command();
     close.args(["block", "close", "--session", &rex.session, &id]);
-    let output = execute(&mut close, &[], Duration::from_secs(10), &mut |_| Ok(()))?;
+    let output = execute(&mut close, &[], Duration::from_secs(10), None)?;
     ensure!(
         output.exit_code == Some(0),
         "Task pane close was not acknowledged; original IDs retained"
@@ -547,7 +558,7 @@ pub fn run(
         // executes SSH from the inherited workspace's host, using its existing route.
         if launch.environment.ssh_destination.is_none() { command.args(["--cwd", &prepared.worktree]); }
         command.arg("--").arg(host.get_program()).args(host.get_args());
-        execute(&mut command, &[], Duration::from_secs(launch.timeout_seconds + CLEANUP_SECONDS), &mut checkpoint)
+        execute(&mut command, &[], Duration::from_secs(launch.timeout_seconds + CLEANUP_SECONDS), Some(&mut checkpoint))
     })().map_err(|error| format!("{error:#}"));
     let evidence = collect(prepared).map_err(|error| format!("{error:#}"));
     Completion { launch, evidence }
@@ -717,11 +728,13 @@ fn drain(reader: &mut impl Read, bytes: &mut Vec<u8>) -> Result<bool> {
     Ok(false)
 }
 
+type JsonCheckpoint<'a> = &'a mut dyn FnMut(&Value) -> Result<()>;
+
 fn execute(
     command: &mut Command,
     input: &[u8],
     timeout: Duration,
-    checkpoint: &mut impl FnMut(&Value) -> Result<()>,
+    mut checkpoint: Option<JsonCheckpoint<'_>>,
 ) -> Result<ProcessObservation> {
     ensure!(
         input.len() <= 256 * 1024,
@@ -768,22 +781,35 @@ fn execute(
             if !err_eof {
                 err_eof = drain(&mut stderr, &mut err)?;
             }
-            while let Some(offset) = out[scanned..].iter().position(|b| *b == b'\n') {
-                let end = scanned + offset;
-                if let Ok(value) = serde_json::from_slice::<Value>(&out[scanned..end]) {
-                    checkpoint(&value)?;
+            // Rex emits formatted JSON before waiting for the program. Retain
+            // each complete object promptly, including across read boundaries.
+            if let Some(checkpoint) = checkpoint.as_mut() {
+                while scanned < out.len() {
+                    let mut values =
+                        serde_json::Deserializer::from_slice(&out[scanned..]).into_iter::<Value>();
+                    match values.next() {
+                        Some(Ok(value)) => {
+                            ensure!(
+                                value.is_object(),
+                                "Rex launch output is not a control object; original attempt remains uncertain"
+                            );
+                            scanned += values.byte_offset();
+                            checkpoint(&value)?;
+                        }
+                        Some(Err(error)) if error.is_eof() && !out_eof => break,
+                        Some(Err(error)) => {
+                            return Err(error).context(
+                                "Invalid Rex launch JSON; original attempt remains uncertain",
+                            );
+                        }
+                        None => scanned = out.len(),
+                    }
                 }
-                scanned = end + 1;
             }
             if let Some(status) = child.try_wait()?
                 && out_eof
                 && err_eof
             {
-                if scanned < out.len()
-                    && let Ok(value) = serde_json::from_slice::<Value>(&out[scanned..])
-                {
-                    checkpoint(&value)?;
-                }
                 return Ok(ProcessObservation {
                     exit_code: status.code(),
                     signal: status.signal(),
@@ -812,6 +838,132 @@ fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finished_pane_uses_positive_exit_evidence_and_preserves_uncertain_processes() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let executable = root.join("rex-fixture");
+        std::fs::write(
+            &executable,
+            r#"#!/usr/bin/env python3
+import json,pathlib,sys
+root=pathlib.Path(__file__).parent
+args=sys.argv[1:]
+assert args.pop(0)=='--autostart=false'
+if args==['whoami','--json']:
+ print(json.dumps({'principal':{'transport':'unix'},'endpoint':'unix://fixture'}))
+elif args==['block','inspect','--session','fixture-session','fixture-origin','--json']:
+ print(json.dumps({'block':{'block_id':'fixture-origin'},'api':'x'*70000}))
+elif args==['block','ls','--session','fixture-session','--json']:
+ print((root/'blocks.json').read_text() if (root/'blocks.json').exists() else json.dumps({'blocks':[{'block_id':'fixture-origin'}]}))
+elif args==['block','call','--session','fixture-session','--block','fixture-task','process']:
+ print((root/'process.json').read_text())
+elif args==['block','close','--session','fixture-session','fixture-task']:
+ (root/'closed').write_text('fixture-task')
+else:
+ raise AssertionError(args)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let attempt = Attempt::new(Launch {
+            source: json!({"environmentId":"fixture-env"}),
+            environment: Environment {
+                id: "fixture-profile".into(),
+                label: "Fixture".into(),
+                environment_id: "fixture-env".into(),
+                ssh_destination: None,
+                node: "/usr/bin/true".into(),
+                adapter: "/fixture/adapter".into(),
+                host_config: "/fixture/config".into(),
+                web_url: None,
+                enabled: true,
+                default_for_new: false,
+                allowed_provider_instance_ids: None,
+            },
+            worktree: root.to_string_lossy().into_owned(),
+            argv: vec!["/usr/bin/true".into()],
+            source_paths: vec!["selected.rs".into()],
+            timeout_seconds: 5,
+            rex: RexContext {
+                executable,
+                session: "fixture-session".into(),
+                block: "fixture-origin".into(),
+                server: None,
+            },
+        })
+        .unwrap();
+        let prepared = PreparedAttempt {
+            attempt,
+            attempt_dir: root.to_string_lossy().into_owned(),
+            asset_path: "/fixture/asset".into(),
+            python: "/fixture/python".into(),
+            request_sha256: "fixture-digest".into(),
+            host: Value::Null,
+            worktree: root.to_string_lossy().into_owned(),
+            preparation: Value::Null,
+        };
+        let observations = [json!({"block_ids":["fixture-origin","fixture-task"]})];
+        let closed = root.join("closed");
+        for value in [
+            json!({"last_exit":{"exit_code":0}}),
+            json!({"last_exit":{"exit_code":1,"error":"exit status 1"}}),
+            json!({"last_exit":{"exit_code":-1}}),
+            json!({"last_exit":{"exit_code":0},"child":null,"foreground":null}),
+        ] {
+            std::fs::write(root.join("process.json"), value.to_string()).unwrap();
+            assert_eq!(
+                close_finished(&prepared, &observations).unwrap(),
+                Some("fixture-task".into()),
+                "{value}"
+            );
+            assert_eq!(std::fs::read_to_string(&closed).unwrap(), "fixture-task");
+            std::fs::remove_file(&closed).unwrap();
+        }
+        for value in [
+            json!({}),
+            json!({"last_exit":null}),
+            json!({"last_exit":true}),
+            json!({"last_exit":{}}),
+            json!({"last_exit":{"exit_code":"0"}}),
+            json!({"last_exit":{"exit_code":0,"error":false}}),
+            json!({"last_exit":{"exit_code":0,"unexpected":true}}),
+            json!({"last_exit":{"exit_code":0},"child":{"pid":123}}),
+            json!({"last_exit":{"exit_code":0},"foreground":{"pid":123}}),
+            json!({"last_exit":{"exit_code":0},"foreground":false}),
+        ] {
+            std::fs::write(root.join("process.json"), value.to_string()).unwrap();
+            assert!(close_finished(&prepared, &observations).is_err(), "{value}");
+            assert!(!closed.exists());
+        }
+        let ambiguous = [json!({"block_ids":["fixture-task","unrelated-pane"]})];
+        assert!(close_finished(&prepared, &ambiguous).is_err());
+        assert!(!closed.exists());
+        std::fs::write(
+            root.join("process.json"),
+            r#"{"last_exit":{"exit_code":0}}"#,
+        )
+        .unwrap();
+        for inventory in [
+            json!({}),
+            json!({"blocks":[]}),
+            json!({"blocks":[{"block_id":"another-origin"}]}),
+            json!({"blocks":[{"block_id":"fixture-origin"},{"block_id":"fixture-origin"}]}),
+        ] {
+            std::fs::write(root.join("blocks.json"), inventory.to_string()).unwrap();
+            assert!(close_finished(&prepared, &observations).is_err());
+            assert!(!closed.exists());
+        }
+        std::fs::remove_file(root.join("blocks.json")).unwrap();
+        assert_eq!(
+            close_finished(&prepared, &[json!({"block_ids":["fixture-origin"]})]).unwrap(),
+            None
+        );
+        assert!(!closed.exists());
+    }
+
     #[test]
     fn interrupted_asset_publication_does_not_poison_the_hash_name() {
         let directory = tempfile::tempdir().unwrap();
@@ -843,7 +995,7 @@ mod tests {
         let mut command = Command::new("python3");
         command.args(["-c", &interrupted]);
         assert_ne!(
-            execute(&mut command, &[], Duration::from_secs(5), &mut |_| Ok(()))
+            execute(&mut command, &[], Duration::from_secs(5), None)
                 .unwrap()
                 .exit_code,
             Some(0)
@@ -859,7 +1011,7 @@ mod tests {
         let mut command = Command::new("python3");
         command.args(["-c", &after_link]);
         assert_ne!(
-            execute(&mut command, &[], Duration::from_secs(5), &mut |_| Ok(()))
+            execute(&mut command, &[], Duration::from_secs(5), None)
                 .unwrap()
                 .exit_code,
             Some(0)
@@ -872,7 +1024,7 @@ mod tests {
         assert_eq!(std::fs::metadata(&asset).unwrap().nlink(), 2);
         let mut command = Command::new("python3");
         command.args(["-c", &script]);
-        let result = execute(&mut command, &[], Duration::from_secs(5), &mut |_| Ok(())).unwrap();
+        let result = execute(&mut command, &[], Duration::from_secs(5), None).unwrap();
         assert_eq!(
             result.exit_code,
             Some(0),
@@ -976,11 +1128,87 @@ finally: t.doCleanups()
     fn transport_enforces_output_bounds_and_observes_nonzero_exit_independently() {
         let mut command = Command::new("python3");
         command.args(["-c", "import sys; print('exact'); sys.exit(75)"]);
-        let result = execute(&mut command, &[], Duration::from_secs(5), &mut |_| Ok(())).unwrap();
+        let result = execute(&mut command, &[], Duration::from_secs(5), None).unwrap();
         assert_eq!(result.exit_code, Some(75));
         assert_eq!(result.stdout, b"exact\n");
         let mut noisy = Command::new("python3");
         noisy.args(["-c", "import sys; sys.stdout.write('x'*70000)"]);
-        assert!(execute(&mut noisy, &[], Duration::from_secs(5), &mut |_| Ok(())).is_err());
+        assert!(execute(&mut noisy, &[], Duration::from_secs(5), None).is_err());
+    }
+
+    #[test]
+    fn malformed_control_json_never_promotes_nested_pane_ids() {
+        for (output, expected) in [
+            (
+                "{\"invalid\":,\n{\"block_ids\":[\"block:unrelated-finished\"]}\n}\n",
+                Vec::new(),
+            ),
+            (
+                "{\"block_ids\":[\"block:created\"]}\n{\"invalid\":,\n{\"block_ids\":[\"block:unrelated-finished\"]}\n}\n",
+                vec![json!({"block_ids":["block:created"]})],
+            ),
+            ("{\"block_ids\":[\"block:unfinished\"]", Vec::new()),
+            ("\"block:unrelated-finished\"\n", Vec::new()),
+        ] {
+            let mut command = Command::new("python3");
+            command.args(["-c", "import sys; sys.stdout.write(sys.argv[1])", output]);
+            let mut retained = Vec::new();
+            let result = execute(
+                &mut command,
+                &[],
+                Duration::from_secs(5),
+                Some(&mut |value| {
+                    retained.push(value.clone());
+                    Ok(())
+                }),
+            );
+            assert!(
+                result.is_err(),
+                "malformed launch must remain uncertain: {output}"
+            );
+            assert_eq!(retained, expected);
+            let mut raw = Command::new("python3");
+            raw.args(["-c", "import sys; sys.stdout.write(sys.argv[1])", output]);
+            let observed = execute(&mut raw, &[], Duration::from_secs(5), None).unwrap();
+            assert_eq!(observed.exit_code, Some(0));
+            assert_eq!(observed.stdout, output.as_bytes());
+        }
+    }
+
+    #[test]
+    fn transport_checkpoints_pretty_creation_json_before_the_process_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("creation-retained");
+        let script = r#"
+import pathlib,sys,time
+print('{\n  "block_ids": [',flush=True)
+time.sleep(.03)
+print('    "block:created"\n  ]\n}',flush=True)
+marker=pathlib.Path(sys.argv[1]);deadline=time.monotonic()+2
+while not marker.exists() and time.monotonic()<deadline: time.sleep(.01)
+sys.exit(0 if marker.exists() else 1)
+"#;
+        let mut command = Command::new("python3");
+        command.args(["-c", script]).arg(&marker);
+        let mut retained = Vec::new();
+        let result = execute(
+            &mut command,
+            &[],
+            Duration::from_secs(5),
+            Some(&mut |value| {
+                retained.push(value.clone());
+                if value["block_ids"] == json!(["block:created"]) {
+                    std::fs::write(&marker, b"observed creation")?;
+                }
+                Ok(())
+            }),
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(retained, [json!({"block_ids":["block:created"]})]);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&result.stdout).unwrap(),
+            retained[0]
+        );
     }
 }

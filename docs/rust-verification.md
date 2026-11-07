@@ -1,5 +1,58 @@
 # Rust / SLT verification
 
+## Finite Rex/SSH qualification — 2026-11-07
+
+One real M1 Rex→OMV check used a synthetic source fixture and opaque target,
+without a native endpoint request. It ran the maintained wrapper once, retained
+the intended command exit **1** separately from wrapper exit **0**, and verified
+exact binary stdout/stderr and both selected-source byte observations. Read-only
+recovery authenticated the same original attempt. Wrapper teardown remains
+unknown; wrapper status is not a command-success or cgroup-safety claim.
+
+That qualification exposed three client issues. Layout admission used full
+`block inspect` API output (69,553 bytes), exceeding the 64 KiB control bound;
+it now verifies exact pane membership with the smaller maintained block listing.
+Finished terminals may omit optional `child`/`foreground` fields, so closing now
+requires a valid positive `last_exit` object and accepts either missing or null
+process fields. Present processes, malformed/ambiguous identity and unknown
+outcomes retain the pane. Finally, formatted creation JSON was parsed line by
+line, losing early creation IDs. Streaming JSON decoding now checkpoints each
+complete object across read boundaries before process exit.
+
+All three have retained fail-before evidence. Independent consequential review
+also found that newline recovery after malformed JSON could treat nested pane
+IDs as creation evidence. A regression reproduced that path; control parsing
+now fails as uncertain on malformed, truncated or non-object JSON without
+resynchronizing. Already committed observations survive, while ordinary raw
+subprocess output remains unchanged. No unrelated-pane closure was observed.
+
+Final source passed **305 Rust tests** (290 library, 15 integration),
+workspace/vendor formatting, both Clippy checks and whitespace checks. The
+formatted-JSON regression holds its child open until the creation checkpoint
+arrives, proving observation before exit.
+The final fresh arm64 release is **9,618,736 bytes**, SHA256
+`3cd63653702e0df0d4325bf1ac774287db254625cb8136ce9d7d518ba1eec536`;
+version and strict signature checks passed. Dependency/helper/UI source is
+unchanged, so the preceding checks and UI evidence retain their stated scope.
+The prior minimum-version check is reused; these corrections add no newer APIs.
+
+The original live check's automatic closure was **PARTIAL** because it preceded
+the JSON correction. Its exact creation object was recovered from retained raw
+CLI output; corrected source then authenticated a read of that same attempt and
+closed only its observed finished child. The check was never rerun. All
+task-created panes were closed after evidence retention; the original pane IDs,
+active tab and keyboard focus matched the pre-probe layout. This is real
+transport/byte-return and guarded-recovery evidence through an API driver,
+not final-release App→Context→native-Send or physical UI acceptance.
+
+An executing-host owner created only the absent private t3oxide state child
+needed by the helper; its root-owned parent and existing entries were preserved.
+No shared wrapper, launcher, policy, service or M4 installation changed.
+The two integrated backend attribution attempts stopped on private harness setup
+errors and produced **zero samples**. A fresh library/driver build alone is not
+a measured baseline, bottleneck attribution or performance gain. Historical R9
+acceptance and the earlier native/graph/lifecycle limits remain unchanged.
+
 ## Compact UI correction increment — 2026-11-07
 
 The composer now shows its effective model/effort, including a source-qualified
