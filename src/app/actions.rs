@@ -314,6 +314,7 @@ impl App {
 
     fn dispatch_intent(&mut self, intent: Intent) -> Result<()> {
         match intent {
+            Intent::Guidance(action) => self.guidance_action(action)?,
             Intent::CheckSend(attempt) => self.check_send(&attempt)?,
             Intent::Context(action) => self.context_action(action)?,
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
@@ -687,6 +688,7 @@ impl App {
                     self.read("models", json!({"threadId": a.thread}), ReadKind::Models(ModelScope::Next))?;
                 }
             },
+            "orchestration" | "guidance" => self.guidance_menu()?,
             "presets" => self.presets()?,
             "runtime" => {
                 let m = self.metadata();
@@ -770,6 +772,7 @@ impl App {
             fields["modelSelection"] = selection["selection"].clone();
             fields["modelOverrideId"] = selection["id"].clone();
         }
+        let fields = crate::guidance::prepare_send_fields(&fields, self.send_guidance()?)?;
         self.mutate(profile, "send", fields, None)
     }
     fn thread_action(&mut self, name: &str) -> Result<()> {

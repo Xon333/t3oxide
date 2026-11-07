@@ -400,6 +400,7 @@ impl App {
             .and_then(|record| record.get("selection").cloned())
             .filter(Value::is_object);
         surface.composer_override = next_selection.is_some();
+        surface.composer_guidance = self.guidance_label();
         let selection = next_selection
             .as_ref()
             .unwrap_or(&metadata["modelSelection"]);

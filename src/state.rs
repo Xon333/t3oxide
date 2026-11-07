@@ -1,6 +1,7 @@
 //! Private, fsynced client drafts and exact unresolved operation identities.
 //! This is not a transcript store or an execution queue.
 use crate::config::{default_directory, read_bounded, valid_id};
+use crate::guidance::{self, Guidance, submitted_text};
 use crate::wire::{MAX_INPUT_BYTES, is_mutation, new_id};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value, json};
@@ -143,6 +144,120 @@ impl State {
     pub fn snapshot(&self) -> Value {
         self.saved.lock().unwrap().clone()
     }
+    /// Read an exact native project preference. None preserves existing sends.
+    pub fn project_guidance(&self, environment: &str, project: &str) -> Result<Option<Guidance>> {
+        let source = guidance::scope_key(environment, project)?;
+        self.saved.lock().unwrap()[guidance::PREFERENCES]["projects"]
+            .get(source)
+            .map(guidance::choice)
+            .transpose()
+    }
+
+    /// Read the persistent override, rejecting a changed project provenance.
+    pub fn conversation_guidance(
+        &self,
+        environment: &str,
+        project: &str,
+        thread: &str,
+    ) -> Result<Option<Guidance>> {
+        guidance::scope_key(environment, project)?;
+        let source = guidance::scope_key(environment, thread)?;
+        let saved = self.saved.lock().unwrap();
+        let Some(entry) = saved[guidance::PREFERENCES]["conversations"].get(source) else {
+            return Ok(None);
+        };
+        ensure!(
+            entry["projectId"] == project,
+            "conversation guidance belongs to another project"
+        );
+        Ok(Some(guidance::choice(entry)?))
+    }
+
+    /// Resolve from the attached native source, never a navigation label.
+    pub fn effective_guidance(
+        &self,
+        environment: &str,
+        project: &str,
+        thread: &str,
+    ) -> Result<Option<Guidance>> {
+        guidance::scope_key(environment, project)?;
+        let source = guidance::scope_key(environment, thread)?;
+        let project_source = guidance::scope_key(environment, project)?;
+        let saved = self.saved.lock().unwrap();
+        let preferences = &saved[guidance::PREFERENCES];
+        if let Some(entry) = preferences["conversations"].get(source) {
+            ensure!(
+                entry["projectId"] == project,
+                "conversation guidance belongs to another project"
+            );
+            return Ok(Some(guidance::choice(entry)?));
+        }
+        preferences["projects"]
+            .get(project_source)
+            .map(guidance::choice)
+            .transpose()
+    }
+
+    /// Set/remove a project default without changing drafts or pending payloads.
+    pub fn set_project_guidance(
+        &self,
+        environment: &str,
+        project: &str,
+        preference: Option<Guidance>,
+    ) -> Result<()> {
+        self.set_guidance(environment, project, None, preference)
+    }
+
+    /// None restores inheritance; an explicit Off overrides a project default.
+    pub fn set_conversation_guidance(
+        &self,
+        environment: &str,
+        project: &str,
+        thread: &str,
+        preference: Option<Guidance>,
+    ) -> Result<()> {
+        self.set_guidance(environment, project, Some(thread), preference)
+    }
+
+    fn set_guidance(
+        &self,
+        environment: &str,
+        project: &str,
+        thread: Option<&str>,
+        preference: Option<Guidance>,
+    ) -> Result<()> {
+        let project_source = guidance::scope_key(environment, project)?;
+        let (collection, source) = match thread {
+            Some(thread) => ("conversations", guidance::scope_key(environment, thread)?),
+            None => ("projects", project_source),
+        };
+        self.update(|saved| {
+            if saved.get(guidance::PREFERENCES).is_none() {
+                saved[guidance::PREFERENCES] =
+                    json!({"version":1,"projects":{},"conversations":{}});
+            }
+            let entries = saved[guidance::PREFERENCES][collection]
+                .as_object_mut()
+                .context("invalid guidance scopes")?;
+            if let Some(old) = entries.get(&source).filter(|_| thread.is_some()) {
+                ensure!(
+                    old["projectId"] == project,
+                    "conversation guidance belongs to another project"
+                );
+            }
+            if let Some(preference) = preference {
+                let entry = entries.entry(source).or_insert_with(|| json!({}));
+                entry["guidance"] = json!(preference);
+                if thread.is_some() {
+                    entry["projectId"] = json!(project);
+                }
+            } else {
+                entries.remove(&source);
+            }
+            Ok(())
+        })
+    }
+
     /// Retain observed substantive events across lifecycle-only metadata and restart.
     pub fn observe_thread_activity(
         &self,
@@ -391,7 +506,7 @@ impl State {
         self.update(|value| {
             if detach_draft {
                 let thread = record["threadId"].as_str().context("send needs a thread")?;
-                let message = record["message"].as_str().context("send needs text")?;
+                let message = submitted_text(&record)?;
                 ensure!(
                     record["op"] == "send"
                         && value[lane(stop)].get(environment).is_none()
@@ -481,10 +596,19 @@ impl State {
             );
             let op = old["op"].as_str().unwrap_or("");
             let check_follow_up = old["t3oxideCheckFollowUp"].as_str();
+            let human = if op == "send" {
+                ensure!(
+                    old["message"] == message && old["threadId"] == thread,
+                    "acknowledgement differs from frozen send payload"
+                );
+                submitted_text(&old)?
+            } else {
+                message
+            };
             object_mut(value, lane(stop))?.remove(environment);
             if op == "send" {
                 if !message.is_empty() && old["message"] == message {
-                    remember_prompt(value, environment, thread, "sent", message)?;
+                    remember_prompt(value, environment, thread, "sent", human)?;
                 }
                 let overrides = object_mut(value, "modelOverrides")?;
                 let override_key = key(environment, thread);
@@ -507,7 +631,7 @@ impl State {
                     && drafts
                         .get(&key(environment, &draft_thread))
                         .and_then(Value::as_str)
-                        == Some(message)
+                        == Some(human)
                 {
                     drafts.remove(&key(environment, &draft_thread));
                 }
@@ -640,6 +764,9 @@ fn normalize(value: &mut Value) -> Result<()> {
 }
 
 fn validate_record(environment: &str, record: &Value) -> Result<()> {
+    if record.get("t3oxidePromptPreparation").is_some() {
+        submitted_text(record)?;
+    }
     ensure!(
         valid_id(environment, 4096) && record.is_object() && record["environmentId"] == environment,
         "saved operation environment does not match its key"
@@ -662,6 +789,7 @@ fn validate_record(environment: &str, record: &Value) -> Result<()> {
 }
 
 fn validate(value: &Value) -> Result<()> {
+    guidance::validate_preferences(value)?;
     let observed = value["threadActivity"]
         .as_array()
         .context("invalid thread activity")?;
@@ -1489,6 +1617,224 @@ mod tests {
     fn operation(id: &str, op: &str) -> Value {
         json!({"id":id,"environmentId":"env","threadId":"thread","op":op,"message":"submitted"})
     }
+    #[test]
+    fn guidance_scopes_inherit_without_touching_recovery_or_unknown_fields() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("state.json");
+        let state = State::open(&path).unwrap();
+        let pending = operation("original", "send");
+        let stop = operation("stop-original", "stop");
+        state.save_pending("env", false, pending.clone()).unwrap();
+        state.save_pending("env", true, stop.clone()).unwrap();
+        state.set_draft("env", "thread", "unsent").unwrap();
+        state
+            .update(|v| {
+                v["futureRoot"] = json!({"retain":true});
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            state
+                .effective_guidance("env", "project", "thread")
+                .unwrap(),
+            None
+        );
+        state
+            .set_project_guidance("env", "project", Some(Guidance::Graphing))
+            .unwrap();
+        state
+            .set_project_guidance("other", "project", Some(Guidance::Classic))
+            .unwrap();
+        state
+            .set_conversation_guidance("env", "project", "thread", Some(Guidance::Off))
+            .unwrap();
+        assert_eq!(
+            state
+                .effective_guidance("env", "project", "thread")
+                .unwrap(),
+            Some(Guidance::Off)
+        );
+        assert_eq!(
+            state
+                .effective_guidance("other", "project", "thread")
+                .unwrap(),
+            Some(Guidance::Classic)
+        );
+        assert!(
+            state
+                .effective_guidance("env", "wrong-project", "thread")
+                .is_err()
+        );
+        assert!(state.effective_guidance("env", "", "thread").is_err());
+        state
+            .set_conversation_guidance("env", "project", "thread", None)
+            .unwrap();
+        assert_eq!(
+            state
+                .effective_guidance("env", "project", "thread")
+                .unwrap(),
+            Some(Guidance::Graphing)
+        );
+        let source = guidance::scope_key("env", "project").unwrap();
+        state
+            .update(|v| {
+                v[guidance::PREFERENCES]["futureSibling"] = json!([1, 2]);
+                v[guidance::PREFERENCES]["projects"][&source]["futureEntry"] = json!(7);
+                Ok(())
+            })
+            .unwrap();
+        state
+            .set_project_guidance("env", "project", Some(Guidance::Classic))
+            .unwrap();
+        let before = state.snapshot();
+        let bytes = fs::read(&path).unwrap();
+        assert!(
+            state
+                .update(|v| {
+                    v[guidance::PREFERENCES]["version"] = json!(2);
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(
+            state
+                .update(|v| {
+                    v[guidance::PREFERENCES]["oversize"] = json!("x".repeat(128 * 1024));
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert_eq!(state.snapshot(), before);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        drop(state);
+        let reopened = State::open(&path).unwrap();
+        assert_eq!(reopened.pending("env", false), Some(pending));
+        assert_eq!(reopened.pending("env", true), Some(stop));
+        assert_eq!(reopened.draft("env", "thread"), "unsent");
+        assert_eq!(reopened.snapshot()["futureRoot"], json!({"retain":true}));
+        assert_eq!(
+            reopened.snapshot()[guidance::PREFERENCES]["futureSibling"],
+            json!([1, 2])
+        );
+        assert_eq!(
+            reopened.snapshot()[guidance::PREFERENCES]["projects"][&source]["futureEntry"],
+            7
+        );
+    }
+
+    #[test]
+    fn prepared_send_freezes_recovery_and_recalls_only_human_text() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("state.json");
+        let state = State::open(&path).unwrap();
+        // Identical human prose is never stripped or deduplicated.
+        let human = format!("é猫{}", Guidance::Classic.suffix());
+        state.set_draft("env", "thread", &human).unwrap();
+        let mut original = operation("prepared", "send");
+        original["message"] = json!(human);
+        original["modelOverrideId"] = json!("submitted-override");
+        let prepared = guidance::prepare_send_fields(&original, Some(Guidance::Classic)).unwrap();
+        state
+            .save_send_detaching_draft("env", prepared.clone())
+            .unwrap();
+        assert_eq!(state.draft("env", "thread"), "");
+        assert_eq!(state.snapshot()["promptHistory"][0]["text"], human);
+        state
+            .set_project_guidance("env", "project", Some(Guidance::Graphing))
+            .unwrap();
+        state.set_draft("env", "thread", &human).unwrap();
+        state.update(|v| {
+            v["modelOverrides"]["env/thread"] = json!({"id":"newer-override","selection":{"instanceId":"provider","model":"m"}});
+            Ok(())
+        }).unwrap();
+        drop(state);
+        let state = State::open(&path).unwrap();
+        assert_eq!(state.pending("env", false), Some(prepared.clone()));
+        let before = state.snapshot();
+        let bytes = fs::read(&path).unwrap();
+        assert!(
+            state
+                .acknowledge("env", false, "prepared", "thread", &human)
+                .is_err()
+        );
+        assert_eq!(state.snapshot(), before);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        state
+            .acknowledge_preserving_draft(
+                "env",
+                false,
+                "prepared",
+                "thread",
+                prepared["message"].as_str().unwrap(),
+                Some(&human),
+            )
+            .unwrap();
+        assert!(state.pending("env", false).is_none());
+        assert_eq!(state.draft("env", "thread"), human);
+        assert_eq!(state.snapshot()["promptHistory"][0]["text"], human);
+        assert_eq!(state.snapshot()["promptHistory"][0]["kind"], "sent");
+        assert_eq!(
+            state.snapshot()["modelOverrides"]["env/thread"]["id"],
+            "newer-override"
+        );
+        // A matching submitted draft and one-message override still retire.
+        let mut next = prepared.clone();
+        next["id"] = json!("next-prepared");
+        next["modelOverrideId"] = json!("newer-override");
+        state.save_pending("env", false, next).unwrap();
+        state
+            .acknowledge(
+                "env",
+                false,
+                "next-prepared",
+                "thread",
+                prepared["message"].as_str().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(state.draft("env", "thread"), "");
+        assert!(
+            state.snapshot()["modelOverrides"]
+                .get("env/thread")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_preparation_rejects_without_detaching_and_legacy_is_unchanged() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("state.json");
+        let state = State::open(&path).unwrap();
+        state.set_draft("env", "thread", "é").unwrap();
+        let mut invalid = operation("invalid", "send");
+        invalid["message"] = json!("éx");
+        invalid["t3oxidePromptPreparation"] = json!({"version":1,"originalBytes":1,"suffix":"x"});
+        let before = state.snapshot();
+        let bytes = fs::read(&path).unwrap();
+        assert!(state.save_send_detaching_draft("env", invalid).is_err());
+        assert_eq!(state.snapshot(), before);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let mut large = operation("oversize", "send");
+        large["message"] = json!("é");
+        let mut large = guidance::prepare_send_fields(&large, Some(Guidance::Classic)).unwrap();
+        large["futurePayload"] = json!("x".repeat(MAX_INPUT_BYTES));
+        assert!(state.save_send_detaching_draft("env", large).is_err());
+        assert_eq!(state.snapshot(), before);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let mut legacy = operation("legacy", "send");
+        legacy["future"] = json!({"exact":true});
+        state.save_pending("env", false, legacy.clone()).unwrap();
+        state
+            .set_project_guidance("env", "project", Some(Guidance::Classic))
+            .unwrap();
+        assert_eq!(state.pending("env", false), Some(legacy.clone()));
+        assert_eq!(submitted_text(&legacy).unwrap(), "submitted");
+        drop(state);
+        assert_eq!(
+            State::open(&path).unwrap().pending("env", false),
+            Some(legacy)
+        );
+    }
+
     #[test]
     fn source_event_reads_survive_reopen_without_settling_or_losing_recovery() {
         let directory = temp();

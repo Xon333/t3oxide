@@ -5,6 +5,7 @@ mod checks;
 mod content;
 mod context;
 mod context_worker;
+mod guidance;
 #[cfg(test)]
 mod input;
 #[cfg(test)]
@@ -157,6 +158,7 @@ pub(super) enum InputTarget {
 }
 #[derive(Clone, Debug)]
 pub(super) enum Intent {
+    Guidance(guidance::Action),
     CheckSend(String),
     Context(context::Action),
     Workspace(workspace::WorkspaceAction),
@@ -1885,6 +1887,14 @@ impl App {
         record["id"] = json!(id);
         record["op"] = json!(op);
         record["environmentId"] = json!(env.environment_id);
+        if op == "send" && retry.is_none() && !check_follow_up {
+            let mut packet = record.clone();
+            packet["v"] = json!(1);
+            ensure!(
+                serde_json::to_vec(&packet)?.len() <= wire::MAX_INPUT_BYTES,
+                "prepared operation exceeds 96 KiB; draft retained"
+            );
+        }
         if retry.is_some() {
             ensure!(
                 existing.as_ref() == Some(&record),

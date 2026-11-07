@@ -20,6 +20,14 @@ Use a current stable Rust toolchain (declared minimum 1.92), existing environmen
 
 Search opens the loaded-conversation fuzzy switcher directly; `/search` retains explicit native-content search and its scope. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
 
+Orch, Commands or `/orchestration` opens optional prompt guidance for ordinary
+composer sends: a project default and a persistent conversation override, with
+an explicit return to inheritance. Graphing and Classic subagents add inspectable
+text; Off adds nothing. Unset preferences preserve existing sends. The exact
+outbound prompt is frozen before dispatch, while recall keeps your original
+input. This does not change native settings or enforce orchestration. Launches,
+generated check follow-ups and a descendant model/effort ceiling are not covered.
+
 An attached conversation uses the available transcript/composer area by default.
 F3 exposes navigation when needed; on compact screens it is a temporary picker.
 Internal tabs remain available. B opens Forms, Library and Projects directly;

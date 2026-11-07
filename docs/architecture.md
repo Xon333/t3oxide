@@ -14,6 +14,7 @@ The reference baseline is t3oxide `e73caacd673d1a9bbceea8a7ed240b2a068ba5a7`. Th
 | `src/projection.rs` | Atomic bounded snapshots and revision-checked deltas; native source IDs remain intact. |
 | `src/domain.rs` | Source-qualified metadata tree, native attention/review projections and discoverable action catalog. |
 | `src/state.rs` | Locked, validated, atomic client state; migration, drafts, exact operation journals, prompt history and acknowledgements. |
+| `src/guidance.rs`, `src/app/guidance.rs` | Source-qualified local orchestration preferences and frozen ordinary-send prompt preparation; native contracts remain authoritative. |
 | `src/app.rs` | Event loop, asynchronous reads, connection generations, draft saves, navigation and mutation lifecycle. |
 | `src/app/slt.rs`, `src/slt_ui.rs` | Active SLT runtime, terminal presentation, exclusive input routing and controller intents. |
 | `src/app/input.rs` | Retained legacy input regressions, compiled for tests only. |
@@ -117,6 +118,15 @@ Snapshots and deltas validate complete candidate state before replacing the curr
 An explicit action first verifies source, live navigation state, offered capability and provider policy. New launches use a chosen native project and a reviewed defaults revision. Existing-thread operations use the attached thread; approvals and questions retain the offered request ID/revision. Stop retains the reviewed run ID and native queue hold. Local labels, highlights and browser scope cannot substitute for these identities.
 
 Before transport admission, the state transaction saves the operation's original ID, operation name, exact environment and complete payload. The operation then uses the verified connection or an exactly matched source connection. Ordinary operations and Stop have separate admission and recovery lanes. This lets Stop proceed while another operation is uncertain without changing either identity.
+
+Optional orchestration guidance resolves from the attached native environment,
+project and conversation. Only a new ordinary composer send prepares a suffix;
+launch, check-follow-up and generic recovery paths do not. The pending record
+retains the full outgoing text plus its original UTF-8 prefix length and exact
+suffix. Staging and recall validate that prefix; acknowledgement validates the
+full frozen payload before retiring it. Preference edits cannot rewrite an
+uncertain operation. The 64 KiB prompt and 96 KiB operation limits include this
+preparation. No descendant capability mapping or runtime policy is inferred.
 
 Acknowledgement must match the operation that was sent. One atomic transaction clears the corresponding journal record and preserves any newer draft generation. Only the submitted edit generation and exact bytes may be retired; even clearing and retyping identical text creates a distinct draft that survives. Draft edits made after dispatch survive. Native launch acknowledgement must identify the generated thread; conflicting thread identity is not accepted as completion. Batch filing advances only the acknowledged human text slice and retains the rest.
 

@@ -534,6 +534,12 @@ pub const ACTIONS: &[Action] = &[
         key: "Ctrl+G · /graph",
     },
     Action {
+        name: "orchestration",
+        label: "Orchestration guidance",
+        description: "Project default and conversation override; inspect exact appended prompt text",
+        key: "Orch · /orchestration",
+    },
+    Action {
         name: "filter",
         label: "Thread type",
         description: "All, main conversations, subagents or forks",

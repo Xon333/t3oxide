@@ -50,6 +50,21 @@ model override. This closes the crash window between acknowledging a message
 and restoring newer human input. Late acknowledgements remain bound to their
 original source and cannot clear another environment's equal thread ID.
 
+Optional orchestration guidance lives in the same state file: project defaults
+are keyed by native environment/project; conversation overrides retain their
+original project provenance. Unset keeps ordinary sends unchanged, explicit Off
+adds no text, and removing an override restores inheritance. The menu exposes
+the exact appended text without sending or changing the composer. This is
+prompt guidance for new ordinary sends, not a native setting or enforcement.
+
+A prepared send freezes its complete outgoing text and the exact boundary
+between human input and suffix in its pending record. Both existing size limits
+include the preparation. Recall restores only the human input; same-ID recovery
+uses the original full payload even after preferences change. Acknowledgement
+must match that full payload before updating recall or retiring the operation.
+Legacy records remain unchanged. Launches, generated check follow-ups and
+descendant model/effort ceilings remain outside this increment.
+
 Prompt recall retains human-authored input with source identity and outcome. It
 is not a transcript archive. Restoring or clearing a draft never sends it. A
 source-qualified editor cache preserves caret, selection and undo within a

@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod context_store;
 pub mod domain;
+pub mod guidance;
 pub mod project_graph;
 pub mod projection;
 pub mod reports;

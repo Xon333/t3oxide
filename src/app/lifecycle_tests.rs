@@ -331,6 +331,10 @@ impl Fixture {
             }
             self.app.surface_action(action, surface).unwrap();
         }
+        if modal.is_none() && self.app.dialog.is_some() && !surface.attention_mode {
+            // Match the production modal's captured composer return focus.
+            ctx.focus_by_name("composer");
+        }
     }
 
     fn open_thread(&mut self, profile: usize, thread: &str) {
@@ -7480,7 +7484,9 @@ fn r9_divider_geometry(
     backend.assert_contains("Browse");
     backend.assert_contains("Earlier");
     backend.assert_contains("Latest");
-    backend.assert_contains("fixture-model");
+    // Compact action labels may elide; the selected native model stays exact.
+    backend.assert_contains("fixture-");
+    assert_eq!(surface.composer_model, "fixture-model");
     backend.assert_contains("Send");
     rect
 }
@@ -8193,4 +8199,451 @@ fn graph_exposes_controller_stop_rejection_and_acknowledgement() {
             assert_eq!(fixture.app.state.snapshot()["pending"], saved["pending"]);
         }
     }
+}
+
+#[test]
+fn guidance_recovery_keeps_frozen_payload_after_preference_change_and_recalls_human_text() {
+    use crate::guidance::Guidance;
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["dropAckOnce"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.load_pages();
+    fixture.open(0);
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-0", "project-a", Some(Guidance::Graphing))
+        .unwrap();
+    let human = "Retained café 日本語\ninterior human brief";
+    fixture.app.replace_text(human.into());
+    fixture.app.flush_draft().unwrap();
+    fixture.app.command("send").unwrap();
+    let event = fixture.next_mutation();
+    assert!(matches!(
+        &event,
+        Background::Mutation { result: Err(_), .. }
+    ));
+    fixture.app.handle(event).unwrap();
+    let original = fixture.app.state.pending("native-0", false).unwrap();
+    assert_eq!(
+        original["message"],
+        format!("{human}{}", Guidance::Graphing.suffix())
+    );
+    assert_eq!(crate::guidance::submitted_text(&original).unwrap(), human);
+    assert!(fixture.app.text().is_empty());
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-0", "project-a", Some(Guidance::Classic))
+        .unwrap();
+    fixture.app.replace_text(human.into());
+    fixture.app.flush_draft().unwrap();
+    fixture.app.command("recover").unwrap();
+    let review = fixture.app.dialog.as_ref().unwrap().choices[0]
+        .intent
+        .clone();
+    fixture.app.dispatch(review).unwrap();
+    let retry = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| matches!(choice.intent, Intent::Recover(..)))
+        .unwrap()
+        .intent
+        .clone();
+    fixture.app.dispatch(retry).unwrap();
+    let event = fixture.next_mutation();
+    assert!(
+        matches!(&event,Background::Mutation {id,fields,result:Ok(_),..} if original["id"]==*id && fields["message"]==original["message"] && fields["t3oxidePromptPreparation"]==original["t3oxidePromptPreparation"])
+    );
+    fixture.app.handle(event).unwrap();
+    assert!(fixture.app.state.pending("native-0", false).is_none());
+    assert_eq!(fixture.app.text(), human);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), human);
+    assert_eq!(
+        fixture.app.state.snapshot()["promptHistory"][0]["text"],
+        human
+    );
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert_eq!(native["effects"], 1);
+    fixture.app.command("send").unwrap();
+    let next = fixture.app.state.pending("native-0", false).unwrap();
+    assert_eq!(
+        next["message"],
+        format!("{human}{}", Guidance::Classic.suffix())
+    );
+    let event = fixture.next_mutation();
+    fixture.app.handle(event).unwrap();
+}
+
+#[test]
+fn guidance_send_retains_newer_identical_draft_and_exact_model_override() {
+    use crate::guidance::Guidance;
+    let mut fixture = Fixture::new(350);
+    fixture.open(0);
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-0", "project-a", Some(Guidance::Graphing))
+        .unwrap();
+    let selection = json!({"instanceId":"fixture-provider","model":"fixture-fast","options":[{"id":"reasoningEffort","value":"high"}]});
+    fixture
+        .app
+        .state
+        .update(|saved| {
+            saved["modelOverrides"]["native-0/thread-a"] =
+                json!({"id":"original-override","selection":selection});
+            Ok(())
+        })
+        .unwrap();
+    let human = "Same human bytes 日本語";
+    fixture.app.replace_text(human.into());
+    fixture.app.flush_draft().unwrap();
+    fixture.app.command("send").unwrap();
+    let pending = fixture.app.state.pending("native-0", false).unwrap();
+    assert_eq!(pending["modelSelection"], selection);
+    assert_eq!(pending["modelOverrideId"], "original-override");
+    fixture.app.replace_text(human.into());
+    fixture.app.flush_draft().unwrap();
+    let event = fixture.next_mutation();
+    fixture.app.handle(event).unwrap();
+    assert_eq!(fixture.app.text(), human);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-a"), human);
+    assert!(
+        fixture.app.state.snapshot()["modelOverrides"]
+            .get("native-0/thread-a")
+            .is_none()
+    );
+    assert_eq!(
+        fixture.app.metadata()["modelSelection"]["model"],
+        "fixture-model"
+    );
+}
+
+#[test]
+fn guidance_uses_attached_projection_project_and_rejects_stale_or_unknown_scope() {
+    use crate::guidance::Guidance;
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(0);
+    fixture.app.command("orchestration").unwrap();
+    let old = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| choice.label == "Project: Graphing")
+        .unwrap()
+        .intent
+        .clone();
+    let mut snapshot = live_snapshot(90);
+    snapshot["projectId"] = json!("new-project");
+    fixture
+        .app
+        .active
+        .as_mut()
+        .unwrap()
+        .projection
+        .apply_snapshot(snapshot, "thread-a")
+        .unwrap();
+    assert!(fixture.app.dispatch(old).is_err());
+    assert_eq!(
+        fixture
+            .app
+            .state
+            .project_guidance("native-0", "project-a")
+            .unwrap(),
+        None
+    );
+    fixture.app.command("orchestration").unwrap();
+    let save = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| choice.label == "Project: Graphing")
+        .unwrap()
+        .intent
+        .clone();
+    fixture.app.dispatch(save).unwrap();
+    assert_eq!(
+        fixture
+            .app
+            .state
+            .project_guidance("native-0", "new-project")
+            .unwrap(),
+        Some(Guidance::Graphing)
+    );
+    assert_eq!(
+        fixture.app.send_guidance().unwrap(),
+        Some(Guidance::Graphing)
+    );
+    assert_eq!(
+        fixture
+            .app
+            .state
+            .project_guidance("native-1", "new-project")
+            .unwrap(),
+        None
+    );
+    let unknown = live_snapshot(91);
+    fixture
+        .app
+        .active
+        .as_mut()
+        .unwrap()
+        .projection
+        .apply_snapshot(unknown, "thread-a")
+        .unwrap();
+    let original = "Original draft survives failed admission";
+    fixture.app.replace_text(original.into());
+    fixture.app.flush_draft().unwrap();
+    assert!(fixture.app.command("send").is_err());
+    assert_eq!(fixture.app.text(), original);
+    assert!(fixture.app.state.pending_records().is_empty());
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-0", "new-project", None)
+        .unwrap();
+    assert_eq!(fixture.app.send_guidance().unwrap(), None);
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-1", "elsewhere", Some(Guidance::Classic))
+        .unwrap();
+    assert_eq!(fixture.app.send_guidance().unwrap(), None);
+}
+
+#[test]
+fn guidance_slt_entry_save_inspect_and_return_preserve_source_drafts_and_recovery() {
+    for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open(0);
+        let draft = "Retained guidance draft 日本語\ninterior caret";
+        fixture.app.replace_text(draft.into());
+        fixture.app.composer.move_cursor(CursorMove::Back);
+        fixture.app.flush_draft().unwrap();
+        let caret = fixture.app.composer.cursor();
+        fixture.app.state.save_pending("native-1",false,json!({"id":"guidance-other-send","environmentId":"native-1","threadId":"thread-a","op":"send","message":"original"})).unwrap();
+        fixture.app.state.save_pending("native-1",true,json!({"id":"guidance-other-stop","environmentId":"native-1","threadId":"thread-a","runId":"original-run","op":"stop"})).unwrap();
+        let saved = fixture.app.state.snapshot();
+        let native = fixture
+            .native_states
+            .iter()
+            .map(|p| fs::read(p).ok())
+            .collect::<Vec<_>>();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(width, height).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        let (x, y) = backend
+            .find_text("Orch")
+            .expect("direct orchestration entry");
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().click(x, y).build(),
+        );
+        assert_eq!(fixture.app.modal().unwrap().title, "Orchestration");
+        fixture.surface_choice(&mut surface, "Project: Graphing");
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        assert_eq!(fixture.app.modal().unwrap().title, "Orchestration");
+        fixture.surface_choice(&mut surface, "Conversation: Classic subagents");
+        fixture.surface_choice(&mut surface, "Exact appended text");
+        assert_eq!(
+            fixture.app.modal().unwrap().title,
+            "Exact orchestration text"
+        );
+        assert!(
+            fixture
+                .app
+                .dialog
+                .as_ref()
+                .unwrap()
+                .detail
+                .contains(crate::guidance::Guidance::Classic.suffix())
+        );
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Esc)
+                .build(),
+        );
+        assert!(fixture.app.dialog.is_none());
+        assert!(surface.composer_guidance.contains("override"));
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        fixture.app.command("orchestration").unwrap();
+        fixture.surface_choice(&mut surface, "Conversation: Use project default");
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Esc)
+                .build(),
+        );
+        assert!(surface.composer_guidance.contains("project"));
+        assert_eq!(fixture.app.text(), draft);
+        for field in ["drafts", "pending", "pendingStops"] {
+            assert_eq!(fixture.app.state.snapshot()[field], saved[field]);
+        }
+        assert_eq!(
+            fixture
+                .native_states
+                .iter()
+                .map(|p| fs::read(p).ok())
+                .collect::<Vec<_>>(),
+            native
+        );
+    }
+}
+
+#[test]
+fn guidance_final_size_rejection_preserves_human_input_and_native_state() {
+    use crate::guidance::Guidance;
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-0", "project-a", Some(Guidance::Graphing))
+        .unwrap();
+    // The human input fits; only the prepared outbound text exceeds the limit.
+    let human = format!("日本語{}", "x".repeat(64 * 1024 - "日本語".len()));
+    fixture.app.replace_text(human.clone());
+    fixture.app.composer.move_cursor(CursorMove::Back);
+    fixture.app.flush_draft().unwrap();
+    let caret = fixture.app.composer.cursor();
+    let version = fixture.app.draft_version;
+    let saved = fixture.app.state.snapshot();
+    let native = fs::read(&fixture.native_states[0]).ok();
+    let error = fixture.app.command("send").unwrap_err();
+    assert!(error.to_string().contains("prepared prompt exceeds"));
+    assert_eq!(fixture.app.text(), human);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.draft_version, version);
+    assert_eq!(fixture.app.state.snapshot(), saved);
+    assert!(fixture.app.in_flight.lock().unwrap().is_empty());
+    assert_eq!(fs::read(&fixture.native_states[0]).ok(), native);
+}
+
+#[test]
+fn guidance_menu_dismissal_owns_queued_send_without_touching_the_draft() {
+    for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+        for detail in [false, true] {
+            for (key, modifiers) in [
+                (::slt::KeyCode::Enter, ::slt::KeyModifiers::CONTROL),
+                (::slt::KeyCode::Enter, ::slt::KeyModifiers::SUPER),
+                (::slt::KeyCode::Char(']'), ::slt::KeyModifiers::CONTROL),
+            ] {
+                let mut fixture = Fixture::new(0);
+                fixture.open(0);
+                let human = "Unsent 日本語 draft";
+                fixture.app.replace_text(human.into());
+                fixture.app.flush_draft().unwrap();
+                let caret = fixture.app.composer.cursor();
+                let saved = fixture.app.state.snapshot();
+                let native = fs::read(&fixture.native_states[0]).ok();
+                let mut surface = crate::slt_ui::SurfaceState::new();
+                let mut backend = crate::slt_ui::tests::ResizableBackend::new(width, height)
+                    .with_activation_boundaries();
+                r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+                let (x, y) = backend.find_text("Orch").unwrap();
+                r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new().click(x, y).build(),
+                );
+                if detail {
+                    fixture.surface_choice(&mut surface, "Exact appended text");
+                    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+                }
+                let focus = r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new()
+                        .key_code(::slt::KeyCode::Esc)
+                        .key_with(key, modifiers)
+                        .build(),
+                );
+                assert!(fixture.app.dialog.is_none());
+                assert_eq!(focus.as_deref(), Some("composer"));
+                assert_eq!(fixture.app.text(), human);
+                assert_eq!(fixture.app.composer.cursor(), caret);
+                for field in ["drafts", "pending", "pendingStops", "promptHistory"] {
+                    assert_eq!(fixture.app.state.snapshot()[field], saved[field]);
+                }
+                assert_eq!(fs::read(&fixture.native_states[0]).ok(), native);
+                r9_input(
+                    &mut backend,
+                    &mut fixture,
+                    &mut surface,
+                    ::slt::EventBuilder::new().paste(" continued").build(),
+                );
+                assert_eq!(fixture.app.text(), format!("{human} continued"));
+            }
+        }
+    }
+}
+
+#[test]
+fn guidance_wire_size_rejection_preserves_draft_before_detachment() {
+    use crate::guidance::{Guidance, prepare_send_fields};
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    fixture
+        .app
+        .state
+        .set_project_guidance("native-0", "project-a", Some(Guidance::Graphing))
+        .unwrap();
+    let mut human = "\"".repeat(48_000);
+    let staged_length = |human: &str| {
+        let mut record = prepare_send_fields(
+            &json!({"threadId":"thread-a","message":human,"mode":fixture.app.delivery}),
+            Some(Guidance::Graphing),
+        )
+        .unwrap();
+        record["id"] = json!("a".repeat(36));
+        record["op"] = json!("send");
+        record["environmentId"] = json!("native-0");
+        serde_json::to_vec(&record).unwrap().len()
+    };
+    let target = wire::MAX_INPUT_BYTES - 2;
+    human.push_str(&"x".repeat(target - staged_length(&human)));
+    // originalBytes may gain a digit while extending the human prefix.
+    while staged_length(&human) > target {
+        human.pop();
+    }
+    assert_eq!(staged_length(&human), target);
+    assert!(staged_length(&human) + 6 > wire::MAX_INPUT_BYTES);
+    fixture.app.replace_text(human.clone());
+    fixture.app.composer.move_cursor(CursorMove::Back);
+    fixture.app.flush_draft().unwrap();
+    let caret = fixture.app.composer.cursor();
+    let saved = fixture.app.state.snapshot();
+    let native = fs::read(&fixture.native_states[0]).ok();
+    assert!(fixture.app.command("send").is_err());
+    assert_eq!(fixture.app.text(), human);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    assert_eq!(fixture.app.state.snapshot(), saved);
+    assert!(fixture.app.in_flight.lock().unwrap().is_empty());
+    assert_eq!(fs::read(&fixture.native_states[0]).ok(), native);
 }

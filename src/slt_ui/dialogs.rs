@@ -118,7 +118,7 @@ fn reset_model_values(picker: &mut ModelPicker, modal: &ui::Modal) {
     }
 }
 
-// Only a directly dismissed native option owns this one deferred activation.
+// A dismissed native option or prompt-guidance view owns its deferred activation.
 pub(super) fn direct_dismissal_tail(ctx: &mut Context, state: &mut SurfaceState, modal: bool) {
     let Some((source, mut tail)) = state.dialog.direct_dismiss_tail.take() else {
         return;
@@ -134,7 +134,10 @@ pub(super) fn direct_dismissal_tail(ctx: &mut Context, state: &mut SurfaceState,
     } else {
         let enter = ctx
             .key_presses_when(true)
-            .find(|(_, key)| key.code == KeyCode::Enter && key.modifiers == slt::KeyModifiers::NONE)
+            .find(|(_, key)| {
+                key.code == KeyCode::Enter && key.modifiers == slt::KeyModifiers::NONE
+                    || send_key(&key.code, key.modifiers)
+            })
             .map(|(index, _)| index);
         if let Some(index) = enter {
             ctx.consume_event(index);
@@ -1175,6 +1178,16 @@ pub(super) fn draw(
                 }
             });
     });
+    if matches!(
+        modal.title.as_str(),
+        "Orchestration" | "Exact orchestration text"
+    ) && actions
+        .iter()
+        .any(|action| matches!(action, Action::CloseModal))
+    {
+        state.dialog.direct_dismiss_tail =
+            Some((state.active_key.clone(), DismissalTail::ActivationSettle));
+    }
     state.modal_stamp = Some(modal.action_stamp);
     if opening || changed && !fuzzy {
         let focus = if modal.editor {

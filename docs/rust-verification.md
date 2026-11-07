@@ -1,5 +1,59 @@
 # Rust / SLT verification
 
+## Ordinary-send orchestration guidance — 2026-11-08
+
+Orch, Commands and `/orchestration` share one local preference menu. Optional
+project defaults and persistent conversation overrides resolve from the attached
+native source; inheritance and explicit Off are distinct. Exact appended text
+is inspectable, and the composer identifies the effective strategy and scope.
+Unset preferences preserve existing sends. No native settings, account/model
+selection, agent-count limiter or orchestration enforcement were added.
+
+The corrected source passed **340 Rust tests** (325 library +15 integration),
+workspace/vendor formatting and both Clippy checks. Real-App fixtures verify
+lost-ACK recovery with unchanged original ID/payload after preference edits,
+human-only recall, newer same-byte draft conservation, exact one-message model
+override handling, attached-project admission, final-size rejection and queued
+send-key ownership when dismissing the menu. SLT menu entry/save/inspection and
+draft/caret/source conservation pass at 140×38, 70×22 and 40×12 with nonempty
+independent recovery lanes.
+
+The first full check exposed a narrow action-row regression: Orch clipped Send.
+Model/effort labels now reserve room for both fixed actions and Send, while the
+underlying selection remains exact. The existing divider regression now accepts
+that visible label elision and still verifies exact model identity. A new menu
+test initially compared unrelated reading-position persistence against an
+unpainted baseline; it now compares its actual protected input/recovery fields.
+Earlier failing logs remain retained.
+
+Consequential review found two further defects, both reproduced before
+correction: the production composer-return focus allowed a queued send key to
+escape guidance dismissal, and final-size admission omitted the wire version's
+six bytes. The existing source-qualified dismissal tail now owns the queued
+send activation for both guidance views. The fixture uses the actual composer
+entry and production return-focus behavior; Ctrl+Enter, Cmd+Enter and Ctrl+]
+pass at all three sizes, and later typing works. A complete new ordinary-send
+wire envelope is bounded before draft detachment, without rewriting retained
+recovery records. The escaped-text boundary regression preserves composer,
+caret, state and native bytes.
+
+The fresh locked offline arm64 release is **9,718,784 bytes**, SHA256
+`61aa9880cd40ee9156280d7b802eec2979a8243dcee265d8b48fe36d8b48503a`;
+version and strict signature verification pass. One controlled release PTY
+passed menu/save/inspection/return at all three sizes, retaining eight frames.
+Before sending, the original Unicode draft and nonempty independent pending
+and Stop records stayed exact. One explicit synthetic send then carried the
+Classic suffix once, and attempt/sent recall retained only the human text.
+The process normally waited and exited zero; all 325 frozen source files stayed
+fixed during qualification. Captures use the retained pyte underline adapter
+and cell rasterizer with their disclosed glyph limits. No physical Rex or M4
+acceptance is inferred.
+
+This is a bounded CF19 increment. Descendant model/effort ceilings remain
+unimplemented because the current client catalog does not establish the full
+requested mapping. Launches and generated check follow-ups are unchanged.
+Historical acceptance and backend no-gain/setup-failure limits remain unchanged.
+
 ## On-demand loaded-lineage graph — 2026-11-08
 
 Graph, Ctrl+G and `/graph` open a full SLT view directly. Projects, loaded native

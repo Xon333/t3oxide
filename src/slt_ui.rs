@@ -132,6 +132,7 @@ pub struct SurfaceState {
     pub(crate) composer_model: String,
     pub(crate) composer_effort: String,
     pub(crate) composer_override: bool,
+    pub(crate) composer_guidance: String,
     pub(crate) run_active: Option<bool>,
     pub attention_mode: bool,
     pub internal_tabs: bool,
@@ -1509,11 +1510,16 @@ fn draw_composer(
                 }
             }
         });
+    let title = if state.composer_guidance.is_empty() {
+        "Prompt".into()
+    } else {
+        format!("Prompt · {}", state.composer_guidance)
+    };
     ctx.group("t3oxide.composer")
         .w(width)
         .border(Border::Rounded)
         .focus_within_border_fg(focus_color)
-        .title("Prompt")
+        .title(&title)
         .col(|ctx| {
             state.composer.wrap_width = Some(width.saturating_sub(3).max(1));
             let focused = ctx.register_focusable_named("composer");
@@ -1533,16 +1539,16 @@ fn draw_composer(
             }
             let can_send =
                 !state.active_key.is_empty() && !state.composer.value().trim().is_empty();
-            let selection_width = width.saturating_sub(22).max(15);
+            // Reserve both fixed actions and Send before eliding model labels.
+            let selection_width = width.saturating_sub(29).max(9);
+            let effort_width = (selection_width / 3).max(4);
             let model_label = elide(
                 if state.composer_model.is_empty() {
                     "Model ?"
                 } else {
                     &state.composer_model
                 },
-                selection_width
-                    .saturating_sub((selection_width / 3).max(8))
-                    .max(7) as usize,
+                selection_width.saturating_sub(effort_width).max(5) as usize,
             );
             let effort_label = elide(
                 if state.composer_effort.is_empty() {
@@ -1550,7 +1556,7 @@ fn draw_composer(
                 } else {
                     &state.composer_effort
                 },
-                (selection_width / 3).max(8) as usize,
+                effort_width as usize,
             );
             ctx.row(|ctx| {
                 if state.run_active == Some(true) {
@@ -1566,6 +1572,7 @@ fn draw_composer(
                         (&model_label, false, true),
                         (&effort_label, false, true),
                         ("Stop", false, true),
+                        ("Orch", false, true),
                     ],
                 ) {
                     Some(0) => actions.push(Action::Command(
@@ -1585,6 +1592,7 @@ fn draw_composer(
                         .into(),
                     )),
                     Some(2) => actions.push(Action::Stop),
+                    Some(3) => actions.push(Action::Command("orchestration".into())),
                     _ => {}
                 }
                 ctx.spacer();
