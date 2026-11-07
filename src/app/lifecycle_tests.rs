@@ -6358,6 +6358,186 @@ fn switcher_slt_same_title_reentry_focuses_query_and_preserves_drafts() {
 }
 
 #[test]
+fn full_graph_returns_to_manual_reading_and_exact_draft_without_mutation() {
+    for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open(0);
+        let mut snapshot = live_snapshot(30);
+        snapshot["items"][0]["text"] = json!(
+            (0..100)
+                .map(|i| format!("Original paragraph {i}: 日本語 café.\n\n"))
+                .collect::<String>()
+        );
+        snapshot["items"][0]["streaming"] = json!(false);
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot, "thread-a")
+            .unwrap();
+        fixture
+            .app
+            .replace_text("Retained composer 日本語\ninterior caret".into());
+        fixture.app.composer.move_cursor(CursorMove::Back);
+        fixture.app.flush_draft().unwrap();
+        fixture.app.state.save_pending("native-1", false,
+            json!({"id":"original-uncertain", "environmentId":"native-1", "threadId":"thread-a", "op":"send", "message":"retained"})).unwrap();
+        fixture.app.state.save_pending("native-1", true,
+            json!({"id":"original-stop", "environmentId":"native-1", "threadId":"thread-a", "runId":"run-original", "op":"stop"})).unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(width, height).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        transcript_tab_to(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            "transcript",
+            false,
+        );
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::PageUp)
+                .build(),
+        );
+        assert!(!fixture.app.follow);
+        assert!(fixture.app.transcript_scroll > 0);
+        let reading = (fixture.app.transcript_scroll, fixture.app.follow);
+        let draft = fixture.app.text();
+        let caret = fixture.app.composer.cursor();
+        let state = fixture.app.state.snapshot();
+        let native = fixture
+            .native_states
+            .iter()
+            .map(|path| fs::read(path).ok())
+            .collect::<Vec<_>>();
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_with(::slt::KeyCode::Char('g'), ::slt::KeyModifiers::CONTROL)
+                .build(),
+        );
+        backend.assert_contains("Graph · loaded / partial");
+        backend.assert_not_contains("Retained composer");
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Down)
+                .key_with(::slt::KeyCode::Right, ::slt::KeyModifiers::SHIFT)
+                .build(),
+        );
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .resize(70, 22)
+                .resize(width, height)
+                .build(),
+        );
+        let focus = r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Esc)
+                .build(),
+        );
+        backend.assert_not_contains("Graph · loaded / partial");
+        assert_eq!(focus.as_deref(), Some("transcript"));
+        assert_eq!(
+            (fixture.app.transcript_scroll, fixture.app.follow),
+            reading,
+            "reading at {width}x{height}"
+        );
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-a");
+        let after = fixture.app.state.snapshot();
+        for field in ["drafts", "pending", "pendingStops"] {
+            assert_eq!(after[field], state[field]);
+        }
+        assert_eq!(
+            fixture
+                .native_states
+                .iter()
+                .map(|path| fs::read(path).ok())
+                .collect::<Vec<_>>(),
+            native
+        );
+    }
+}
+
+#[test]
+fn full_graph_open_revalidates_current_source_and_rejects_read_only_children() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(0);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend =
+        crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+    fixture.app.command("graph").unwrap();
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    let child = fixture
+        .app
+        .threads
+        .iter()
+        .find(|row| row.kind() == "subagent")
+        .unwrap();
+    let child = fixture.app.source(child.profile, &child.id);
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::GraphOpenSource(child), &mut surface)
+        .unwrap();
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    backend.assert_contains("Graph source changed or is read-only");
+    let mut wrong = fixture.app.source(0, "thread-review");
+    wrong.environment = "different-environment".into();
+    fixture
+        .app
+        .surface_action(crate::slt_ui::Action::GraphOpenSource(wrong), &mut surface)
+        .unwrap();
+    r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    backend.assert_contains("Graph source environment changed");
+    let mut changed = fixture.app.source(1, "thread-review");
+    changed.project_id = "replaced-project".into();
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::GraphOpenSource(changed),
+            &mut surface,
+        )
+        .unwrap();
+    assert!(
+        fixture.app.dialog.is_none(),
+        "graph errors stay visible in the graph"
+    );
+    assert_eq!(fixture.app.active.as_ref().unwrap().profile, 0);
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-a");
+    fixture
+        .app
+        .surface_action(
+            crate::slt_ui::Action::GraphOpenSource(fixture.app.source(1, "thread-review")),
+            &mut surface,
+        )
+        .unwrap();
+    assert_eq!(fixture.app.active.as_ref().unwrap().profile, 1);
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-review");
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert!(fixture.native_states.iter().all(|p| !p.exists()));
+}
+
+#[test]
 fn r9_compact_retained_form_keeps_review_and_source_actions_without_mutation() {
     for context in [false, true] {
         for keyboard in [false, true] {
@@ -7852,5 +8032,165 @@ fn selected_b_context_commands_keep_records_and_protected_drafts_in_the_selected
         assert_eq!(fixture.app.state.snapshot(), before);
         assert!(fixture.app.state.pending_records().is_empty());
         assert!(fixture.native_states.iter().all(|path| !path.exists()));
+    }
+}
+
+#[test]
+fn graph_return_resolves_the_original_message_after_hidden_resize_and_source_updates() {
+    for change in ["above", "anchor", "removed"] {
+        let mut fixture = Fixture::new(0);
+        fixture.load_pages();
+        fixture.open(0);
+        let mut snapshot = live_snapshot(60);
+        snapshot["items"] = json!((0..12).map(|i| json!({
+            "key":format!("thread-a/item-{i}"), "sourceThreadId":"thread-a", "itemId":format!("item-{i}"),
+            "kind":"assistant_message", "text":format!("Message {i} original.\n\n{}", "Wrapping evidence 日本語 café and source identity. ".repeat(12)),
+            "streaming":false, "truncated":false, "attachmentCount":0
+        })).collect::<Vec<_>>());
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot.clone(), "thread-a")
+            .unwrap();
+        fixture.app.replace_text("Graph return draft 日本語".into());
+        fixture.app.flush_draft().unwrap();
+        fixture.app.follow = false;
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend =
+            crate::slt_ui::tests::ResizableBackend::new(140, 38).with_activation_boundaries();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        fixture.app.transcript_scroll = surface.transcript_layout.as_ref().unwrap().items[5].1 + 1;
+        fixture.app.follow = false;
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        backend.assert_contains("Message 5 original");
+        let saved = fixture.app.state.snapshot();
+        let caret = fixture.app.composer.cursor();
+        fixture.app.command("graph").unwrap();
+        r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        snapshot["revision"] = json!(61);
+        match change {
+            "above" => {
+                snapshot["items"][0]["text"] = json!("New evidence above the anchor. ".repeat(200))
+            }
+            "anchor" => snapshot["items"][5]["text"] = json!("Replacement anchored message"),
+            "removed" => {
+                snapshot["items"].as_array_mut().unwrap().remove(5);
+            }
+            _ => unreachable!(),
+        }
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot, "thread-a")
+            .unwrap();
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new().resize(70, 22).build(),
+        );
+        r9_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Esc)
+                .build(),
+        );
+        if change == "above" {
+            backend.assert_contains("Message 5 original");
+            let layout = surface.transcript_layout.as_ref().unwrap();
+            let target = layout
+                .items
+                .iter()
+                .find(|(key, _, _)| key.ends_with("thread-a/item-5"))
+                .unwrap();
+            assert_eq!(
+                layout.top, target.1,
+                "return must resolve the item at the new width"
+            );
+        } else {
+            assert_eq!(
+                fixture.app.transcript_scroll, 0,
+                "changed/missing anchor cannot reuse raw coordinates"
+            );
+            assert!(fixture.app.notice.contains("Reading source changed"));
+        }
+        assert_eq!(fixture.app.text(), "Graph return draft 日本語");
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        let after = fixture.app.state.snapshot();
+        for field in ["drafts", "pending", "pendingStops"] {
+            assert_eq!(after[field], saved[field]);
+        }
+    }
+}
+
+#[test]
+fn graph_exposes_controller_stop_rejection_and_acknowledgement() {
+    for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+        for pending in [true, false] {
+            let mut fixture = Fixture::new(0);
+            fixture.load_pages();
+            fixture.open(0);
+            if pending {
+                fixture.app.state.save_pending("native-0",true,json!({"id":"existing-stop","environmentId":"native-0","threadId":"thread-a","runId":"run-original","op":"stop"})).unwrap();
+            }
+            let saved = fixture.app.state.snapshot();
+            let mut surface = crate::slt_ui::SurfaceState::new();
+            let mut backend = crate::slt_ui::tests::ResizableBackend::new(width, height)
+                .with_activation_boundaries();
+            fixture.app.command("graph").unwrap();
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            backend.run_with_events(
+                ::slt::EventBuilder::new()
+                    .key_with(::slt::KeyCode::Char('s'), ::slt::KeyModifiers::CONTROL)
+                    .build(),
+                |ctx| {
+                    fixture.app.populate_surface(&mut surface);
+                    let view = fixture.app.view();
+                    let modal = fixture.app.modal();
+                    let actions = crate::slt_ui::draw(
+                        ctx,
+                        &view,
+                        &mut fixture.app.composer,
+                        &mut fixture.app.modal_editor,
+                        modal.as_ref(),
+                        &mut surface,
+                    );
+                    fixture.app.observe_slt_layout(&surface);
+                    for action in actions {
+                        if let Err(error) = fixture.app.surface_action(action, &mut surface) {
+                            fixture.app.error(error);
+                        }
+                    }
+                },
+            );
+            r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+            if pending {
+                backend.assert_contains("unresolved");
+                assert_eq!(
+                    fixture.app.state.snapshot()["pendingStops"],
+                    saved["pendingStops"]
+                );
+            } else {
+                let event = fixture.next_mutation();
+                assert!(matches!(&event, Background::Mutation { result: Ok(_), .. }));
+                fixture.app.handle(event).unwrap();
+                let notice = fixture.app.notice.clone();
+                assert!(!notice.is_empty());
+                r9_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+                backend.assert_contains(&notice.chars().take(20).collect::<String>());
+                assert!(fixture.app.state.pending("native-0", true).is_none());
+            }
+            backend.assert_contains("Graph · loaded / partial");
+            assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-a");
+            assert_eq!(fixture.app.state.snapshot()["pending"], saved["pending"]);
+        }
     }
 }

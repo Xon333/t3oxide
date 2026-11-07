@@ -62,6 +62,37 @@ pub(super) fn selected_content(state: &SurfaceState) -> Option<&ContentItem> {
         .or_else(|| state.contents.iter().find(|content| &content.key == key))
 }
 
+pub(super) fn reset_reading_after_graph_resize(state: &mut SurfaceState) {
+    // The exact retained item/revision survives; wrapped coordinates do not.
+    state.attention.content_scroll = ScrollState::new();
+}
+
+pub(super) fn open_graph_item(
+    state: &mut SurfaceState,
+    id: &project_graph::NodeId,
+    actions: &mut Vec<Action>,
+) -> bool {
+    let selection = match id {
+        project_graph::NodeId::Question { .. } => state
+            .questions
+            .iter()
+            .find(|question| question_node(question) == *id)
+            .map(|question| Selection::Question(question.key.clone())),
+        project_graph::NodeId::Content { .. } => state
+            .contents
+            .iter()
+            .find(|content| content_node(content) == *id)
+            .map(|content| Selection::Content(content.key.clone())),
+        _ => None,
+    };
+    if let Some(selection) = selection {
+        select(state, selection, false, actions);
+        true
+    } else {
+        false
+    }
+}
+
 pub(super) fn draw(
     ctx: &mut Context,
     _view: &ui::View,
@@ -1035,6 +1066,7 @@ fn draw_graph(
                                 select(state, Selection::Content(key), false, actions);
                             }
                         }
+                        project_graph::NodeId::Thread { .. } => {}
                     }
                     ctx.request_frame();
                 }
@@ -1235,6 +1267,147 @@ mod tests {
                 super::super::draw(ctx, &ui::View::default(), editor, &mut modal, None, state);
         });
         actions
+    }
+
+    #[test]
+    fn full_graph_close_preserves_independent_library_revision_scroll_and_composer() {
+        for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+            let mut state = SurfaceState::new();
+            state.attention_mode = true;
+            state.source = Some(source("Attached"));
+            state.active_key = "0\0thread-Attached".into();
+            state.projects = vec![source("Attached"), source("Selected"), source("Empty")];
+            state.contents = vec![content(
+                "Selected",
+                "report",
+                "Evidence",
+                "Original Library report",
+                &"Retained evidence paragraph.\n\n".repeat(40),
+            )];
+            state.graph_threads = vec![super::super::GraphThread {
+                source: source("Selected"),
+                title: "Selected thread".into(),
+                relationship: "main".into(),
+                parent: None,
+            }];
+            let original = state.contents[0].clone();
+            select(
+                &mut state,
+                Selection::Content(original.key.clone()),
+                false,
+                &mut Vec::new(),
+            );
+            let mut editor = ui::editor("Attached unsent 日本語\ninterior caret", "violet", "");
+            let mut backend = super::super::tests::ResizableBackend::new(width, height)
+                .with_activation_boundaries();
+            for _ in 0..8 {
+                assert!(
+                    surface_frame(&mut backend, &mut state, &mut editor, Vec::new()).is_empty()
+                );
+            }
+            for _ in 0..40 {
+                if state.focused_control.as_deref() == Some("attention-content") {
+                    break;
+                }
+                surface_frame(
+                    &mut backend,
+                    &mut state,
+                    &mut editor,
+                    EventBuilder::new().key_code(KeyCode::Tab).build(),
+                );
+                for _ in 0..4 {
+                    surface_frame(&mut backend, &mut state, &mut editor, Vec::new());
+                }
+            }
+            assert_eq!(
+                state.focused_control.as_deref(),
+                Some("attention-content"),
+                "initial focus at {width}x{height}"
+            );
+            state.attention.content_scroll.offset = 9;
+            surface_frame(&mut backend, &mut state, &mut editor, Vec::new());
+            let offset = state.attention.content_scroll.offset;
+            assert!(offset > 0);
+            let draft = editor.lines().to_vec();
+            let caret = editor.cursor();
+            let project = state.selected_project.clone();
+            state.graph_requested = true;
+            for _ in 0..8 {
+                assert!(
+                    surface_frame(&mut backend, &mut state, &mut editor, Vec::new()).is_empty()
+                );
+            }
+            backend.assert_contains("Graph · loaded / partial");
+            surface_frame(
+                &mut backend,
+                &mut state,
+                &mut editor,
+                EventBuilder::new().key_code(KeyCode::Down).build(),
+            );
+            surface_frame(
+                &mut backend,
+                &mut state,
+                &mut editor,
+                EventBuilder::new()
+                    .resize(70, 22)
+                    .resize(width, height)
+                    .build(),
+            );
+            assert!(
+                surface_frame(
+                    &mut backend,
+                    &mut state,
+                    &mut editor,
+                    EventBuilder::new().key_code(KeyCode::Esc).build()
+                )
+                .is_empty()
+            );
+            for _ in 0..8 {
+                surface_frame(&mut backend, &mut state, &mut editor, Vec::new());
+            }
+            backend.assert_not_contains("Graph · loaded / partial");
+            assert_eq!(state.source.as_ref().unwrap().thread, "thread-Attached");
+            assert_eq!(selected_content(&state).unwrap(), &original);
+            assert_eq!(state.selected_project, project);
+            assert_eq!(
+                state.attention.content_scroll.offset, offset,
+                "Library reading at {width}x{height}"
+            );
+            assert_eq!(
+                state.focused_control.as_deref(),
+                Some("attention-content"),
+                "return focus at {width}x{height}"
+            );
+            assert_eq!(editor.lines(), draft.as_slice());
+            assert_eq!(editor.cursor(), caret);
+            // Stay at the new width: old wrapped offsets must not move the
+            // retained report to an unrelated paragraph after the hidden view.
+            state.graph_requested = true;
+            for _ in 0..4 {
+                surface_frame(&mut backend, &mut state, &mut editor, Vec::new());
+            }
+            let resized_width = if width == 70 { 40 } else { 70 };
+            surface_frame(
+                &mut backend,
+                &mut state,
+                &mut editor,
+                EventBuilder::new().resize(resized_width, 22).build(),
+            );
+            surface_frame(
+                &mut backend,
+                &mut state,
+                &mut editor,
+                EventBuilder::new().key_code(KeyCode::Esc).build(),
+            );
+            for _ in 0..8 {
+                surface_frame(&mut backend, &mut state, &mut editor, Vec::new());
+            }
+            assert_eq!(selected_content(&state).unwrap(), &original);
+            assert_eq!(state.attention.content_scroll.offset, 0);
+            assert_eq!(state.source.as_ref().unwrap().thread, "thread-Attached");
+            assert_eq!(editor.lines(), draft.as_slice());
+            assert_eq!(editor.cursor(), caret);
+        }
     }
 
     #[test]

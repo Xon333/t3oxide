@@ -4,6 +4,8 @@
 | --- | --- |
 | Conversations / questions and reports | A / B; F2 |
 | Navigation / optional graph | F3; compact picker closes after Open or Esc |
+| Loaded relationship graph | Graph, Ctrl+G or `/graph`; click selects, Enter opens, Esc returns |
+| Graph camera | Shift+arrows / wheel pan; Center reveals selection; Fit reports actual fit or overflow |
 | Context | F4; compact screens use a detail overlay |
 | Next / previous pane | F6 / Shift+F6 |
 | Next / previous control | Tab / Shift+Tab |

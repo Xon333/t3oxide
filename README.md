@@ -18,12 +18,19 @@ Use a current stable Rust toolchain (declared minimum 1.92), existing environmen
 
 **A** combines Unread and Completed, with unread first. Completed means opened, inactive and unsettled. Running contains active work, needs input and failures; read state remains independent. Pins and the on-demand Settled explorer retain their native identity. Ordering follows meaningful native activity rather than token/tool churn. Context shows the actual native direct-subagent count when available.
 
-Search starts with a project and supports environment/name/native-content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
+Search opens the loaded-conversation fuzzy switcher directly; `/search` retains explicit native-content search and its scope. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
 
 An attached conversation uses the available transcript/composer area by default.
 F3 exposes navigation when needed; on compact screens it is a temporary picker.
 Internal tabs remain available. B opens Forms, Library and Projects directly;
-the graph remains available on demand. Context uses F4 and a compact overlay
+Graph, Ctrl+G or `/graph` opens a full view of loaded native lineage; click selects,
+Enter opens and Esc returns to the invoking source. Manual reading uses an exact
+message anchor after resize; a retained Library report returns to its start when
+width changes. Shift+arrows and the wheel pan;
+Center reveals the selected node. Fit reports overflow instead of pretending to
+zoom. Relationships remain partial; provider/family detail is not admitted and
+subagent/unknown-lineage conversations remain read-only in this view.
+Context uses F4 and a compact overlay
 where a permanent sidebar would crowd the content.
 
 **B** groups actual native human questions by project. Its persistent project-navigation region changes level in place; returning globally retains the selected project and content. Supporting Markdown and supported Mermaid flowcharts remain separate from navigation; unsupported diagram types retain their source. Open in A retains source identity. Answers autosave against the exact source/request revision, validate native values, and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID.

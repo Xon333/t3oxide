@@ -528,6 +528,12 @@ pub const ACTIONS: &[Action] = &[
         key: "",
     },
     Action {
+        name: "graph",
+        label: "Loaded relationship graph",
+        description: "Full view of loaded native lineage; selection, camera and source return stay independent",
+        key: "Ctrl+G · /graph",
+    },
+    Action {
         name: "filter",
         label: "Thread type",
         description: "All, main conversations, subagents or forks",

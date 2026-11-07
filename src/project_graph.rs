@@ -16,6 +16,12 @@ pub enum NodeId {
         environment_id: String,
         project_id: String,
     },
+    Thread {
+        profile: usize,
+        environment_id: String,
+        project_id: String,
+        thread_id: String,
+    },
     Question {
         environment_id: String,
         project_id: String,
@@ -30,7 +36,7 @@ pub enum NodeId {
     },
 }
 
-/// A real project or admitted native question, including projects with no questions.
+/// An admitted project, thread, question or content source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
     pub id: NodeId,
@@ -67,6 +73,14 @@ struct Canvas {
 
 impl Canvas {
     fn build(nodes: &[Node], edges: &[Edge], label_width: usize) -> Result<Self> {
+        ensure!(
+            nodes.len() <= 256 && edges.len() <= 1024,
+            "project graph exceeds the retained node/edge budget"
+        );
+        ensure!(
+            label_width <= 4096 && nodes.iter().all(|node| node.label.len() <= 64 * 1024),
+            "project graph exceeds the retained label budget"
+        );
         let mut ids = HashMap::new();
         for (index, node) in nodes.iter().enumerate() {
             let fields = match &node.id {
@@ -74,6 +88,12 @@ impl Canvas {
                     environment_id,
                     project_id,
                 } => vec![environment_id, project_id],
+                NodeId::Thread {
+                    environment_id,
+                    project_id,
+                    thread_id,
+                    ..
+                } => vec![environment_id, project_id, thread_id],
                 NodeId::Question {
                     environment_id,
                     project_id,
@@ -106,6 +126,36 @@ impl Canvas {
                 "duplicate graph source identity"
             );
         }
+        // Reject cycles before upstream layout, which expects a DAG. Parallel
+        // endpoint edges are valid and counted independently by Kahn's algorithm.
+        let mut incoming = vec![0usize; nodes.len()];
+        let mut children = vec![Vec::new(); nodes.len()];
+        for edge in edges {
+            let from = *ids
+                .get(&edge.from)
+                .context("graph edge source is unavailable")?;
+            let to = *ids
+                .get(&edge.to)
+                .context("graph edge target is unavailable")?;
+            incoming[to] += 1;
+            children[from].push(to);
+        }
+        let mut ready: Vec<_> = incoming
+            .iter()
+            .enumerate()
+            .filter_map(|(index, count)| (*count == 0).then_some(index))
+            .collect();
+        let mut visited = 0;
+        while let Some(index) = ready.pop() {
+            visited += 1;
+            for &child in &children[index] {
+                incoming[child] -= 1;
+                if incoming[child] == 0 {
+                    ready.push(child);
+                }
+            }
+        }
+        ensure!(visited == nodes.len(), "project graph contains a cycle");
         let labels: Vec<_> = nodes
             .iter()
             .map(|node| fit_label(&node.label, label_width))
@@ -146,6 +196,13 @@ impl Canvas {
             layout = graph.compute_layout_with_config(&config);
             scene = planner.plan(&layout, &options.plan).quiet()?;
         }
+        ensure!(
+            nodes
+                .iter()
+                .enumerate()
+                .all(|(index, _)| layout.nodes().iter().any(|node| node.id == index)),
+            "graph layout omitted admitted nodes"
+        );
         let width = scene.width();
         let height = scene.height();
         let cells = width
@@ -210,6 +267,12 @@ struct Displayed {
     top: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GraphMode {
+    Compact,
+    View,
+}
+
 /// One persistent navigation region; level/content ownership stays with its caller.
 #[derive(Debug, Default)]
 pub struct ProjectGraph {
@@ -219,6 +282,7 @@ pub struct ProjectGraph {
     external_selected: Option<NodeId>,
     left: usize,
     top: usize,
+    center_pending: bool,
 }
 
 impl ProjectGraph {
@@ -237,16 +301,87 @@ impl ProjectGraph {
         width: u32,
         height: u32,
     ) -> Result<GraphResponse> {
-        let width = width.max(1);
-        let height = height.max(1);
-        let label_width = width.saturating_sub(4).max(1) as usize;
+        self.draw_mode(
+            ctx,
+            nodes,
+            edges,
+            selected,
+            (width, height),
+            GraphMode::Compact,
+        )
+    }
+
+    /// Draw the full graph with independent camera controls. Click selects;
+    /// Enter activates. Shift+arrows and the wheel pan without changing selection.
+    /// Resize/rebuild retains the camera, clamped to the new scene bounds.
+    ///
+    /// # Errors
+    /// Rejects malformed identities, cycles and input/geometry beyond retained budgets.
+    pub fn draw_view(
+        &mut self,
+        ctx: &mut Context,
+        nodes: &[Node],
+        edges: &[Edge],
+        selected: Option<&NodeId>,
+        width: u32,
+        height: u32,
+    ) -> Result<GraphResponse> {
+        self.draw_mode(
+            ctx,
+            nodes,
+            edges,
+            selected,
+            (width, height),
+            GraphMode::View,
+        )
+    }
+
+    /// Center the selected node on the next draw, after any layout rebuild.
+    pub fn center(&mut self) {
+        self.center_pending = true;
+    }
+
+    /// Fit at actual terminal cell density; no scaling is performed. If the
+    /// current canvas cannot fit, center selection on the next draw and return false.
+    pub fn fit(&mut self, width: u32, height: u32) -> bool {
+        let fits = self.canvas.as_ref().is_some_and(|canvas| {
+            canvas.width <= width as usize && canvas.height <= height as usize
+        });
+        if fits {
+            self.left = 0;
+            self.top = 0;
+            self.center_pending = false;
+        } else {
+            self.center();
+        }
+        fits
+    }
+
+    fn draw_mode(
+        &mut self,
+        ctx: &mut Context,
+        nodes: &[Node],
+        edges: &[Edge],
+        selected: Option<&NodeId>,
+        viewport: (u32, u32),
+        mode: GraphMode,
+    ) -> Result<GraphResponse> {
+        let width = viewport.0.max(1);
+        let height = viewport.1.max(1);
+        ensure!(
+            u64::from(width) * u64::from(height) <= 1_000_000,
+            "graph viewport exceeds the retained cell budget"
+        );
+        let label_width = width.saturating_sub(4).clamp(1, 4096) as usize;
         let changed = self.canvas.as_ref().is_none_or(|canvas| {
             canvas.nodes != nodes || canvas.edges != edges || canvas.label_width != label_width
         });
         if changed {
             self.canvas = Some(Arc::new(Canvas::build(nodes, edges, label_width)?));
-            self.left = 0;
-            self.top = 0;
+            if mode == GraphMode::Compact {
+                self.left = 0;
+                self.top = 0;
+            }
         }
         let selection_changed = self.external_selected.as_ref() != selected;
         if selection_changed {
@@ -262,10 +397,36 @@ impl ProjectGraph {
                 .cloned()
                 .or_else(|| nodes.first().map(|node| node.id.clone()));
         }
-        let focused = ctx.register_focusable_named("project-navigation");
+        let focused = ctx.register_focusable_named(match mode {
+            GraphMode::Compact => "project-navigation",
+            GraphMode::View => "graph-view",
+        });
         ctx.register_focusable();
         let mut activated = None;
-        let mut moved = changed || selection_changed;
+        let mut moved = mode == GraphMode::Compact && (changed || selection_changed);
+        if focused && mode == GraphMode::View {
+            let pans: Vec<_> = ctx
+                .key_presses_when(true)
+                .filter(|(_, key)| {
+                    key.modifiers == slt::KeyModifiers::SHIFT
+                        && matches!(
+                            key.code,
+                            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
+                        )
+                })
+                .map(|(index, key)| (index, key.code.clone()))
+                .collect();
+            for (index, key) in pans {
+                match key {
+                    KeyCode::Up => self.top = self.top.saturating_sub(3),
+                    KeyCode::Down => self.top = self.top.saturating_add(3),
+                    KeyCode::Left => self.left = self.left.saturating_sub(3),
+                    KeyCode::Right => self.left = self.left.saturating_add(3),
+                    _ => {}
+                }
+                ctx.consume_event(index);
+            }
+        }
         if focused && !nodes.is_empty() {
             let previous = ctx.consume_key_code(KeyCode::Up) || ctx.consume_key_code(KeyCode::Left);
             let next = ctx.consume_key_code(KeyCode::Down) || ctx.consume_key_code(KeyCode::Right);
@@ -282,7 +443,9 @@ impl ProjectGraph {
                 self.selected = Some(nodes[index].id.clone());
                 moved = true;
             }
-            if ctx.consume_key_code(KeyCode::Enter) || ctx.consume_key(' ') {
+            if ctx.consume_key_code(KeyCode::Enter)
+                || mode == GraphMode::Compact && ctx.consume_key(' ')
+            {
                 activated = self.selected.clone();
             }
         }
@@ -321,6 +484,17 @@ impl ProjectGraph {
                 bounds.height as usize,
                 height as usize,
             );
+        }
+        if std::mem::take(&mut self.center_pending)
+            && let Some(index) = nodes
+                .iter()
+                .position(|node| Some(&node.id) == self.selected.as_ref())
+        {
+            let bounds = canvas.bounds[index];
+            self.left =
+                (bounds.x as usize + bounds.width as usize / 2).saturating_sub(width as usize / 2);
+            self.top = (bounds.y as usize + bounds.height as usize / 2)
+                .saturating_sub(height as usize / 2);
         }
         self.left = self.left.min(canvas.width.saturating_sub(width as usize));
         self.top = self.top.min(canvas.height.saturating_sub(height as usize));
@@ -409,7 +583,9 @@ impl ProjectGraph {
                 .filter(|id| nodes.iter().any(|node| &node.id == *id))
             {
                 self.selected = Some(id.clone());
-                activated = Some(id.clone());
+                if mode == GraphMode::Compact {
+                    activated = Some(id.clone());
+                }
                 ctx.request_frame();
             }
         }
@@ -493,6 +669,178 @@ mod tests {
             label: label.into(),
             color: slt::palette::tailwind::CYAN.c300,
         }
+    }
+
+    fn render_view(
+        graph: &mut ProjectGraph,
+        backend: &mut TestBackend,
+        nodes: &[Node],
+        width: u32,
+        height: u32,
+    ) {
+        backend.render(|ctx| {
+            graph
+                .draw_view(ctx, nodes, &[], None, width, height)
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn full_view_click_selects_and_enter_explicitly_activates() {
+        let nodes = [node("env", "a", "Alpha"), node("env", "b", "Beta")];
+        let mut graph = ProjectGraph::default();
+        let mut backend = TestBackend::new(30, 12);
+        for _ in 0..3 {
+            render_view(&mut graph, &mut backend, &nodes, 30, 12);
+        }
+        let (x, y) = backend.find_text("Beta").unwrap();
+        let mut response = GraphResponse::default();
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            response = graph.draw_view(ctx, &nodes, &[], None, 30, 12).unwrap();
+        });
+        assert_eq!(response.selected, Some(nodes[1].id.clone()));
+        assert_eq!(response.activated, None);
+        backend.run_with_events(
+            EventBuilder::new().key_code(KeyCode::Enter).build(),
+            |ctx| {
+                response = graph.draw_view(ctx, &nodes, &[], None, 30, 12).unwrap();
+            },
+        );
+        assert_eq!(response.activated, Some(nodes[1].id.clone()));
+    }
+
+    #[test]
+    fn full_view_pan_resize_rebuild_and_focus_preserve_camera_until_center() {
+        let nodes: Vec<_> = (0..12)
+            .map(|n| node("env", &n.to_string(), "Long label"))
+            .collect();
+        let mut graph = ProjectGraph::default();
+        let mut backend = TestBackend::new(30, 12);
+        for _ in 0..3 {
+            render_view(&mut graph, &mut backend, &nodes, 18, 5);
+        }
+        let selected = graph.selected.clone();
+        backend.run_with_events(
+            EventBuilder::new()
+                .key_with(KeyCode::Down, slt::KeyModifiers::SHIFT)
+                .build(),
+            |ctx| {
+                graph.draw_view(ctx, &nodes, &[], None, 18, 5).unwrap();
+            },
+        );
+        assert_eq!(graph.top, 3);
+        assert_eq!(graph.selected, selected);
+        render_view(&mut graph, &mut backend, &nodes, 17, 6);
+        assert_eq!(graph.top, 3, "width rebuild retains a valid camera");
+        backend.run_with_events(EventBuilder::new().key_code(KeyCode::Tab).build(), |ctx| {
+            graph.draw_view(ctx, &nodes, &[], None, 17, 6).unwrap();
+        });
+        assert_eq!(graph.top, 3, "focus change does not reveal selection");
+        backend.run_with_events(EventBuilder::new().scroll_down(2, 2).build(), |ctx| {
+            graph.draw_view(ctx, &nodes, &[], None, 17, 6).unwrap();
+        });
+        assert_eq!(
+            graph.top, 6,
+            "wheel pans independently of focus and selection"
+        );
+        assert_eq!(graph.selected, selected);
+        backend.render(|ctx| {
+            graph
+                .draw_view(ctx, &nodes, &[], Some(&nodes[8].id), 17, 6)
+                .unwrap();
+        });
+        assert_eq!(graph.top, 6, "external selection does not undo a user pan");
+        backend.render(|ctx| {
+            graph
+                .draw_view(ctx, &nodes, &[], Some(&nodes[0].id), 17, 6)
+                .unwrap();
+        });
+        assert!(!graph.fit(17, 6));
+        render_view(&mut graph, &mut backend, &nodes, 17, 6);
+        assert_eq!(graph.top, 0, "failed fit centers the first selected node");
+        graph.top = 9;
+        graph.center();
+        render_view(&mut graph, &mut backend, &nodes, 17, 6);
+        assert_eq!(graph.top, 0);
+        let canvas = graph.canvas.as_ref().unwrap();
+        let (width, height) = (canvas.width as u32, canvas.height as u32);
+        graph.top = 9;
+        assert!(graph.fit(width, height));
+        assert_eq!((graph.left, graph.top), (0, 0));
+        render_view(&mut graph, &mut backend, &nodes[..1], 17, 6);
+        assert_eq!(
+            (graph.left, graph.top),
+            (0, 0),
+            "smaller rebuild clamps camera"
+        );
+    }
+
+    #[test]
+    fn full_view_stale_click_uses_displayed_camera_and_exact_id_or_rejects() {
+        let nodes: Vec<_> = (0..8)
+            .map(|n| node("env", &n.to_string(), &format!("Label {n}")))
+            .collect();
+        let mut graph = ProjectGraph::default();
+        let mut backend = TestBackend::new(30, 12);
+        render_view(&mut graph, &mut backend, &nodes, 20, 8);
+        graph.top = 4;
+        for _ in 0..3 {
+            render_view(&mut graph, &mut backend, &nodes, 20, 8);
+        }
+        let (x, y) = backend.find_text("Label 1").unwrap();
+        let reversed: Vec<_> = nodes.iter().rev().cloned().collect();
+        let mut response = GraphResponse::default();
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            response = graph.draw_view(ctx, &reversed, &[], None, 19, 7).unwrap();
+        });
+        assert_eq!(response.selected, Some(nodes[1].id.clone()));
+        assert_eq!(response.activated, None);
+        // Restore an old displayed scene, then remove the hit identity entirely.
+        graph.top = 4;
+        for _ in 0..3 {
+            render_view(&mut graph, &mut backend, &nodes, 20, 8);
+        }
+        let (x, y) = backend.find_text("Label 1").unwrap();
+        backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+            response = graph.draw_view(ctx, &nodes[2..], &[], None, 20, 8).unwrap();
+        });
+        assert_ne!(response.selected, Some(nodes[1].id.clone()));
+        assert_eq!(response.activated, None);
+    }
+
+    #[test]
+    fn malformed_cycles_and_over_budget_graphs_are_rejected_before_layout() {
+        let nodes = [node("env", "a", "Alpha"), node("env", "b", "Beta")];
+        let edge = |from: usize, to: usize| Edge {
+            from: nodes[from].id.clone(),
+            to: nodes[to].id.clone(),
+        };
+        assert!(
+            Canvas::build(&nodes, &[edge(0, 1), edge(1, 0)], 20)
+                .unwrap_err()
+                .to_string()
+                .contains("cycle")
+        );
+        assert!(Canvas::build(&nodes, &[edge(0, 0)], 20).is_err());
+        assert!(Canvas::build(&[nodes[0].clone(), nodes[0].clone()], &[], 20).is_err());
+        assert!(Canvas::build(&nodes[..1], &[edge(0, 1)], 20).is_err());
+        let many: Vec<_> = (0..257)
+            .map(|n| node("env", &n.to_string(), "Node"))
+            .collect();
+        assert!(
+            Canvas::build(&many, &[], 20)
+                .unwrap_err()
+                .to_string()
+                .contains("budget")
+        );
+        let mut thread = nodes[0].clone();
+        thread.id = NodeId::Thread {
+            profile: 1,
+            environment_id: "env".into(),
+            project_id: "project".into(),
+            thread_id: "thread".into(),
+        };
+        assert!(Canvas::build(&[thread], &[], 20).is_ok());
     }
 
     #[test]

@@ -3,7 +3,10 @@
 
 mod attention;
 mod dialogs;
+mod graph;
 mod navigator;
+
+pub(crate) use graph::Thread as GraphThread;
 
 use crate::{domain, reports, ui};
 use ratatui_textarea::TextArea;
@@ -68,12 +71,22 @@ pub struct ContentItem {
     pub full_source: std::sync::Arc<[u8]>,
 }
 
+/// Original displayed source and reading anchor, never a native mutation target.
+#[derive(Clone, Debug)]
+pub struct GraphReading {
+    pub source: Source,
+    pub anchor: Option<(String, String, usize)>,
+    pub follow: bool,
+}
+
 /// UI intent. Only the controller may dispatch or acknowledge native operations.
 #[derive(Clone, Debug)]
 pub enum Action {
     Highlight(usize),
     Open(usize),
     OpenSource(Source),
+    GraphOpenSource(Source),
+    GraphReturn(GraphReading),
     SelectTab(String),
     CloseTab(String),
     Lane(String),
@@ -112,6 +125,9 @@ pub struct SurfaceState {
     pub answer_delivery: BTreeMap<String, String>,
     pub contents: Vec<ContentItem>,
     pub dependency_status: String,
+    pub(crate) graph_threads: Vec<graph::Thread>,
+    pub(crate) graph_coverage: String,
+    pub(crate) graph_requested: bool,
     pub(crate) direct_effort_option: bool,
     pub(crate) composer_model: String,
     pub(crate) composer_effort: String,
@@ -147,6 +163,7 @@ pub struct SurfaceState {
     attention_focus: Option<String>,
     context_expanded: bool,
     attention: attention::State,
+    graph: graph::State,
     dialog: dialogs::State,
     overlay_open: bool,
     transcript: ScrollState,
@@ -198,6 +215,17 @@ pub fn draw(
     state: &mut SurfaceState,
 ) -> Vec<Action> {
     let mut actions = Vec::new();
+    ctx.set_theme(surface_theme(&view.theme));
+    if std::mem::take(&mut state.graph_requested) {
+        graph::open(ctx, state, view);
+    }
+    if graph::is_open(state) {
+        state.transcript_layout = None;
+        graph::draw(ctx, state, &view.notice, &mut actions);
+        global_actions(ctx, true, state, &mut actions);
+        return actions;
+    }
+    graph::restore_focus(ctx, state);
     dialogs::direct_dismissal_tail(ctx, state, modal.is_some());
     let geometry = (ctx.width(), ctx.height());
     let resized = state
@@ -677,6 +705,7 @@ fn draw_header(
                     || (state.show_context && width >= 112 && view.layout != ui::LayoutMode::Focus),
                 true,
             ),
+            ("Graph", false, true),
         ];
         match action_bar(
             ctx,
@@ -696,6 +725,7 @@ fn draw_header(
                 toggle_context(state, width);
                 ctx.request_frame();
             }
+            Some(6) => actions.push(Action::Command("graph".into())),
             _ => {}
         }
     });
@@ -1668,10 +1698,17 @@ fn global_actions(
     for (index, key) in keys {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let command = control || key.modifiers.contains(KeyModifiers::SUPER);
+        if graph::is_open(state)
+            && !(control && key.code == KeyCode::Char('s')
+                || command && key.code == KeyCode::Char('q'))
+        {
+            continue;
+        }
         let action = match key.code {
             KeyCode::Char('s') if control => Some(Action::Stop),
             KeyCode::Char('q') if command => Some(Action::Command("quit".into())),
             KeyCode::Char('p') if command => Some(Action::Command("palette".into())),
+            KeyCode::Char('g') if command => Some(Action::Command("graph".into())),
             KeyCode::Char('f') if command => {
                 ctx.focus_by_name("modal-editor");
                 Some(Action::Command("switch".into()))

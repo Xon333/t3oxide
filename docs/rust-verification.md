@@ -1,5 +1,62 @@
 # Rust / SLT verification
 
+## On-demand loaded-lineage graph — 2026-11-08
+
+Graph, Ctrl+G and `/graph` open a full SLT view directly. Projects, loaded native
+conversations, explicit fork/subagent parents and Form/Library ownership retain
+their exact sources. Click selects; Enter explicitly opens an admitted current
+source. Subagent/unknown-lineage conversations stay read-only. Coverage is always
+partial; Refresh reads only the current loaded inventory. Shift+arrows/wheel pan,
+Center reveals selection, and Fit reports actual cell fit or overflow without
+claiming zoom. Cycles, malformed identities and layout budgets have a recoverable
+node-list fallback.
+
+Consequential review found three source-return/feedback defects. Focused
+regressions reproduced all three before correction: a newer Library revision
+could replace the invoking retained item at entry; hidden source updates/resize
+could retarget a raw reading offset; controller Stop outcomes were hidden.
+Entry now admits the retained Library revision before current content, with
+freshness checked again on Open. A returns through the existing exact
+message-key/digest jump, conserving inner position only at unchanged geometry;
+a changed/missing message returns to the conversation start with a notice.
+B retains its exact report revision and returns to that item's start when width
+changes. Controller notices remain visible and keyboard-scrollable in Graph;
+Stop continues to target the attached conversation independently of selection.
+
+Final source passed **328 Rust tests** (313 library +15 integration),
+workspace/vendor formatting and both Clippy checks. Source fixtures cover
+cross-environment lineage, stale/replaced sources, manual reading at a changed
+width, changed/removed anchor messages, exact Library revision/reading return,
+focus, draft/caret conservation, independent pending/Stop lanes, accepted and
+rejected Stop feedback, stale camera hits, camera bounds and cyclic fallback.
+The locked offline arm64 release is **9,669,040 bytes**, SHA256
+`890165a87a8dfb2075e7a80c2c3d57d4fa2fdfd91f59995907fe1f1f8e62e5cd`;
+version and strict signature verification passed.
+
+Final release PTYs pass A/B entry/return at 140×38, 70×22 and 40×12, preserving
+the original Unicode draft and nonempty pending/pendingStops, with zero native
+mutation dispatches. Duplicate Stop rejection is visible at all sizes. Fifteen
+terminal-cell frames are retained; all three product processes normally waited
+and exited zero, and all 323 source files remained fixed during the invocation.
+Visible pan is verified in the two smaller views; the large graph fits and stays
+clamped. These use the retained exact pyte 0.8.2 underline adapter and
+Menlo/Hiragino rasterizer; missing bold border glyphs in PNGs remain a rasterizer
+limit, with correct cell text/raw ANSI retained. No physical Rex result is
+inferred. Earlier failed fixtures and pre-correction artifacts remain separate.
+
+The first PTY failed because its stream-disabled fixture still marked the only
+loaded assistant message streaming, correctly excluding it from Library. Its
+pan input also targeted the details focus slot, so it never proved camera
+movement. The corrected fixture completes that synthetic message; the corrected
+harness targets graph focus and compares actual visible chart cells. These
+setup failures remain retained, without being relabelled product defects.
+
+This is a bounded CF05 increment. Native family/provider-work details, true
+zoom, external Rex graph return, physical/native Send/Apply, broader visual
+acceptance and M4 verification remain open. Historical R9 NOT_ACCEPTED,
+native/graph/lifecycle PARTIAL and R7 OPEN/INCONCLUSIVE remain unchanged. No
+backend measurement, gain, merge, installation or service change is claimed.
+
 ## Internal fuzzy switcher — 2026-11-07
 
 Search, Ctrl+F, the internal-tab add control, `/switch` and `/threads` now open

@@ -530,6 +530,11 @@ impl App {
                 self.menu("Views", "Dev conversations", choices);
             },
             "switch" | "threads" => self.switcher(),
+            "graph" => {
+                self.preserve_open_form()?;
+                self.graph_requested = true;
+                self.dirty = true;
+            },
             "env" => {
                 let mut choices = vec![Choice::new(
                     "All environments",

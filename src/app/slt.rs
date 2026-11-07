@@ -484,6 +484,46 @@ impl App {
             .iter()
             .map(|row| (row.key(), self.source(row.profile, &row.id)))
             .collect();
+        surface.graph_threads = self
+            .threads
+            .iter()
+            .map(|row| slt_ui::GraphThread {
+                source: self.source(row.profile, &row.id),
+                title: row.title.clone(),
+                relationship: row.kind().into(),
+                parent: row.parent().map(str::to_owned),
+            })
+            .collect();
+        let coverage: Vec<_> = self
+            .environments
+            .iter()
+            .zip(&self.hosts)
+            .map(|(env, host)| {
+                let status = if !host.error.is_empty() {
+                    "unavailable"
+                } else if host.loading {
+                    "loading"
+                } else if host.page.observed_at.is_empty() {
+                    "not loaded"
+                } else if host.page.more
+                    || host.page.next_cursor.is_some()
+                    || host.windowed
+                    || host.page.search
+                    || host.page.navigation_pins_only
+                    || !host.page.inclusive_children
+                {
+                    "limited inventory"
+                } else {
+                    "loaded inventory"
+                };
+                format!("{}: {status}", env.label)
+            })
+            .collect();
+        surface.graph_coverage = format!(
+            "Loaded native lineage · partial\n{}\nMembership and explicit fork/subagent parents only. Family/provider details and dependencies are not established.",
+            coverage.join(" · ")
+        );
+        surface.graph_requested |= std::mem::take(&mut self.graph_requested);
         surface.tabs = self
             .tabs
             .iter()
@@ -739,7 +779,12 @@ impl App {
     ) -> Result<()> {
         if !matches!(
             action,
-            Action::DraftChanged | Action::ModalEditChanged | Action::Highlight(_) | Action::Stop
+            Action::DraftChanged
+                | Action::ModalEditChanged
+                | Action::Highlight(_)
+                | Action::Stop
+                | Action::GraphOpenSource(_)
+                | Action::GraphReturn(_)
         ) {
             self.preserve_open_form()?;
         }
@@ -765,6 +810,72 @@ impl App {
                 );
                 surface.attention_mode = false;
                 self.open(source.profile, source.thread)?;
+            }
+            Action::GraphOpenSource(source) => {
+                let result = (|| -> Result<()> {
+                    self.preserve_open_form()?;
+                    ensure!(
+                        self.environments
+                            .get(source.profile)
+                            .is_some_and(|env| env.environment_id == source.environment),
+                        "Graph source environment changed"
+                    );
+                    ensure!(
+                        self.threads.iter().any(|row| row.profile == source.profile
+                            && row.id == source.thread
+                            && row.project_id == source.project_id
+                            && matches!(row.kind(), "main" | "fork")),
+                        "Graph source changed or is read-only; refresh the graph"
+                    );
+                    self.open(source.profile, source.thread)
+                })();
+                match result {
+                    Ok(()) => {
+                        surface.attention_mode = false;
+                        surface.complete_graph_open();
+                    }
+                    Err(error) => surface.graph_open_error(error.to_string()),
+                }
+            }
+            Action::GraphReturn(reading) => {
+                let current = self
+                    .active
+                    .as_ref()
+                    .map(|active| self.source(active.profile, &active.thread));
+                if current.as_ref().is_some_and(|source| {
+                    source.profile == reading.source.profile
+                        && source.environment == reading.source.environment
+                        && source.project_id == reading.source.project_id
+                        && source.thread == reading.source.thread
+                }) {
+                    self.workspace.pending_jump = None;
+                    self.follow = reading.follow;
+                    if !reading.follow {
+                        let source = workspace::ViewSource::active(self)?;
+                        let row = reading.anchor.as_ref().and_then(|(key, revision, inner)| {
+                            self.active
+                                .as_ref()?
+                                .projection
+                                .snapshot()?
+                                .items
+                                .iter()
+                                .find(|row| {
+                                    source.display_key(&row.key) == *key
+                                        && crate::reports::content_revision(&row.text) == *revision
+                                })
+                                .map(|row| (row.key.clone(), workspace::digest(&row.text), *inner))
+                        });
+                        if let Some((key, digest, inner)) = row {
+                            self.workspace.pending_jump = Some((source, key, digest, inner));
+                        } else {
+                            self.transcript_scroll = 0;
+                            self.notice = "Reading source changed or unavailable; returned to conversation start.".into();
+                        }
+                    }
+                } else {
+                    self.notice =
+                        "Reading source changed; original graph position was not applied.".into();
+                }
             }
             Action::SelectTab(key) => {
                 let (profile, thread) = self

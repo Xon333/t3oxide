@@ -13,7 +13,7 @@ pub(crate) struct ViewSource {
     generation: u64,
 }
 impl ViewSource {
-    fn active(app: &App) -> Result<Self> {
+    pub(super) fn active(app: &App) -> Result<Self> {
         let active = app.active.as_ref().context("Open a conversation first")?;
         Ok(Self {
             profile: active.profile,
