@@ -1101,20 +1101,42 @@ mod tests {
         app.replace_text("/settle is literal draft text".into());
         app.input(key(KeyCode::Char('h'), KeyModifiers::ALT))
             .unwrap();
-        let help = &app.dialog.as_ref().unwrap().detail;
-        assert!(help.contains("Ctrl+T"));
-        assert!(help.contains("Cmd+Enter") && help.contains("Ctrl+Enter"));
-        assert!(help.contains("## Recovery"));
-        assert!(help.contains("Plain Enter") || help.contains("Prompt newline"));
+        let help = app.dialog.as_ref().unwrap();
+        assert_eq!(help.title, "Commands");
+        assert!(matches!(help.kind, DialogKind::Palette));
+        assert!(help.description.contains("Enter newline"));
+        assert!(
+            help.choices
+                .iter()
+                .any(|choice| choice.label.contains("Ctrl+Enter | Ctrl+]"))
+        );
+        assert!(help.choices.iter().any(
+            |choice| matches!(&choice.intent, Intent::Command(command) if command == "recover")
+        ));
+        let offered: Vec<_> = help
+            .choices
+            .iter()
+            .map(|choice| choice.label.clone())
+            .collect();
         assert_eq!(app.text(), "/settle is literal draft text");
         app.dialog = None;
         app.input(key(KeyCode::Tab, KeyModifiers::NONE)).unwrap();
         assert_eq!(app.focus, Focus::Inspector);
         app.input(key(KeyCode::F(1), KeyModifiers::NONE)).unwrap();
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Commands");
         app.dialog = None;
         app.command("shortcuts").unwrap();
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Commands");
+        assert_eq!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .choices
+                .iter()
+                .map(|choice| choice.label.clone())
+                .collect::<Vec<_>>(),
+            offered
+        );
         assert!(app.state.pending_records().is_empty());
     }
 

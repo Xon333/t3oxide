@@ -2723,4 +2723,79 @@ mod tests {
                 .any(|action| matches!(action, Action::Answer(_)))
         );
     }
+    #[test]
+    fn narrow_context_tools_capture_and_resume_the_selected_source() {
+        let mut backend = TestBackend::new(27, 12);
+        let mut state = SurfaceState::new();
+        state.attention_mode = true;
+        state.active_key = "env/alpha".into();
+        state.source = Some(Source {
+            environment: "env".into(),
+            thread: "alpha".into(),
+            ..Default::default()
+        });
+        let source = Source {
+            environment: "env".into(),
+            environment_label: "Env".into(),
+            thread: "beta".into(),
+            project: "Beta".into(),
+            ..Default::default()
+        };
+        let item = ContentItem {
+            key: "env/beta/report".into(),
+            revision: "original-revision".into(),
+            source: source.clone(),
+            title: "Selected report".into(),
+            kind: "Evidence".into(),
+            ..Default::default()
+        };
+        state.contents.push(item.clone());
+        state.attention.selected = Some(Selection::Content(item.key.clone()));
+        let view = ui::View::default();
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                super::super::draw_context(ctx, &view, &mut state, 27, 12, &mut Vec::new());
+            });
+        }
+        for label in ["Capture", "Records", "Resume", "Copy ID"] {
+            let (x, y) = backend
+                .find_text(label)
+                .expect("all four source actions fit");
+            assert!(y < 11, "tool must remain inside Context's border");
+            let mut actions = Vec::new();
+            backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
+                super::super::draw_context(ctx, &view, &mut state, 27, 12, &mut actions);
+            });
+            match label {
+                "Capture" => assert!(
+                    matches!(actions.as_slice(), [Action::CaptureContent { key, revision, source: actual }] if key == &item.key && revision == &item.revision && actual == &source)
+                ),
+                "Records" | "Resume" => assert!(
+                    matches!(actions.as_slice(), [Action::ContextSource { source: actual, resume }] if actual == &source && *resume == (label == "Resume"))
+                ),
+                "Copy ID" => assert!(actions.is_empty()),
+                _ => unreachable!(),
+            }
+            assert_eq!(state.active_key, "env/alpha");
+            assert_eq!(selected_content(&state).unwrap().key, item.key);
+            assert_eq!(selected_content(&state).unwrap().revision, item.revision);
+        }
+        backend.render(|ctx| {
+            super::super::draw_context(ctx, &view, &mut state, 27, 12, &mut Vec::new());
+            ctx.focus_by_name("context-tools");
+        });
+        let mut actions = Vec::new();
+        backend.run_with_events(
+            EventBuilder::new()
+                .key_code(KeyCode::End)
+                .key_code(KeyCode::Enter)
+                .build(),
+            |ctx| {
+                super::super::draw_context(ctx, &view, &mut state, 27, 12, &mut actions);
+            },
+        );
+        assert!(
+            matches!(actions.as_slice(), [Action::ContextSource { source: actual, resume: true }] if actual == &source)
+        );
+    }
 }

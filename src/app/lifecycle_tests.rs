@@ -12,6 +12,230 @@ struct Fixture {
     slt_closes: usize,
 }
 
+#[test]
+fn composer_summary_uses_attached_selection_and_preserves_override_and_draft() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    let mut snapshot = live_snapshot(2);
+    snapshot["modelSelection"] = json!({"instanceId":"fixture-provider","model":"attached-model","options":[{"id":"reasoningEffort","value":"high"}]});
+    fixture
+        .app
+        .active
+        .as_mut()
+        .unwrap()
+        .projection
+        .apply_snapshot(snapshot, "thread-a")
+        .unwrap();
+    fixture.app.replace_text("original draft\nαβ".into());
+    let draft = fixture.app.text();
+    let caret = fixture.app.composer.cursor();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert_eq!(surface.composer_model, "attached-model");
+    assert_eq!(surface.composer_effort, "high");
+    assert!(!surface.composer_override);
+    assert_eq!(surface.run_active, Some(true));
+    let selection = json!({"instanceId":"fixture-provider","model":"fixture-fast","options":[{"id":"reasoningEffort","value":"medium"}]});
+    fixture
+        .app
+        .state
+        .update(|saved| {
+            saved["modelOverrides"]["native-0/thread-a"] =
+                json!({"id":"summary-override","selection":selection});
+            Ok(())
+        })
+        .unwrap();
+    let before = fixture.app.state.snapshot();
+    fixture.app.populate_surface(&mut surface);
+    assert_eq!(surface.composer_model, "fixture-fast");
+    assert_eq!(surface.composer_effort, "medium");
+    assert!(surface.composer_override);
+    assert_eq!(fixture.app.state.snapshot(), before);
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    fixture.app.active.as_mut().unwrap().status = "Disconnected · use Reconnect".into();
+    fixture.app.populate_surface(&mut surface);
+    assert_eq!(surface.run_active, None);
+    assert_eq!(fixture.app.view().status, "Offline · Reconnect");
+    assert_eq!(fixture.app.text(), draft);
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn waiting_summary_retains_background_work_without_inventing_stop_identity() {
+    let mut fixture = Fixture::new(0);
+    synthetic_attachment(&mut fixture.app);
+    for (revision, holding, expected) in [(2, true, Some(true)), (3, false, None)] {
+        let mut snapshot = live_snapshot(revision);
+        snapshot["status"] = json!("waiting");
+        snapshot["activeRunId"] = Value::Null;
+        snapshot["backgroundHolding"] = json!(holding);
+        fixture
+            .app
+            .active
+            .as_mut()
+            .unwrap()
+            .projection
+            .apply_snapshot(snapshot, "thread-a")
+            .unwrap();
+        assert_eq!(fixture.app.attached_run_active(), expected);
+        assert!(fixture.app.metadata()["activeRunId"].is_null());
+        if !holding {
+            assert_eq!(fixture.app.view().status, "Execution unknown");
+        }
+        assert!(fixture.app.state.pending_records().is_empty());
+    }
+}
+
+#[test]
+fn displayed_model_override_reopens_and_applies_the_same_selection_locally() {
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    let selection = json!({"instanceId":"fixture-provider","model":"fixture-fast","options":[{"id":"reasoningEffort","value":"high"},{"id":"serviceTier","value":"fast"}]});
+    fixture
+        .app
+        .state
+        .update(|saved| {
+            saved["modelOverrides"]["native-0/thread-a"] =
+                json!({"id":"existing-override","selection":selection});
+            Ok(())
+        })
+        .unwrap();
+    fixture.app.replace_text("Unsent 日本語 draft".into());
+    fixture.app.composer.move_cursor(CursorMove::Back);
+    fixture.app.flush_draft().unwrap();
+    let draft = fixture.app.text();
+    let caret = fixture.app.composer.cursor();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend = ::slt::TestBackend::new(70, 22)
+        .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+    model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+    let before = fixture.app.state.snapshot();
+    let (x, y) = backend
+        .find_text("fixture-fast")
+        .expect("displayed next-message model");
+    model_tail_input(
+        &mut backend,
+        &mut fixture,
+        &mut surface,
+        ::slt::EventBuilder::new().click(x, y).build(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("native model catalog");
+        let complete = matches!(
+            &event,
+            Background::Read {
+                kind: ReadKind::Models(ModelScope::Next),
+                ..
+            }
+        );
+        fixture.app.handle(event).unwrap();
+        if complete {
+            break;
+        }
+    }
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().selection,
+        selection
+    );
+    let mut after = fixture.app.state.snapshot();
+    let mut before = before;
+    // Catalog completion also flushes observations from the initial surface.
+    // Every non-reading field, including unknown state, must stay unchanged.
+    for key in ["rustReadingPositions", "threadActivity", "threadReads"] {
+        after.as_object_mut().unwrap().remove(key);
+        before.as_object_mut().unwrap().remove(key);
+    }
+    assert_eq!(after, before);
+    fixture.surface_choice(&mut surface, "Apply reviewed selection");
+    assert_eq!(
+        fixture.app.state.snapshot()["modelOverrides"]["native-0/thread-a"]["selection"],
+        selection
+    );
+    assert_eq!(
+        fixture.app.metadata()["modelSelection"]["model"],
+        "fixture-model"
+    );
+    assert!(fixture.app.state.pending_records().is_empty());
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.composer.cursor(), caret);
+}
+
+#[test]
+fn unified_commands_keeps_navigation_help_keyboard_readable_in_compact_layouts() {
+    for (width, height) in [(70, 22), (40, 12)] {
+        let mut fixture = Fixture::new(0);
+        synthetic_attachment(&mut fixture.app);
+        fixture.app.replace_text("Unsent 日本語\n  draft".into());
+        let draft = fixture.app.text();
+        let caret = fixture.app.composer.cursor();
+        fixture.app.command("help").unwrap();
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        let mut backend = ::slt::TestBackend::new(width, height)
+            .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
+        model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
+        backend.assert_contains("Prompt: Enter");
+        let mut focused = None;
+        for _ in 0..12 {
+            focused = model_tail_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::BackTab)
+                    .build(),
+            );
+            if focused.as_deref() == Some("modal-description") {
+                break;
+            }
+        }
+        assert_eq!(focused.as_deref(), Some("modal-description"));
+        let mut read = backend.snapshot();
+        for _ in 0..35 {
+            model_tail_input(
+                &mut backend,
+                &mut fixture,
+                &mut surface,
+                ::slt::EventBuilder::new()
+                    .key_code(::slt::KeyCode::Down)
+                    .build(),
+            );
+            read.push_str(&backend.snapshot());
+        }
+        for binding in [
+            "F2",
+            "F3",
+            "F4",
+            "F6",
+            "Shift+F6",
+            "Shift+Tab",
+            "Ctrl+Enter",
+        ] {
+            assert!(
+                read.contains(binding),
+                "{binding} is readable at {width}x{height}"
+            );
+        }
+        model_tail_input(
+            &mut backend,
+            &mut fixture,
+            &mut surface,
+            ::slt::EventBuilder::new()
+                .key_code(::slt::KeyCode::Esc)
+                .build(),
+        );
+        assert!(fixture.app.dialog.is_none());
+        assert_eq!(fixture.app.text(), draft);
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert!(fixture.app.state.pending_records().is_empty());
+    }
+}
+
 impl Fixture {
     fn load_pages(&mut self) {
         self.app.refresh(false, false).unwrap();
@@ -1898,7 +2122,7 @@ fn slt_model_picker_commits_only_the_reviewed_native_selection() {
         assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
 
         if keyboard_apply {
-            click(&mut backend, &mut fixture, &mut surface, "Save favorite");
+            click(&mut backend, &mut fixture, &mut surface, "☆ Save");
         } else {
             input(
                 &mut backend,
@@ -2219,7 +2443,7 @@ fn slt_model_pointer_close_restores_tools_then_keyboard_returns_preserved_caret(
     backend.assert_contains("old tail▎");
     let caret = backend.find_text("▎").expect("actual interior SLT caret");
     let (x, y) = backend
-        .find_text("Model")
+        .find_text("fixture-model")
         .expect("painted composer Model control");
     assert_eq!(
         model_tail_input(
@@ -2536,7 +2760,7 @@ fn slt_direct_effort_dismissal_owns_queued_enter_without_applying_or_sending() {
         let mut backend = ::slt::TestBackend::new(140, 38)
             .with_run_config(::slt::RunConfig::default().activation_boundaries(true));
         model_tail_input(&mut backend, &mut fixture, &mut surface, Vec::new());
-        let (x, y) = backend.find_text("Effort").unwrap();
+        let (x, y) = backend.find_text("medium").unwrap();
         model_tail_input(
             &mut backend,
             &mut fixture,
@@ -2579,7 +2803,7 @@ fn slt_direct_effort_dismissal_owns_queued_enter_without_applying_or_sending() {
         assert_eq!(fixture.app.composer.cursor(), caret);
         if key == Some(::slt::KeyCode::Esc) {
             // Accepting the unchanged direct value still opens explicit Apply review.
-            let (x, y) = backend.find_text("Effort").unwrap();
+            let (x, y) = backend.find_text("medium").unwrap();
             model_tail_input(
                 &mut backend,
                 &mut fixture,
@@ -6857,7 +7081,7 @@ fn r9_divider_geometry(
     backend.assert_contains("Browse");
     backend.assert_contains("Earlier");
     backend.assert_contains("Latest");
-    backend.assert_contains("Model");
+    backend.assert_contains("fixture-model");
     backend.assert_contains("Send");
     rect
 }

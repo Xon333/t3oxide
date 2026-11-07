@@ -37,6 +37,7 @@ struct ModelPicker {
     indices: Vec<usize>,
     displayed_indices: Vec<usize>,
     geometry: Option<(u32, u32)>,
+    label_offset: usize,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -87,6 +88,7 @@ fn model_fields(modal: &ui::Modal) -> Vec<ModelField> {
 
 fn reset_model_values(picker: &mut ModelPicker, modal: &ui::Modal) {
     picker.displayed_indices.clear();
+    picker.label_offset = 0;
     picker.indices = modal
         .items
         .iter()
@@ -225,7 +227,7 @@ fn draw_model(
         .filter_map(|(index, item)| {
             let label = match item.role {
                 ui::ModalItemRole::ModelApply => "Apply ↵",
-                ui::ModalItemRole::ModelSave => "☆ Save favorite",
+                ui::ModalItemRole::ModelSave => "☆ Save",
                 ui::ModalItemRole::ModelClear => "Clear",
                 _ => return None,
             };
@@ -238,7 +240,10 @@ fn draw_model(
     let width = ctx.width().saturating_sub(4).clamp(1, 54);
     let inner = width.saturating_sub(4).max(1);
     let height = ctx.height().saturating_sub(2).max(1);
-    let rows = height.saturating_sub(fields.len() as u32 + 7).clamp(1, 8);
+    let rows = height
+        .saturating_sub(fields.len() as u32 + 6 + u32::from(height >= 12))
+        .clamp(1, 8)
+        .min(picker.indices.len().max(1) as u32);
     let mut focus_request = changed.then(|| {
         if picker.expanded {
             "model-values".into()
@@ -340,7 +345,24 @@ fn draw_model(
                     picker.focus.clone_from(&order[next]);
                     focus_request = Some(picker.focus.clone());
                 } else if picker.expanded {
+                    if !matches!(key.code, KeyCode::Left | KeyCode::Right) {
+                        picker.label_offset = 0;
+                    }
                     match key.code {
+                        KeyCode::Left => {
+                            picker.label_offset = picker.label_offset.saturating_sub(1)
+                        }
+                        KeyCode::Right => {
+                            let length = picker
+                                .values
+                                .selected_index()
+                                .and_then(|index| picker.indices.get(index))
+                                .map_or(0, |&index| {
+                                    modal.items[index].label.graphemes(true).count()
+                                });
+                            picker.label_offset =
+                                (picker.label_offset + 1).min(length.saturating_sub(1));
+                        }
                         KeyCode::Enter => {
                             if let Some(index) = picker
                                 .values
@@ -535,7 +557,16 @@ fn draw_model(
                 .focus_within_border_fg(theme.primary)
                 .px(1)
                 .col(|ctx| {
-                    ctx.text(&modal.title).w(inner).truncate();
+                    if !picker.expanded || height >= 12 {
+                        ctx.text(match modal.title.as_str() {
+                            "Model · current conversation" => "Model",
+                            "Model · next message" => "Model · next",
+                            "Model · new conversation" => "Model · new",
+                            title => title,
+                        })
+                        .w(inner)
+                        .truncate();
+                    }
                     for field in &fields {
                         let focused = ctx.register_focusable_named(&field.name);
                         ctx.register_focusable();
@@ -587,7 +618,18 @@ fn draw_model(
                     }
                     ctx.group("model-values-region")
                         .w(inner)
-                        .h(if picker.expanded { rows + 2 } else { 0 })
+                        .h(if picker.expanded {
+                            // SLT adds its own top/bottom overflow rows outside
+                            // the visible data rows. Keep the selected row in bounds.
+                            rows + 1
+                                + if picker.values.visible_indices().len() > rows as usize {
+                                    2
+                                } else {
+                                    0
+                                }
+                        } else {
+                            0
+                        })
                         .col(|ctx| {
                             let displayed = std::cell::RefCell::new(Vec::new());
                             let selected = picker.values.selected_index();
@@ -609,7 +651,7 @@ fn draw_model(
                                 ctx.container().h(1).col(|ctx| {
                                     if picker.expanded {
                                         ctx.text(if picker.values.filter().is_empty() {
-                                            "Filter…"
+                                            "Filter… · ←/→ name"
                                         } else {
                                             picker.values.filter()
                                         })
@@ -617,22 +659,25 @@ fn draw_model(
                                         .truncate();
                                     }
                                 });
-                                ctx.virtual_list(
-                                    &mut picker.values,
-                                    rows.saturating_sub(2).max(1),
-                                    |ctx, index| {
-                                        let original = picker.indices[index];
-                                        displayed.borrow_mut().push(original);
-                                        ctx.group(&format!("model-value:{original}"))
-                                            .w(inner)
-                                            .h(1)
-                                            .col(|ctx| {
-                                                ctx.text(elide_lines(
-                                                    ctx,
-                                                    &labels[index],
-                                                    inner,
-                                                    1,
-                                                ))
+                                ctx.virtual_list(&mut picker.values, rows, |ctx, index| {
+                                    let original = picker.indices[index];
+                                    displayed.borrow_mut().push(original);
+                                    ctx.group(&format!("model-value:{original}"))
+                                        .w(inner)
+                                        .h(1)
+                                        .col(|ctx| {
+                                            let label = if Some(index) == selected
+                                                && picker.label_offset > 0
+                                            {
+                                                modal.items[original]
+                                                    .label
+                                                    .graphemes(true)
+                                                    .skip(picker.label_offset)
+                                                    .collect::<String>()
+                                            } else {
+                                                labels[index].clone()
+                                            };
+                                            ctx.text(elide_lines(ctx, &label, inner, 1))
                                                 .w(inner)
                                                 .bg(if Some(index) == selected {
                                                     theme.selected_bg
@@ -644,9 +689,8 @@ fn draw_model(
                                                 } else {
                                                     theme.text
                                                 });
-                                            });
-                                    },
-                                );
+                                        });
+                                });
                                 if picker.expanded && picker.values.visible_indices().is_empty() {
                                     ctx.text("No matches").fg(theme.text_dim);
                                 }
@@ -730,8 +774,25 @@ pub(super) fn draw(
             78
         },
     );
-    let height = ctx.height().saturating_sub(2).max(1);
     let inner_width = width.saturating_sub(4).max(1);
+    let natural_height = 10
+        + u32::from(modal.editor) * 3
+        + wrapped_rows(&modal.description, inner_width).min(3)
+        + modal
+            .items
+            .iter()
+            .filter(|item| !item.action)
+            .count()
+            .min(12) as u32;
+    let height = ctx
+        .height()
+        .saturating_sub(2)
+        .max(1)
+        .min(if modal.detail.is_empty() {
+            natural_height
+        } else {
+            u32::MAX
+        });
     let spacing = u32::from(height >= 22 && !modal.detail.is_empty());
     if changed {
         state.modal_selected = modal.selected.min(modal.items.len().saturating_sub(1));
@@ -826,7 +887,7 @@ pub(super) fn draw(
                     });
                 }
 
-                let description_rows = if palette || modal.description.is_empty() {
+                let description_rows = if modal.description.is_empty() {
                     0
                 } else {
                     wrapped_rows(&modal.description, inner_width)
@@ -962,9 +1023,20 @@ pub(super) fn draw(
                     {
                         actions.push(Action::ModalChoice(selected));
                     }
-                    let description = &modal.items[selected].description;
+                    let item = &modal.items[selected];
+                    let long_label = item.label.width() > inner_width.saturating_sub(4) as usize;
+                    let description = if long_label {
+                        if item.description.is_empty() {
+                            item.label.clone()
+                        } else {
+                            format!("{}\n{}", item.label, item.description)
+                        }
+                    } else {
+                        item.description.clone()
+                    };
                     let show_description = !description.is_empty()
                         && (!palette
+                            || long_label
                             || state.dialog.search.value.split_whitespace().any(|word| {
                                 !modal.items[selected]
                                     .label
@@ -976,7 +1048,7 @@ pub(super) fn draw(
                         // move rows underneath an already queued pointer.
                         available.saturating_sub(list_rows).clamp(1, 2)
                     } else if show_description {
-                        wrapped_rows(description, inner_width)
+                        wrapped_rows(&description, inner_width)
                             .min(2)
                             .min(available.saturating_sub(list_rows).max(1))
                     } else {
@@ -984,17 +1056,24 @@ pub(super) fn draw(
                     };
                     // Reserve the same container slot when a selected command
                     // gains/loses secondary text, so queued clicks keep identity.
+                    let overflow = show_description
+                        && wrapped_rows(&description, inner_width) > description_rows;
+                    ctx.disabled(!overflow, |ctx| {
+                        let focused = ctx.register_focusable_named("modal-choice-detail");
+                        ctx.register_focusable();
+                        detail_navigation(
+                            ctx,
+                            focused,
+                            &mut state.dialog.choice_detail,
+                            description_rows,
+                        );
+                    });
                     ctx.scrollable(&mut state.dialog.choice_detail)
                         .h(description_rows)
                         .w(inner_width)
                         .col(|ctx| {
                             if show_description {
-                                let concise = if palette {
-                                    elide_lines(ctx, description, inner_width, description_rows)
-                                } else {
-                                    description.clone()
-                                };
-                                ctx.text(concise).dim().wrap();
+                                ctx.text(&description).dim().wrap();
                             }
                         });
                     if has_detail {
@@ -1412,17 +1491,17 @@ mod tests {
     }
 
     #[test]
-    fn command_search_owns_enter_and_scrolls_without_continue_or_mechanics() {
+    fn command_search_owns_enter_and_scrolls_with_input_guidance() {
         let mut backend = TestBackend::new(54, 20);
         let mut state = SurfaceState::new();
         let mut editor = ui::editor("", "violet", "");
         let mut modal = menu();
         modal.title = "Commands".into();
         modal.editor = true;
-        modal.description = "Actions use the current source. Type to filter.".into();
+        modal.description = "Prompt: Enter newline · Commands: Enter runs".into();
         warm(&mut backend, &modal, &mut editor, &mut state);
         backend.assert_not_contains("Continue");
-        backend.assert_not_contains("Actions use");
+        backend.assert_contains("Prompt: Enter newline");
         for _ in 0..18 {
             backend.run_with_events(EventBuilder::new().key_code(KeyCode::Down).build(), |ctx| {
                 draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new());
@@ -1462,7 +1541,7 @@ mod tests {
 
     #[test]
     fn recovery_choices_leave_the_complete_payload_keyboard_accessible() {
-        for (width, height) in [(90, 24), (40, 16)] {
+        for (width, height) in [(90, 24), (40, 16), (40, 12)] {
             let mut backend = TestBackend::new(width, height);
             let mut state = SurfaceState::new();
             let mut editor = ui::editor("Retained prompt 日本語", "violet", "");
@@ -1504,6 +1583,39 @@ mod tests {
             backend.assert_contains("PAYLOAD-START");
             assert!(actions.is_empty());
             assert_eq!(editor.lines().join("\n"), "Retained prompt 日本語");
+        }
+    }
+
+    #[test]
+    fn short_answer_review_paints_selected_label_without_scroll() {
+        for (width, height) in [(140, 38), (70, 22)] {
+            let mut backend = TestBackend::new(width, height);
+            let mut state = SurfaceState::new();
+            let mut editor = ui::editor("Retained draft", "violet", "");
+            let modal = ui::Modal {
+                title: "Review answers".into(),
+                description: "Next step\nWhat should happen next?\nContinue".into(),
+                items: ["Submit answers", "Back"]
+                    .into_iter()
+                    .map(|label| ui::ModalItem {
+                        label: label.into(),
+                        action: true,
+                        ..ui::ModalItem::default()
+                    })
+                    .collect(),
+                action_stamp: 4,
+                ..ui::Modal::default()
+            };
+            warm(&mut backend, &modal, &mut editor, &mut state);
+            for text in [
+                "Next step",
+                "What should happen next?",
+                "Continue",
+                "Submit answers",
+            ] {
+                backend.assert_contains(text);
+            }
+            assert_eq!(editor.lines().join("\n"), "Retained draft");
         }
     }
 
@@ -1867,7 +1979,7 @@ mod tests {
             draw(ctx, &modal, &mut editor, &mut state, &mut actions);
         });
         warm(&mut backend, &modal, &mut editor, &mut state);
-        let (x, y) = backend.find_text("Save favorite").unwrap();
+        let (x, y) = backend.find_text("☆ Save").unwrap();
         backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
             draw(ctx, &modal, &mut editor, &mut state, &mut actions);
         });
@@ -1900,7 +2012,7 @@ mod tests {
         let mut editor = ui::editor("literal  \n", "violet", "");
         let modal = configuration();
         warm(&mut backend, &modal, &mut editor, &mut state);
-        let (x, y) = backend.find_text("Save favorite").unwrap();
+        let (x, y) = backend.find_text("☆ Save").unwrap();
         let mut actions = Vec::new();
         backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
             draw(ctx, &modal, &mut editor, &mut state, &mut actions);
@@ -1969,7 +2081,7 @@ mod tests {
                 });
             }
             backend.assert_contains("Apply ↵");
-            backend.assert_contains("Save favorite");
+            backend.assert_contains("☆ Save");
             backend.assert_contains("Reasoning");
             assert_eq!(focus.as_deref(), Some("model-field:model"));
             assert_eq!(editor.lines().join("\n"), draft);
@@ -2156,5 +2268,117 @@ mod tests {
         });
         assert!(matches!(actions.as_slice(), [Action::Command(name)] if name == "search-scope"));
         assert_eq!(editor.lines().join("\n"), "release fix");
+    }
+    #[test]
+    fn compact_parent_and_short_child_use_content_height_and_keep_original_indices() {
+        let mut backend = TestBackend::new(140, 38);
+        let mut state = SurfaceState::new();
+        let mut editor = ui::editor("Unsent 日本語", "violet", "");
+        let parent = configuration();
+        warm(&mut backend, &parent, &mut editor, &mut state);
+        let mut parent_height = 0;
+        backend.render(|ctx| {
+            draw(ctx, &parent, &mut editor, &mut state, &mut Vec::new());
+            parent_height = ctx.measured_layout_rect("t3oxide.model").unwrap().height;
+        });
+        assert!(
+            parent_height < 12,
+            "short parent must not reserve the viewport"
+        );
+        let child = ui::Modal {
+            title: "Reasoning".into(),
+            model: Some(ui::ModelDialog::OptionValues {
+                id: "effort-native".into(),
+            }),
+            action_stamp: 31,
+            items: vec![
+                ui::ModalItem {
+                    label: "Back".into(),
+                    action: true,
+                    ..Default::default()
+                },
+                ui::ModalItem {
+                    label: "Medium".into(),
+                    checked: true,
+                    role: ui::ModalItemRole::ModelOptionValue {
+                        id: "effort-native".into(),
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        warm(&mut backend, &child, &mut editor, &mut state);
+        let mut child_height = 0;
+        backend.render(|ctx| {
+            draw(ctx, &child, &mut editor, &mut state, &mut Vec::new());
+            child_height = ctx.measured_layout_rect("t3oxide.model").unwrap().height;
+        });
+        assert!(child_height <= parent_height + 2);
+        let mut actions = Vec::new();
+        backend.run_with_events(
+            EventBuilder::new().key_code(KeyCode::Enter).build(),
+            |ctx| {
+                draw(ctx, &child, &mut editor, &mut state, &mut actions);
+            },
+        );
+        assert!(matches!(actions.as_slice(), [Action::ModalChoice(1)]));
+        assert_eq!(editor.lines().join("\n"), "Unsent 日本語");
+    }
+
+    #[test]
+    fn long_command_binding_remains_keyboard_readable_in_a_short_menu() {
+        let mut backend = TestBackend::new(40, 12);
+        let mut state = SurfaceState::new();
+        let mut editor = ui::editor("", "violet", "");
+        let modal = ui::Modal {
+            title: "Commands".into(),
+            editor: true,
+            action_stamp: 90,
+            items: vec![ui::ModalItem {
+                label: format!("Inspect {} [Ctrl+Alt+F12]", "日本語 source ".repeat(8)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        warm(&mut backend, &modal, &mut editor, &mut state);
+        backend.render(|ctx| {
+            draw(ctx, &modal, &mut editor, &mut state, &mut Vec::new());
+            ctx.focus_by_name("modal-choice-detail");
+        });
+        let mut actions = Vec::new();
+        backend.run_with_events(EventBuilder::new().key_code(KeyCode::End).build(), |ctx| {
+            draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+        });
+        backend.assert_contains("F12]");
+        assert!(actions.is_empty());
+        assert_eq!(editor.lines().join("\n"), "");
+    }
+    #[test]
+    fn compact_model_catalog_reveals_long_names_without_changing_native_choice() {
+        let mut backend = TestBackend::new(40, 12);
+        let mut state = SurfaceState::new();
+        let mut editor = ui::editor("Retained draft", "violet", "");
+        let mut modal = configuration();
+        modal.items[0].label = format!("{}TAIL 日本語", "Native catalog ".repeat(6));
+        warm(&mut backend, &modal, &mut editor, &mut state);
+        let mut events = EventBuilder::new().key(' ');
+        for _ in 0..75 {
+            events = events.key_code(KeyCode::Right);
+        }
+        let mut actions = Vec::new();
+        backend.run_with_events(events.build(), |ctx| {
+            draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+        });
+        backend.assert_contains("TAIL 日本語");
+        assert!(actions.is_empty());
+        backend.run_with_events(
+            EventBuilder::new().key_code(KeyCode::Enter).build(),
+            |ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+            },
+        );
+        assert!(matches!(actions.as_slice(), [Action::ModalChoice(0)]));
+        assert_eq!(editor.lines().join("\n"), "Retained draft");
     }
 }

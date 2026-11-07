@@ -113,6 +113,10 @@ pub struct SurfaceState {
     pub contents: Vec<ContentItem>,
     pub dependency_status: String,
     pub(crate) direct_effort_option: bool,
+    pub(crate) composer_model: String,
+    pub(crate) composer_effort: String,
+    pub(crate) composer_override: bool,
+    pub(crate) run_active: Option<bool>,
     pub attention_mode: bool,
     pub internal_tabs: bool,
     pub show_context: bool,
@@ -306,7 +310,11 @@ pub fn draw(
             });
             ctx.row(|ctx| {
                 ctx.text(&view.status).dim().truncate().grow(1);
-                if view.pending > 0 && ctx.button(format!("Recovery {}", view.pending)).clicked {
+                if view.pending > 0
+                    && ctx
+                        .button(format!("Pending actions {}", view.pending))
+                        .clicked
+                {
                     actions.push(Action::Command("recovery".into()));
                 }
                 if ctx.button("?").clicked {
@@ -321,19 +329,26 @@ pub fn draw(
     });
     if state.context_expanded && modal.is_none() {
         ctx.modal(|ctx| {
-            draw_context(
-                ctx,
-                view,
-                state,
-                width.saturating_sub(2).max(1),
-                height.saturating_sub(3).max(1),
-                &mut actions,
-            );
-            if secondary_button(ctx, "Close").clicked || ctx.consume_key_code(KeyCode::Esc) {
-                state.context_expanded = false;
-                ctx.focus_by_name("toolbar");
-                ctx.request_frame();
-            }
+            let background = ctx.theme().bg;
+            ctx.container()
+                .w(width.saturating_sub(2).max(1))
+                .bg(background)
+                .col(|ctx| {
+                    draw_context(
+                        ctx,
+                        view,
+                        state,
+                        width.saturating_sub(2).max(1),
+                        height.saturating_sub(3).max(1),
+                        &mut actions,
+                    );
+                    if secondary_button(ctx, "Close").clicked || ctx.consume_key_code(KeyCode::Esc)
+                    {
+                        state.context_expanded = false;
+                        ctx.focus_by_name("toolbar");
+                        ctx.request_frame();
+                    }
+                });
         });
     }
     if let Some(modal) = modal {
@@ -726,16 +741,19 @@ fn draw_context(
     actions: &mut Vec<Action>,
 ) {
     let focus_color = ctx.theme().primary;
+    let background = ctx.theme().bg;
     ctx.group("t3oxide.context")
         .w(width)
         .h(height)
+        .bg(background)
         .border(Border::Rounded)
         .focus_within_border_fg(focus_color)
         .title("Context")
         .col(|ctx| {
             ctx.register_focusable_named("context");
+            let tool_rows = if width < 40 { 2 } else { 1 };
             ctx.scrollable(&mut state.context_scroll)
-                .grow(1)
+                .h(height.saturating_sub(2 + tool_rows))
                 .col(|ctx| {
                     let selected_source = if state.attention_mode {
                         attention::selected_source(state)
@@ -744,58 +762,53 @@ fn draw_context(
                     };
                     if let Some(source) = selected_source {
                         source_tags(ctx, source);
-                        if !source.thread.is_empty() {
-                            ctx.text(&source.thread).dim().wrap();
-                        }
                     }
                     if state.attention_mode
                         && let Some(content) = attention::selected_content(state)
                     {
-                        for (label, value) in [
-                            ("Kind", content.kind.clone()),
-                            ("Item", content.key.replace('\0', " / ")),
-                            ("Revision", content.revision.clone()),
-                        ] {
-                            ctx.text(label).dim();
-                            ctx.text(value).wrap();
-                        }
+                        ctx.text(&content.title).wrap();
+                        ctx.text(format!("{} · {}", content.kind, content.revision))
+                            .dim()
+                            .wrap();
                         if content.truncated {
                             ctx.text("Excerpt").dim();
                         }
                     }
                     if !state.attention_mode {
                         for (label, value) in &view.inspector {
-                            if !value.is_empty() {
+                            if !value.is_empty() && label != "Environment" {
                                 ctx.row(|ctx| {
-                                    ctx.text(label).dim().w(9);
+                                    ctx.text(if label == "Recovery" {
+                                        "Actions"
+                                    } else {
+                                        label
+                                    })
+                                    .dim()
+                                    .w(9);
                                     ctx.text(value).wrap().grow(1);
                                 });
                             }
                         }
                     }
                 });
-            let items = if width < 40 {
-                vec![("Copy ID", false, true), ("Records", false, true)]
-            } else {
-                vec![
-                    ("Copy ID", false, true),
-                    (
-                        "Records",
-                        false,
-                        !state.attention_mode || attention::selected_source(state).is_some(),
-                    ),
-                    (
-                        "Capture",
-                        false,
-                        !state.attention_mode || attention::selected_content(state).is_some(),
-                    ),
-                    (
-                        "Resume",
-                        false,
-                        !state.attention_mode || attention::selected_source(state).is_some(),
-                    ),
-                ]
-            };
+            let items = vec![
+                ("Copy ID", false, true),
+                (
+                    "Records",
+                    false,
+                    !state.attention_mode || attention::selected_source(state).is_some(),
+                ),
+                (
+                    "Capture",
+                    false,
+                    !state.attention_mode || attention::selected_content(state).is_some(),
+                ),
+                (
+                    "Resume",
+                    false,
+                    !state.attention_mode || attention::selected_source(state).is_some(),
+                ),
+            ];
             match action_bar(
                 ctx,
                 "context-tools",
@@ -1418,11 +1431,9 @@ fn draw_composer(
         completions,
     } = layout;
     let focus_color = ctx.theme().primary;
-    ctx.group("t3oxide.composer")
+    ctx.group("t3oxide.completions")
         .w(width)
-        .border(Border::Rounded)
-        .focus_within_border_fg(focus_color)
-        .title("Prompt")
+        .h(completions)
         .col(|ctx| {
             let indices = if state.command_open {
                 completion_indices(&state.composer.value(), state.command_escape.as_deref())
@@ -1448,6 +1459,9 @@ fn draw_composer(
                         ),
                         width.saturating_sub(2) as usize,
                     ))
+                    .with_if(position != selected, |text| {
+                        text.dim();
+                    })
                     .with_if(position == selected, |text| {
                         text.fg(focus_color).bold();
                     });
@@ -1460,6 +1474,13 @@ fn draw_composer(
                     }
                 }
             }
+        });
+    ctx.group("t3oxide.composer")
+        .w(width)
+        .border(Border::Rounded)
+        .focus_within_border_fg(focus_color)
+        .title("Prompt")
+        .col(|ctx| {
             state.composer.wrap_width = Some(width.saturating_sub(3).max(1));
             let focused = ctx.register_focusable_named("composer");
             let typed_slash = ctx.key_presses_when(focused).any(|(_, key)| {
@@ -1478,19 +1499,57 @@ fn draw_composer(
             }
             let can_send =
                 !state.active_key.is_empty() && !state.composer.value().trim().is_empty();
+            let selection_width = width.saturating_sub(22).max(15);
+            let model_label = elide(
+                if state.composer_model.is_empty() {
+                    "Model ?"
+                } else {
+                    &state.composer_model
+                },
+                selection_width
+                    .saturating_sub((selection_width / 3).max(8))
+                    .max(7) as usize,
+            );
+            let effort_label = elide(
+                if state.composer_effort.is_empty() {
+                    "Effort ?"
+                } else {
+                    &state.composer_effort
+                },
+                (selection_width / 3).max(8) as usize,
+            );
             ctx.row(|ctx| {
+                if state.run_active == Some(true) {
+                    ctx.text(state.spinner.frame(ctx.tick() / 8).to_string())
+                        .dim();
+                    ctx.request_frame_after(std::time::Duration::from_millis(120));
+                }
                 match action_bar(
                     ctx,
                     "composer-tools",
                     state.bars.entry("composer-tools").or_default(),
                     &[
-                        ("Model", false, true),
-                        ("Effort", false, true),
+                        (&model_label, false, true),
+                        (&effort_label, false, true),
                         ("Stop", false, true),
                     ],
                 ) {
-                    Some(0) => actions.push(Action::Command("model".into())),
-                    Some(1) => actions.push(Action::Command("effort".into())),
+                    Some(0) => actions.push(Action::Command(
+                        if state.composer_override {
+                            "model next"
+                        } else {
+                            "model"
+                        }
+                        .into(),
+                    )),
+                    Some(1) => actions.push(Action::Command(
+                        if state.composer_override {
+                            "effort next"
+                        } else {
+                            "effort"
+                        }
+                        .into(),
+                    )),
                     Some(2) => actions.push(Action::Stop),
                     _ => {}
                 }
@@ -2035,6 +2094,48 @@ pub(crate) mod tests {
                 assert!(!state.context_expanded);
                 assert_eq!(editor.lines().join("\n"), draft);
             }
+        }
+    }
+
+    #[test]
+    fn context_modal_covers_underlying_report_and_footer_cells() {
+        for (width, height) in [(40, 12), (70, 22)] {
+            let mut backend = ResizableBackend::new(width, height);
+            let mut state = SurfaceState::new();
+            state.active_key = "env/thread".into();
+            let view = ui::View {
+                messages: vec![ui::MessageView {
+                    role: "Agent".into(),
+                    text: "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ\n".repeat(30),
+                    ..Default::default()
+                }],
+                status: "Z".repeat(width as usize),
+                ..Default::default()
+            };
+            let mut editor = ui::editor("Retained draft", "violet", "");
+            let mut modal_editor = ui::editor("", "violet", "");
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                });
+            }
+            backend.assert_contains("ZZZZ");
+            state.context_expanded = true;
+            let mut rect = None;
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                    rect = ctx.measured_layout_rect("t3oxide.context");
+                });
+            }
+            backend.assert_contains("Copy ID");
+            let rect = rect.expect("Context has measured geometry");
+            for y in rect.y..rect.bottom().saturating_add(1).min(height) {
+                for x in rect.x..rect.right() {
+                    assert_ne!(backend.symbol(x, y), "Z", "underlying cell at {x},{y}");
+                }
+            }
+            assert_eq!(editor.lines().join("\n"), "Retained draft");
         }
     }
 
@@ -3173,5 +3274,113 @@ pub(crate) mod tests {
                 .iter()
                 .all(|action| !matches!(action, Action::Command(_) | Action::Send))
         );
+    }
+    #[test]
+    fn completions_are_measured_above_prompt_and_keep_the_editor_and_caret() {
+        for (width, height) in [(140, 38), (70, 22), (40, 12)] {
+            let mut backend = slt::TestBackend::new(width, height);
+            let mut state = SurfaceState::new();
+            state.active_key = "env/thread".into();
+            let mut editor = ui::editor("", "violet", "");
+            let mut modal = ui::editor("", "violet", "");
+            let view = ui::View::default();
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+                    ctx.focus_by_name("composer");
+                });
+            }
+            backend.run_with_events(slt::EventBuilder::new().key('/').key('m').build(), |ctx| {
+                draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+            });
+            let mut rectangles = None;
+            for _ in 0..4 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+                    ctx.focus_by_name("composer");
+                    rectangles = ctx
+                        .measured_layout_rect("t3oxide.completions")
+                        .zip(ctx.measured_layout_rect("t3oxide.composer"));
+                });
+            }
+            let (completion, prompt) = rectangles.expect("settled composer layout");
+            assert!(completion.height > 0);
+            assert!(completion.y + completion.height <= prompt.y);
+            let cursor = (state.composer.cursor_row, state.composer.cursor_col);
+            let indices = completion_indices("/m", None);
+            assert!(indices.len() > 1);
+            let label = format!("/{}", domain::ACTIONS[indices[1]].name);
+            if completion.height > 1 {
+                let (x, y) = backend
+                    .find_text(&label)
+                    .expect("unselected completion visible");
+                assert!(
+                    backend
+                        .buffer()
+                        .get(x, y)
+                        .style
+                        .modifiers
+                        .contains(slt::Modifiers::DIM)
+                );
+            }
+            let mut actions = Vec::new();
+            backend.run_with_events(
+                slt::EventBuilder::new().key_code(KeyCode::Enter).build(),
+                |ctx| {
+                    actions = draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+                },
+            );
+            assert!(
+                matches!(actions.as_slice(), [Action::Command(command)] if command == domain::ACTIONS[indices[0]].name)
+            );
+            assert_eq!(editor.lines().join("\n"), "/m");
+            assert_eq!(
+                (state.composer.cursor_row, state.composer.cursor_col),
+                cursor
+            );
+        }
+    }
+
+    #[test]
+    fn displayed_override_controls_edit_next_message_and_stop_remains_independent() {
+        let mut backend = slt::TestBackend::new(70, 22);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/thread".into();
+        state.composer_model = "gpt-6.1-sol".into();
+        state.composer_effort = "medium".into();
+        state.composer_override = true;
+        let mut editor = ui::editor("draft 日本語", "violet", "");
+        let mut modal = ui::editor("", "violet", "");
+        let view = ui::View::default();
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+            });
+        }
+        for (label, expected) in [("gpt-6.1-sol", "model next"), ("medium", "effort next")] {
+            let (x, y) = backend.find_text(label).unwrap();
+            let mut actions = Vec::new();
+            backend.run_with_events(slt::EventBuilder::new().click(x, y).build(), |ctx| {
+                actions = draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+            });
+            assert!(
+                matches!(actions.as_slice(), [Action::Command(command)] if command == expected)
+            );
+        }
+        for active in [None, Some(false), Some(true)] {
+            state.run_active = active;
+            for _ in 0..2 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+                });
+            }
+            let (x, y) = backend.find_text("Stop").unwrap();
+            let mut actions = Vec::new();
+            backend.run_with_events(slt::EventBuilder::new().click(x, y).build(), |ctx| {
+                actions = draw(ctx, &view, &mut editor, &mut modal, None, &mut state);
+            });
+            assert!(matches!(actions.as_slice(), [Action::Stop]));
+        }
+        assert_eq!(editor.lines().join("\n"), "draft 日本語");
     }
 }

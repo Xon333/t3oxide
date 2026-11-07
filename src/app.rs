@@ -642,6 +642,38 @@ impl App {
             .map(|s| s.metadata.clone())
             .unwrap_or(Value::Null)
     }
+    pub(super) fn attached_run_active(&self) -> Option<bool> {
+        let active = self.active.as_ref()?;
+        let snapshot = active.projection.snapshot()?;
+        if !active.status.eq_ignore_ascii_case("live")
+            || active.navigating
+            || active.projection.needs_resnapshot
+            || !snapshot.is_live()
+            || self.active_summary().is_some_and(|row| {
+                row.inbox()["workingKnown"] == false || flag(&row.raw, "_metadataStale")
+            })
+        {
+            return None;
+        }
+        match snapshot.metadata["status"].as_str() {
+            Some("preparing" | "queued" | "starting" | "running") => Some(true),
+            Some("waiting") => {
+                if snapshot.metadata["backgroundHolding"] == true
+                    || snapshot.metadata["activeRunId"]
+                        .as_str()
+                        .is_some_and(domain::valid_id)
+                {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+            Some("idle" | "completed" | "interrupted" | "cancelled" | "failed" | "needs_input") => {
+                Some(false)
+            }
+            _ => None,
+        }
+    }
     pub(super) fn draft_key(&self) -> Option<String> {
         self.active.as_ref().map(|a| {
             format!(
@@ -2477,13 +2509,21 @@ impl App {
         let requests = self.active.as_ref().map(|a| a.requests.len()).unwrap_or(0);
         let pending = self.state.pending_records().len();
         let status = if let Some(a) = &self.active {
-            format!(
-                "{} · {} · {} · {}",
-                a.status,
-                string(&metadata, "status"),
-                string(&metadata, "model"),
-                self.delivery
-            )
+            if !a.status.eq_ignore_ascii_case("live") {
+                match a.status.as_str() {
+                    "Disconnected · use Reconnect" => "Offline · Reconnect".into(),
+                    "" => "Connection unknown".into(),
+                    other => plain(other),
+                }
+            } else if self.attached_run_active().is_none() {
+                "Execution unknown".into()
+            } else {
+                match metadata["status"].as_str() {
+                    Some("failed") => "Failed".into(),
+                    Some("needs_input") => "Needs input".into(),
+                    _ => String::new(),
+                }
+            }
         } else {
             self.host_status()
         };

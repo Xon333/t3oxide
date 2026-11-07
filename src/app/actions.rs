@@ -87,7 +87,7 @@ impl App {
         self.modal_editor = ui::editor("", &self.theme, "Find an action…");
         self.dialog = Some(Dialog {
             title: "Commands".into(),
-            description: "Actions use the current source. Type to filter.".into(),
+            description: input_guidance(),
             detail: String::new(),
             choices: Vec::new(),
             selected: 0,
@@ -136,7 +136,7 @@ impl App {
                         if action.key.is_empty() {
                             String::new()
                         } else {
-                            format!("  {}", action.key)
+                            format!("  [{}]", action.key)
                         }
                     ),
                     action.description,
@@ -585,7 +585,7 @@ impl App {
                     .unwrap_or_else(|| "No webURL configured for this environment".into()));
             },
             "help" | "shortcuts" => {
-                self.detail("Keyboard help", HELP_TEXT);
+                self.palette();
             },
             "" => {},
             _ => ensure!(self.workspace_command(name, args)?, "Unknown action /{name}; Ctrl+P lists supported actions"),
@@ -700,7 +700,7 @@ impl App {
                 );
                 Choice::new(
                     label,
-                    "Review exact source, payload and recovery options",
+                    "Inspect original action",
                     Intent::ReviewRecovery(record, pending.stop),
                 )
             })
@@ -711,7 +711,11 @@ impl App {
                 "No unresolved operations. Drafts remain saved independently.",
             );
         } else {
-            self.menu("Saved actions","These may already have reached T3. Select an action to inspect its original identity and payload.",choices);
+            self.menu(
+                "Pending actions",
+                "Delivery unknown · inspect before recovery",
+                choices,
+            );
         }
         Ok(())
     }
@@ -743,7 +747,11 @@ impl App {
             "Only after inspecting native outcome; this removes local retry, not native work",
             Intent::Forget(record, stop),
         ));
-        self.menu("Review saved action",format!("Original environment: {environment}. Acceptance is unknown until native reconciliation. Clearing is an explicit local decision."),choices);
+        self.menu(
+            "Pending action",
+            format!("{environment} · delivery unknown"),
+            choices,
+        );
         if let Some(dialog) = &mut self.dialog {
             dialog.detail = detail;
         }
@@ -798,4 +806,22 @@ impl App {
     }
 }
 
-const HELP_TEXT: &str = include_str!("../../docs/shortcuts.md");
+fn input_guidance() -> String {
+    // The maintained shortcut document supplies non-command bindings as well.
+    // Keep one menu and one source of help data, including editor/navigation keys.
+    let mut guidance = String::from("Prompt: Enter newline · Commands: Enter runs\n");
+    for line in include_str!("../../docs/shortcuts.md").lines() {
+        if !line.starts_with("| ") {
+            continue;
+        }
+        let mut columns = line.trim_matches('|').split('|').map(str::trim);
+        if let (Some(action), Some(keys)) = (columns.next(), columns.next())
+            && action != "Action"
+            && !action.starts_with("---")
+            && columns.next().is_none()
+        {
+            guidance.push_str(&format!("{action} [{}]\n", keys.replace("; ", " | ")));
+        }
+    }
+    guidance
+}

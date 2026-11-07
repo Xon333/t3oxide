@@ -46,7 +46,7 @@ def targets(terminal, label, choice=False):
             part = line[left:right if right >= 0 else len(line)]
             # Exact menu rows exclude titles (e.g. Next step), details and the
             # underlying workspace. Lean SLT lists do not bracket each choice.
-            if not choice or part.strip(" ▸✓[]") == label:
+            if not choice or part.strip(" ▸✓") == label:
                 points.append((columns[offset] + 1, row + 1))
             offset = line.find(label, offset + len(label))
     assert points, f"No rendered target {label!r}\n{terminal.text}"
@@ -62,8 +62,8 @@ def choose(terminal, label):
     terminal.click(*targets(terminal, label, choice=True)[-1])
 
 
-def dialog_text(terminal, title):
-    x, y = targets(terminal, title)[-1]
+def dialog_text(terminal, title, exact_title=False):
+    x, y = targets(terminal, title, choice=exact_title)[-1]
     cells = terminal.screen.buffer
     left = max(c for c in range(x - 1) if cells[y - 1][c].data == "│")
     right = next(c for c in range(x, terminal.columns) if cells[y - 1][c].data == "│")
@@ -161,7 +161,7 @@ def whole_prompt_copy(binary, directory):
         # Ordinary controller commands persist the loaded reading position.
         # Establish it separately so copy's full-state comparison has a baseline.
         terminal.send(b"\x1bOP")  # F1 Help, without invoking clipboard operations.
-        terminal.wait("Input and focus")
+        terminal.wait("Enter newline")
         terminal.send(ESC)
         terminal.pump(0.2)
         terminal.wait(f"Inspect {title}")
@@ -239,7 +239,7 @@ def whole_prompt_copy(binary, directory):
         copy_result(lambda: terminal.send(COPY_DRAFT), None)  # Modal must guard the underlying prompt.
         assert "copy-draft" in dialog_text(terminal, "Commands"), "guarded chord cannot edit the modal query"
         def copy_command():
-            label = "Copy draft  Ctrl+Alt+C"
+            label = "Copy draft  [Ctrl+Alt+C]"
             assert dialog_text(terminal, "Commands").count(label) == 1, terminal.text
             points = targets(terminal, label, choice=True)
             assert len(points) == 1, f"Ambiguous annotated Copy draft row: {points}\n{terminal.text}"
@@ -321,7 +321,7 @@ def commands_pointer_and_copy(binary, directory):
     try:
         terminal.wait("Ready for review")
         terminal.send(F3)
-        for label in ["Unread", "Running", "Pins", "Settled", "Project", "Env", "Model", "Effort", "Send"]:
+        for label in ["Unread", "Run", "Pins", "Settled", "Project", "Env", "fixture-model", "medium", "Send"]:
             terminal.wait(label)
         click(terminal, "Env")
         terminal.wait("Environment scope")
@@ -332,13 +332,13 @@ def commands_pointer_and_copy(binary, directory):
         choose(terminal, "Fixture host")
         terminal.wait("Browsing Fixture host")
         terminal.send(b"\x10help\r")
-        terminal.wait("Input and focus")
+        terminal.wait("Enter newline")
         saved = json.loads(paths["state"].read_text())
         assert not saved.get("drafts", {}).get("fixture-env/thread-a", ""), "palette query must not enter the prompt draft"
         assert not native_payloads(paths)
         terminal.send(ESC)
         terminal.send(b"/help\r")
-        terminal.wait("Input and focus")
+        terminal.wait("Enter newline")
         terminal.send(ESC)
         saved = wait_file(terminal, paths["state"], lambda value:
                           value.get("drafts", {}).get("fixture-env/thread-a") == "/help")
@@ -364,7 +364,7 @@ def commands_pointer_and_copy(binary, directory):
         terminal.resize(140, 38)
         terminal.wait("mouse-next")
         terminal.resize(86, 31)
-        terminal.wait("Effort")
+        terminal.wait("medium")
         # Exact text before modal save; tail is routed to the next prompt draft.
         click(terminal, "Commands")
         choose(terminal, "Enter command")
@@ -434,7 +434,7 @@ def run(binary, directory):
         terminal.send("/")
         terminal.send("help")
         terminal.send(ENTER)
-        terminal.wait("Input and focus")
+        terminal.wait("Enter newline")
         assert json.loads(paths["native"].read_text())["effects"] == 1
         terminal.send(ESC)
         terminal.send(F2)  # Actual human queue, not failed/prose rows.
@@ -503,7 +503,7 @@ def answers(binary, directory, uncertain=False):
         # Open/type/activate in one batch before the palette has a layout frame.
         # The retained answer source must survive that focus transition.
         terminal.send(b"\x10help\r")
-        terminal.wait("Input and focus")
+        terminal.wait("Enter newline")
         assert json.loads(paths["state"].read_text())["attentionDrafts"] == original_drafts
         terminal.send(ESC)
         click(terminal, "Answer")
@@ -579,7 +579,7 @@ def focus_and_panes(binary, directory):
         # horizontal arrows operate controls, not the prompt cursor.
         terminal.send(TAB)
         terminal.send(RIGHT)
-        x, y = targets(terminal, "Effort")[-1]
+        x, y = targets(terminal, "medium")[-1]
         assert terminal.screen.buffer[y - 1][x - 1].underscore, "arrow selection must be visible"
         terminal.send(ENTER)
         terminal.wait("Reasoning")
@@ -679,7 +679,7 @@ def compact_model_interactions(binary, directory):
     """One result group, with an occupied recovery lane and four clean Apply cases."""
     evidence = Path(tempfile.mkdtemp(prefix="t3oxide-model-evidence-"))
     private_json(directory / "compact-model-evidence.json", {"directory": str(evidence)})
-    title, escape = "Model · current conversation", b"\x1b[27u"
+    title, escape = "Model", b"\x1b[27u"
     draft = "Tail 日本語 café e\u0301 👩\u200d💻  \nold tail  \n"
     other = "Other source 日本語  \n"
     original = {"instanceId": "fixture-provider", "model": "fixture-model",
@@ -745,7 +745,7 @@ def compact_model_interactions(binary, directory):
             terminal.wait(title)
             terminal.pump(0.2)
             assert "Filter…" not in terminal.text, terminal.text
-            return dialog_text(terminal, title)
+            return dialog_text(terminal, title, exact_title=True)
 
         def unchanged(label):
             actual = snapshot(label)
@@ -774,7 +774,7 @@ def compact_model_interactions(binary, directory):
             assert caret() == original_caret
 
         def open_model():
-            pointer("open-model", "Model")
+            pointer("open-model", "fixture-model")
             configuration()
 
         def open_local():
@@ -801,7 +801,7 @@ def compact_model_interactions(binary, directory):
             focus_prompt(terminal)
             send("interior-caret", UP * 3 + b"\x1b[H" + DOWN + END + b"\x1b[D" * 2)
             send("bookmark-help", b"\x1bOP")
-            terminal.wait("Input and focus")
+            terminal.wait("Enter newline")
             send("bookmark-close", escape)
             terminal.pump(0.2)
             original_caret = caret()
@@ -844,7 +844,7 @@ def compact_model_interactions(binary, directory):
                         # Speed -> Apply -> Save. Space acts on Save; Enter applies.
                         send("focused-save-space", TAB + TAB + b" ")
                     else:
-                        pointer("pointer-save", "Save favorite")
+                        pointer("pointer-save", "☆ Save")
                     terminal.wait("Save model favorite")
                     unchanged("favorite-editor-local")
                     send("favorite-name", b"\x1b[200~" + name.encode() + b"\x1b[201~")
@@ -1159,7 +1159,8 @@ def context_pending_read(binary, evidence, gate_manifest):
     def source_tab(title):
         points = [(x, y) for x, y in targets(terminal, title)
                   if "Finished refactor" in terminal.lines[y - 1]
-                  and "Alternative design" in terminal.lines[y - 1]]
+                  and "Alternative design" in terminal.lines[y - 1]
+                  and terminal.lines[y - 1].lstrip().startswith("‹")]
         assert len(points) == 1, f"Expected actual internal source tab {title!r}\n{terminal.text}"
         terminal.click(*points[0])
         terminal.wait(f"Inspect {title}")
@@ -1225,8 +1226,10 @@ def context_pending_read(binary, evidence, gate_manifest):
         command("/context")
         current_pack("Finished refactor", "Alternative design")
         terminal.send(ESC)
+        terminal.send(F3)  # Focused conversation keeps Browse closed until requested.
         click(terminal, "Alternative design")
         terminal.wait("Inspect Alternative design")
+        terminal.send(F3)  # Establish both reading bookmarks at the focused width.
         command("/context")
         current_pack("Alternative design", "Finished refactor")
         terminal.send(ESC)
@@ -1281,7 +1284,7 @@ def context_pending_read(binary, evidence, gate_manifest):
         focus_prompt(terminal)
         terminal.send(DOWN + END + b"\x1b[D" * 2)  # Interior caret in the ASCII tail, after Unicode.
         terminal.send(b"\x1bOP")  # Separate read-only Help command establishes the reading bookmark.
-        terminal.wait("Input and focus")
+        terminal.wait("Enter newline")
         terminal.send(ESC)
         terminal.pump(0.2)
         original_caret = caret()

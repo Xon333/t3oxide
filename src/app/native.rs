@@ -263,7 +263,7 @@ impl App {
                     })
                     .map(|e| e.selection)
                     .or_else(|| {
-                        if effort && scope == ModelScope::Next {
+                        if scope == ModelScope::Next {
                             let key = format!(
                                 "{}/{}",
                                 self.environments[a.profile].environment_id, a.thread

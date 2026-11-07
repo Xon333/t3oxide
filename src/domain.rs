@@ -579,7 +579,7 @@ pub const ACTIONS: &[Action] = &[
         name: "send",
         label: "Send draft",
         description: "Send the human message with native delivery semantics",
-        key: "Ctrl+]",
+        key: "Ctrl+Enter | Ctrl+] | Ctrl+\\",
     },
     Action {
         name: "stop",
@@ -751,9 +751,9 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         name: "help",
-        label: "Keyboard help",
+        label: "Commands and shortcuts",
         description: "Context-aware shortcuts and workflow",
-        key: "F1",
+        key: "F1 | Alt+H",
     },
     Action {
         name: "quit",

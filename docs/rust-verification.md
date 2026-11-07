@@ -1,5 +1,57 @@
 # Rust / SLT verification
 
+## Compact UI correction increment — 2026-11-07
+
+The composer now shows its effective model/effort, including a source-qualified
+next-message override. The corresponding picker edits that same selection.
+Known activity has a quiet indicator; missing evidence stays unknown and Stop
+keeps its separate admission rules. Completion sits above Prompt. Navigator
+capacity accounts for its separator, Model/Effort menus use content-sized
+viewports, and long catalog names can be revealed without changing native
+indices. Commands absorbs keyboard help from the maintained shortcut document.
+Pending actions retain their complete original payload, separate from drafts.
+All four Context tools remain available in a 27-column panel and operate on its
+selected source independently of the attached conversation.
+
+The final source passed **302 Rust tests** (287 library, 15 integration),
+workspace/vendor formatting, both Clippy checks and `git diff --check`.
+The locked Rust **1.92.0** all-target/all-feature compile check passed before
+the final dialog-height and Context-background corrections; those corrections
+introduce no new Rust APIs. Unchanged adapter/helper/dependency checks are reused.
+Consequential source review identified three defects, all corrected with focused
+regressions: override loss on Model entry, waiting work classified as inactive,
+and missing navigation/editor help. Runtime qualification additionally reproduced
+and fixed clipped short-answer review text and transparent compact Context paint.
+
+A fresh arm64 release is **9,618,784 bytes**, SHA256
+`17adea3b6245d7749066ac1b58b1865d9a64f4cd96617bddd490e7e6242c2909`;
+strict code-signature verification passed. One uninterrupted **full29 PTY run**,
+including the mandatory blocked Context-read case, passed on the preceding
+`0872b1320ae0f44fe4ac134dda5e60515f80dd530cce23d280432c1826064b0d`
+artifact. Its only subsequent production change fills the Context overlay
+background. Final-artifact affected focus/Context open-close checks and corrected
+captures passed. All **195 Python assertions** remain retained; harness changes
+update labels, unambiguous Model locators and explicit Context navigation.
+Earlier failed attempts remain evidence rather than being counted as passes.
+
+Independent inspection covered 16 representative terminal-cell frames at
+140×38, 70×22 and 40×12. Final-artifact captures verify opaque Context paint,
+keyboard access to Commands guidance, and scrolling to original pending-action
+identity/message/thread fields. Raw ANSI is retained; the renderer uses pyte
+0.8.2 with an explicitly recorded single-underline parser adapter. These are
+controlled fixture captures, not physical Rex screenshots. All task product
+processes exited normally; protected drafts, pending actions and native bytes
+remain conserved by the scoped checks.
+
+This increment does not establish native endpoint Send/Apply, actual Rex→OMV
+finite-check return, installed M4 behavior, full visual acceptance or a speedup.
+Historical R9 remains **NOT_ACCEPTED** and native/graph/lifecycle evidence remains
+**PARTIAL**. The native R7 Enter-pair cause remains **OPEN/INCONCLUSIVE**.
+The fuzzy source switcher, on-demand full graph and persistent guidance policy
+remain carried work. All original human feedback is retained outside Git.
+Separately, a fixed retained-R9 Store A/A control passed its predeclared gates;
+that result measures neither this integrated application nor an accepted gain.
+
 ## Rex-oriented source increment — 2026-11-07
 
 The accepted focused A/B presentation, selected-Library Capture/Records/Resume,

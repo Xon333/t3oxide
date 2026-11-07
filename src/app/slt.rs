@@ -392,6 +392,35 @@ impl App {
     }
 
     pub(super) fn populate_surface(&mut self, surface: &mut SurfaceState) {
+        let metadata = self.metadata();
+        let saved = self.state.snapshot();
+        let next_selection = self
+            .draft_key()
+            .and_then(|key| saved["modelOverrides"].get(key).cloned())
+            .and_then(|record| record.get("selection").cloned())
+            .filter(Value::is_object);
+        surface.composer_override = next_selection.is_some();
+        let selection = next_selection
+            .as_ref()
+            .unwrap_or(&metadata["modelSelection"]);
+        surface.composer_model = selection["model"]
+            .as_str()
+            .or_else(|| metadata["model"].as_str())
+            .map(plain)
+            .unwrap_or_default();
+        let mut efforts = array(selection, "options")
+            .iter()
+            .filter(|option| matches!(option["id"].as_str(), Some("reasoningEffort" | "effort")));
+        let effort = efforts.next();
+        surface.composer_effort = if efforts.next().is_none() {
+            effort
+                .and_then(|option| option["value"].as_str())
+                .map(plain)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        surface.run_active = self.attached_run_active();
         surface.direct_effort_option = self
             .model_edit
             .as_ref()

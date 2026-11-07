@@ -84,6 +84,12 @@ pub(super) fn draw(
                 ctx.text(elide(scope, width.saturating_sub(2) as usize))
                     .dim();
             }
+            let separator_rows = u32::from(height >= 14);
+            ctx.container().h(separator_rows).col(|ctx| {
+                if separator_rows > 0 {
+                    ctx.text("─".repeat(width.saturating_sub(2) as usize)).dim();
+                }
+            });
             let keys: Vec<_> = view.rows.iter().map(|row| row.key.clone()).collect();
             let changed = state.keys != keys;
             if changed || state.controller_selection != view.selected {
@@ -101,10 +107,10 @@ pub(super) fn draw(
                 });
             let extra_selected_row =
                 u32::from(shared_scope.is_none() && height >= 10) + u32::from(long_selected);
-            let capacity = (height
-                .saturating_sub(5 + u32::from(shared_scope.is_some()) + extra_selected_row)
-                / 2)
-            .max(1) as usize;
+            let capacity = (height.saturating_sub(
+                5 + separator_rows + u32::from(shared_scope.is_some()) + extra_selected_row,
+            ) / 2)
+                .max(1) as usize;
             let mut open = false;
             let before = state.selected;
             let keys: Vec<_> = ctx

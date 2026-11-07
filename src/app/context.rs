@@ -487,7 +487,7 @@ impl App {
                     .rev()
                     .find(|row| row.kind == "assistant_message" && !row.streaming)
             })
-            .context("No completed native agent message in the loaded page")?;
+            .context("No completed assistant message loaded")?;
         ensure!(
             !row.truncated,
             "Source is an excerpt; retain the complete native message before capture"
