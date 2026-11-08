@@ -916,7 +916,9 @@ impl App {
             for warning in &pack.degradation {
                 dialog.detail.push_str(&format!("\n{warning}\n"));
             }
-            dialog.detail.push_str(&format!("\nPack: {}\n", pack.id));
+            if std::env::var_os("T3OXIDE_DEMO_COMPANIONS").is_none() {
+                dialog.detail.push_str(&format!("\nPack: {}\n", pack.id));
+            }
         }
     }
 

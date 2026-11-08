@@ -392,6 +392,7 @@ impl App {
     }
 
     pub(super) fn populate_surface(&mut self, surface: &mut SurfaceState) {
+        surface.companion_demo = std::env::var_os("T3OXIDE_DEMO_COMPANIONS").is_some();
         let metadata = self.metadata();
         let saved = self.state.snapshot();
         let next_selection = self
@@ -790,6 +791,7 @@ impl App {
             self.preserve_open_form()?;
         }
         match action {
+            Action::DemoTool { tool, source } => self.demo_companion(&tool, source)?,
             Action::Highlight(index) => {
                 self.focus = Focus::Navigator;
                 self.selected = index.min(self.visible.len().saturating_sub(1));

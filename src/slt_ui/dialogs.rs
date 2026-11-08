@@ -241,12 +241,15 @@ fn draw_model(
     let mut order: Vec<_> = fields.iter().map(|field| field.name.clone()).collect();
     order.extend(controls.iter().map(|(_, _, name)| name.clone()));
     order.push("model-close".into());
-    let width = ctx.width().saturating_sub(4).clamp(1, 54);
+    let width = ctx
+        .width()
+        .saturating_sub(4)
+        .clamp(1, if state.companion_demo { 44 } else { 54 });
     let inner = width.saturating_sub(4).max(1);
     let height = ctx.height().saturating_sub(2).max(1);
     let rows = height
         .saturating_sub(fields.len() as u32 + 6 + u32::from(height >= 12))
-        .clamp(1, 8)
+        .clamp(1, if state.companion_demo { 6 } else { 8 })
         .min(picker.indices.len().max(1) as u32);
     let mut focus_request = changed.then(|| {
         if picker.expanded {
@@ -561,7 +564,9 @@ fn draw_model(
                 .focus_within_border_fg(theme.primary)
                 .px(1)
                 .col(|ctx| {
-                    if !picker.expanded || height >= 12 {
+                    if (!picker.expanded || height >= 12)
+                        && (!state.companion_demo || picker.expanded)
+                    {
                         ctx.text(match modal.title.as_str() {
                             "Model · current conversation" => "Model",
                             "Model · next message" => "Model · next",
@@ -590,8 +595,22 @@ fn draw_model(
                                     " "
                                 })
                                 .fg(theme.primary);
-                                ctx.text(&field.label)
-                                    .w(10.min(inner / 2))
+                                let label = if state.companion_demo {
+                                    match field.name.as_str() {
+                                        "model-field:model" => "◈",
+                                        "model-field:option:reasoningEffort" => "◌",
+                                        "model-field:option:serviceTier" => "ϟ",
+                                        _ => "⋯",
+                                    }
+                                } else {
+                                    &field.label
+                                };
+                                ctx.text(label)
+                                    .w(if state.companion_demo {
+                                        2
+                                    } else {
+                                        10.min(inner / 2)
+                                    })
                                     .fg(if focused && !picker.expanded {
                                         theme.primary
                                     } else {
@@ -787,15 +806,24 @@ pub(super) fn draw(
         },
     );
     let inner_width = width.saturating_sub(4).max(1);
-    let natural_height = 10
-        + u32::from(modal.editor) * 3
-        + wrapped_rows(&modal.description, inner_width).min(3)
-        + modal
+    let natural_height = if state.companion_demo && fuzzy {
+        8 + modal
             .items
             .iter()
             .filter(|item| !item.action)
             .count()
-            .min(12) as u32;
+            .min(9) as u32
+            + u32::from(switcher) * 2
+    } else {
+        10 + u32::from(modal.editor) * 3
+            + wrapped_rows(&modal.description, inner_width).min(3)
+            + modal
+                .items
+                .iter()
+                .filter(|item| !item.action)
+                .count()
+                .min(12) as u32
+    };
     let height = ctx
         .height()
         .saturating_sub(2)
@@ -906,13 +934,14 @@ pub(super) fn draw(
                     });
                 }
 
-                let description_rows = if modal.description.is_empty() {
-                    0
-                } else {
-                    wrapped_rows(&modal.description, inner_width)
-                        .min(3)
-                        .min(height.saturating_sub(10).max(1))
-                };
+                let description_rows =
+                    if modal.description.is_empty() || state.companion_demo && fuzzy {
+                        0
+                    } else {
+                        wrapped_rows(&modal.description, inner_width)
+                            .min(3)
+                            .min(height.saturating_sub(10).max(1))
+                    };
                 if description_rows > 0 {
                     let overflowing =
                         wrapped_rows(&modal.description, inner_width) > description_rows;
@@ -935,7 +964,7 @@ pub(super) fn draw(
                         });
                 }
 
-                let editor_rows = if switcher {
+                let editor_rows = if switcher || state.companion_demo && palette {
                     1
                 } else if palette || search {
                     3

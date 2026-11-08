@@ -4,6 +4,7 @@
 mod attention;
 mod dialogs;
 mod graph;
+mod inbox;
 mod navigator;
 
 pub(crate) use graph::Thread as GraphThread;
@@ -91,6 +92,10 @@ pub enum Action {
     CloseTab(String),
     Lane(String),
     Command(String),
+    DemoTool {
+        tool: String,
+        source: Option<Source>,
+    },
     CaptureContent {
         key: String,
         revision: String,
@@ -135,6 +140,7 @@ pub struct SurfaceState {
     pub(crate) composer_guidance: String,
     pub(crate) run_active: Option<bool>,
     pub attention_mode: bool,
+    pub(crate) companion_demo: bool,
     pub internal_tabs: bool,
     pub show_context: bool,
     pub(crate) focus: Option<ui::Focus>,
@@ -164,6 +170,7 @@ pub struct SurfaceState {
     attention_focus: Option<String>,
     context_expanded: bool,
     attention: attention::State,
+    inbox: inbox::State,
     graph: graph::State,
     dialog: dialogs::State,
     overlay_open: bool,
@@ -255,8 +262,10 @@ pub fn draw(
         && !pointer_tab_activation
         && state.focused_control.as_deref() == Some("conversation-tabs");
     state.transcript_layout = None;
-    state.overlay_open =
-        modal.is_some() || state.context_expanded || attention::navigation_open(state);
+    state.overlay_open = modal.is_some()
+        || state.context_expanded
+        || attention::navigation_open(state)
+        || inbox::is_open(state);
     if state.composer_key != state.active_key {
         if !state.composer_key.is_empty() {
             state.tab_editors.insert(
@@ -313,53 +322,71 @@ pub fn draw(
     }
     ctx.set_theme(surface_theme(&view.theme));
     state.browsing_scope = browsing_scope(view, state);
-    ctx.disabled(modal.is_some() || state.context_expanded, |ctx| {
-        ctx.container().w(width).h(height).col(|ctx| {
-            draw_header(ctx, view, state, &mut actions);
-            let footer_height = 1 + u32::from(!view.notice.is_empty());
-            let body_height = height.saturating_sub(1 + footer_height).max(1);
-            let context_side =
-                state.show_context && width >= 112 && view.layout != ui::LayoutMode::Focus;
-            let content_width = width.saturating_sub(if context_side { 27 } else { 0 });
-            ctx.container().h(body_height).row(|ctx| {
-                ctx.container().w(content_width).h(body_height).col(|ctx| {
-                    if state.attention_mode {
-                        attention::draw(ctx, view, state, content_width, body_height, &mut actions);
-                    } else {
-                        draw_conversations(
-                            ctx,
-                            view,
-                            composer,
-                            state,
-                            content_width,
-                            body_height,
-                            &mut actions,
-                        );
+    ctx.disabled(
+        modal.is_some() || state.context_expanded || inbox::is_open(state),
+        |ctx| {
+            ctx.container().w(width).h(height).col(|ctx| {
+                draw_header(ctx, view, state, &mut actions);
+                let footer_visible =
+                    !state.companion_demo || !view.status.is_empty() || view.pending > 0;
+                let footer_height = u32::from(footer_visible) + u32::from(!view.notice.is_empty());
+                let header_height = if state.companion_demo { 2 } else { 1 };
+                let body_height = height.saturating_sub(header_height + footer_height).max(1);
+                let context_side =
+                    state.show_context && width >= 112 && view.layout != ui::LayoutMode::Focus;
+                let content_width = width.saturating_sub(if context_side { 27 } else { 0 });
+                ctx.container().h(body_height).row(|ctx| {
+                    ctx.container().w(content_width).h(body_height).col(|ctx| {
+                        if state.attention_mode {
+                            attention::draw(
+                                ctx,
+                                view,
+                                state,
+                                content_width,
+                                body_height,
+                                &mut actions,
+                            );
+                        } else {
+                            draw_conversations(
+                                ctx,
+                                view,
+                                composer,
+                                state,
+                                content_width,
+                                body_height,
+                                &mut actions,
+                            );
+                        }
+                    });
+                    if context_side {
+                        draw_context(ctx, view, state, 27, body_height, &mut actions);
                     }
                 });
-                if context_side {
-                    draw_context(ctx, view, state, 27, body_height, &mut actions);
+                if footer_visible {
+                    ctx.row(|ctx| {
+                        ctx.text(&view.status).dim().truncate().grow(1);
+                        if view.pending > 0
+                            && ctx
+                                .button(format!("Pending actions {}", view.pending))
+                                .clicked
+                        {
+                            actions.push(Action::Command("recovery".into()));
+                        }
+                        if ctx.button("?").clicked {
+                            actions.push(Action::Command("help".into()));
+                        }
+                    });
+                }
+                if !view.notice.is_empty() {
+                    let warning = ctx.theme().warning;
+                    ctx.text(&view.notice).fg(warning).truncate();
                 }
             });
-            ctx.row(|ctx| {
-                ctx.text(&view.status).dim().truncate().grow(1);
-                if view.pending > 0
-                    && ctx
-                        .button(format!("Pending actions {}", view.pending))
-                        .clicked
-                {
-                    actions.push(Action::Command("recovery".into()));
-                }
-                if ctx.button("?").clicked {
-                    actions.push(Action::Command("help".into()));
-                }
-            });
-            if !view.notice.is_empty() {
-                let warning = ctx.theme().warning;
-                ctx.text(&view.notice).fg(warning).truncate();
-            }
-        });
-    });
+        },
+    );
+    if modal.is_none() && !state.context_expanded {
+        inbox::draw(ctx, state, &mut actions);
+    }
     if state.context_expanded && modal.is_none() {
         ctx.modal(|ctx| {
             let background = ctx.theme().bg;
@@ -391,7 +418,10 @@ pub fn draw(
     }
     global_actions(
         ctx,
-        modal.is_some() || state.context_expanded || attention::navigation_open(state),
+        modal.is_some()
+            || state.context_expanded
+            || attention::navigation_open(state)
+            || inbox::is_open(state),
         state,
         &mut actions,
     );
@@ -686,6 +716,10 @@ fn draw_header(
     state: &mut SurfaceState,
     actions: &mut Vec<Action>,
 ) {
+    if state.companion_demo {
+        inbox::header(ctx, view, state, actions);
+        return;
+    }
     let width = ctx.width();
     let primary = ctx.theme().primary;
     let surface = ctx.theme().surface;
@@ -736,7 +770,8 @@ fn sidebar_visible(state: &SurfaceState) -> bool {
     // Without an attachment, A falls back to its existing source picker.
     !state.sidebar_hidden.unwrap_or(
         state.attention_mode
-            || !state.active_key.is_empty()
+            || (!state.active_key.is_empty() && !state.companion_demo)
+            || (state.companion_demo && state.viewport.is_some_and(|(width, _)| width < 100))
             || state.applied_layout == Some(ui::LayoutMode::Focus),
     )
 }
@@ -811,7 +846,10 @@ fn draw_context(
                     }
                     if !state.attention_mode {
                         for (label, value) in &view.inspector {
-                            if !value.is_empty() && label != "Environment" {
+                            if !value.is_empty()
+                                && label != "Environment"
+                                && (!state.companion_demo || label != "Project")
+                            {
                                 ctx.row(|ctx| {
                                     ctx.text(if label == "Recovery" {
                                         "Actions"
@@ -1052,6 +1090,7 @@ fn draw_conversations(
     draw_tabs(ctx, state, width, actions);
     let height = height.saturating_sub(tabs_height);
     let sidebar = sidebar_visible(state);
+    state.navigator.demo = state.companion_demo;
     if sidebar && width >= 74 {
         let attached_key = state.active_key.clone();
         let mut nav = std::mem::take(&mut state.navigator);
@@ -1063,7 +1102,7 @@ fn draw_conversations(
         let max_sidebar = available.saturating_sub(38).max(min_sidebar);
         let nav_width = state
             .sidebar_width
-            .unwrap_or(30)
+            .unwrap_or(if state.companion_demo { 32 } else { 30 })
             .clamp(min_sidebar, max_sidebar);
         split.min_ratio = f64::from(min_sidebar) / f64::from(available);
         // SLT quantizes split ratios to 1000 grow weights, then floors the
@@ -1199,13 +1238,19 @@ fn draw_conversation(
             let editor_width = width.saturating_sub(3).max(1);
             state.composer.wrap_width = Some(editor_width);
             let rows = editor_rows(&mut state.composer, height);
-            let completion_rows = if state.command_open {
+            let completion_count = if state.command_open {
                 completion_indices(&state.composer.value(), state.command_escape.as_deref())
                     .len()
                     .min(4) as u32
             } else {
                 0
-            }
+            };
+            let completion_rows = (completion_count
+                + if state.companion_demo && completion_count > 0 {
+                    2
+                } else {
+                    0
+                })
             .min(height.saturating_sub(rows + 4));
             let composer_height = rows + 3 + completion_rows;
             draw_transcript(
@@ -1466,9 +1511,19 @@ fn draw_composer(
         completions,
     } = layout;
     let focus_color = ctx.theme().primary;
+    let completion_background = ctx.theme().surface;
+    let completion_selected = ctx.theme().selected_bg;
+    let detached_completions = state.companion_demo && completions >= 3;
+    let completion_capacity = completions.saturating_sub(if detached_completions { 2 } else { 0 });
     ctx.group("t3oxide.completions")
         .w(width)
         .h(completions)
+        .with_if(detached_completions, |panel| {
+            panel
+                .border(Border::Rounded)
+                .title("Commands")
+                .bg(completion_background)
+        })
         .col(|ctx| {
             let indices = if state.command_open {
                 completion_indices(&state.composer.value(), state.command_escape.as_deref())
@@ -1477,12 +1532,12 @@ fn draw_composer(
             };
             if !indices.is_empty() {
                 let selected = state.command_selected.min(indices.len() - 1);
-                let start = selected.saturating_sub(completions.saturating_sub(1) as usize);
+                let start = selected.saturating_sub(completion_capacity.saturating_sub(1) as usize);
                 for (position, index) in indices
                     .iter()
                     .enumerate()
                     .skip(start)
-                    .take(completions as usize)
+                    .take(completion_capacity as usize)
                 {
                     let command = &domain::ACTIONS[*index];
                     let response = ctx.interaction();
@@ -1498,7 +1553,10 @@ fn draw_composer(
                         text.dim();
                     })
                     .with_if(position == selected, |text| {
-                        text.fg(focus_color).bold();
+                        let text = text.fg(focus_color).bold();
+                        if detached_completions {
+                            text.bg(completion_selected);
+                        }
                     });
                     if response.clicked {
                         actions.push(Action::Command(command.name.into()));
@@ -1540,7 +1598,9 @@ fn draw_composer(
             let can_send =
                 !state.active_key.is_empty() && !state.composer.value().trim().is_empty();
             // Reserve both fixed actions and Send before eliding model labels.
-            let selection_width = width.saturating_sub(29).max(9);
+            let selection_width = width
+                .saturating_sub(if state.companion_demo { 26 } else { 29 })
+                .max(9);
             let effort_width = (selection_width / 3).max(4);
             let model_label = elide(
                 if state.composer_model.is_empty() {
@@ -1572,7 +1632,7 @@ fn draw_composer(
                         (&model_label, false, true),
                         (&effort_label, false, true),
                         ("Stop", false, true),
-                        ("Orch", false, true),
+                        (if state.companion_demo { "≋" } else { "Orch" }, false, true),
                     ],
                 ) {
                     Some(0) => actions.push(Action::Command(

@@ -497,6 +497,11 @@ impl App {
             .trim_start_matches('/')
             .split_once(' ')
             .unwrap_or((command.trim().trim_start_matches('/'), ""));
+        if std::env::var_os("T3OXIDE_DEMO_COMPANIONS").is_some()
+            && matches!(name, "graph" | "guide" | "review" | "mermaid" | "form")
+        {
+            return self.demo_companion(name, None);
+        }
         if self.context_command(name, args)? {
             return Ok(());
         }
@@ -863,10 +868,7 @@ impl App {
             })
             .collect::<Vec<_>>();
         if choices.is_empty() {
-            self.detail(
-                "Recovery",
-                "No unresolved operations. Drafts remain saved independently.",
-            );
+            self.detail("Recovery", "No pending actions. Drafts saved separately.");
         } else {
             self.menu(
                 "Pending actions",
@@ -885,7 +887,7 @@ impl App {
         let detail = serde_json::to_string_pretty(&record)?;
         let mut choices = vec![Choice::new(
             "Keep saved",
-            "Leave this exact recovery record intact",
+            "Retain original record",
             Intent::Close,
         )];
         if self
@@ -895,13 +897,13 @@ impl App {
         {
             choices.push(Choice::new(
                 "Reconcile original action",
-                "Use this saved operation ID and unchanged payload; no new action identity",
+                "Same operation ID and payload",
                 Intent::Recover(record.clone(), stop),
             ));
         }
         choices.push(Choice::new(
             "Clear this local recovery record",
-            "Only after inspecting native outcome; this removes local retry, not native work",
+            "Inspect native outcome first; clears local record only",
             Intent::Forget(record, stop),
         ));
         self.menu(

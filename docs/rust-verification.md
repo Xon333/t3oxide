@@ -1,5 +1,27 @@
 # Rust / SLT verification
 
+## Experimental A-first Rex demo — 2026-11-08
+
+The opt-in companion demo adds the A Inbox drawer and revisits the retained A
+presentation annotations: sidebar spacing, compact model/effort pickers, separate
+muted command completion, compact unified Commands/help and reduced repeated
+chrome. Presentation changes use the demo flag; shared recovery copy is shorter.
+
+Affected checks: 86 SLT unit tests passed, formatting and all-target/all-feature
+Clippy passed, and the locked offline release build passed. Controlled PTY
+captures cover A and Inbox at 140×38, 70×22 and 40×12, plus model, Commands and
+completion. The original synthetic draft was conserved and no native mutations
+were dispatched. These captures are terminal-cell rasters, not physical screens.
+
+An actual task-owned Rex fixture pane's Graph button created standalone Graf in
+the same tab. Its loaded metadata, search, zoom/fit and normal pane exit were
+observed. The main fixture exited normally and its tab disappeared. Existing
+user panes were preserved. Standalone Inquire completion saved local answers;
+Glow rendered the guide and TermiFlow rendered a supported flowchart. This does
+not establish native question return, graph-node navigation into A, Library
+migration, physical acceptance or a performance gain. The image reviewer itself
+was unchanged; its new nine-item deck and PNG hashes were checked.
+
 ## Large loaded-lineage layout correction — 2026-11-08
 
 A large project could show the node-list fallback despite fitting the retained

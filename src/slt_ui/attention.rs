@@ -297,6 +297,32 @@ fn draw_library(
     height: u32,
     actions: &mut Vec<Action>,
 ) {
+    draw_library_with(ctx, state, width, height, actions, false);
+}
+
+pub(super) fn draw_inbox(
+    ctx: &mut Context,
+    state: &mut SurfaceState,
+    width: u32,
+    height: u32,
+    actions: &mut Vec<Action>,
+) {
+    let project = state.selected_project.take();
+    let lane = state.attention.tabs.selected;
+    state.attention.tabs.selected = 0;
+    draw_library_with(ctx, state, width, height, actions, true);
+    state.selected_project = project;
+    state.attention.tabs.selected = lane;
+}
+
+fn draw_library_with(
+    ctx: &mut Context,
+    state: &mut SurfaceState,
+    width: u32,
+    height: u32,
+    actions: &mut Vec<Action>,
+    forms_only: bool,
+) {
     let accent = ctx.theme().primary;
     let scope = state
         .selected_project
@@ -316,7 +342,11 @@ fn draw_library(
         .h(height)
         .border(Border::Rounded)
         .title(elide(
-            &format!("Browse · {scope}"),
+            &if forms_only {
+                format!("Needs you · {}", state.questions.len())
+            } else {
+                format!("Browse · {scope}")
+            },
             width.saturating_sub(4) as usize,
         ))
         .focus_within_border_fg(accent)
@@ -341,55 +371,57 @@ fn draw_library(
                 vec![format!("Forms {forms}"), format!("Library {contents}")];
             let mut changed_lane = false;
             let scoped = state.selected_project.is_some();
-            ctx.row(|ctx| {
-                let focused = ctx.register_focusable_named("attention-tabs");
-                let tabs_width: usize = state
-                    .attention
-                    .tabs
-                    .labels
-                    .iter()
-                    .map(|label| label.width() + 4)
-                    .sum::<usize>()
-                    + 1;
-                if tabs_width > width.saturating_sub(2) as usize {
-                    let keyboard = focused
-                        && (ctx.consume_key_code(KeyCode::Left)
-                            || ctx.consume_key_code(KeyCode::Right)
-                            || ctx.consume_key_code(KeyCode::Enter)
-                            || ctx.consume_key(' '));
-                    let mut active = TabsState::new(vec![format!(
-                        "{} ›",
-                        state.attention.tabs.labels[state.attention.tabs.selected]
-                    )]);
-                    let response = quiet_tabs(ctx, &mut active);
-                    changed_lane = response.clicked || keyboard;
-                    if changed_lane {
-                        state.attention.tabs.selected = 1 - state.attention.tabs.selected;
-                        ctx.focus_by_name("attention-tabs");
-                        ctx.request_frame();
+            if !forms_only {
+                ctx.row(|ctx| {
+                    let focused = ctx.register_focusable_named("attention-tabs");
+                    let tabs_width: usize = state
+                        .attention
+                        .tabs
+                        .labels
+                        .iter()
+                        .map(|label| label.width() + 4)
+                        .sum::<usize>()
+                        + 1;
+                    if tabs_width > width.saturating_sub(2) as usize {
+                        let keyboard = focused
+                            && (ctx.consume_key_code(KeyCode::Left)
+                                || ctx.consume_key_code(KeyCode::Right)
+                                || ctx.consume_key_code(KeyCode::Enter)
+                                || ctx.consume_key(' '));
+                        let mut active = TabsState::new(vec![format!(
+                            "{} ›",
+                            state.attention.tabs.labels[state.attention.tabs.selected]
+                        )]);
+                        let response = quiet_tabs(ctx, &mut active);
+                        changed_lane = response.clicked || keyboard;
+                        if changed_lane {
+                            state.attention.tabs.selected = 1 - state.attention.tabs.selected;
+                            ctx.focus_by_name("attention-tabs");
+                            ctx.request_frame();
+                        }
+                    } else {
+                        changed_lane = quiet_tabs(ctx, &mut state.attention.tabs).changed;
                     }
-                } else {
-                    changed_lane = quiet_tabs(ctx, &mut state.attention.tabs).changed;
-                }
-                if width >= 40 {
-                    ctx.spacer();
-                    if ctx
+                    if width >= 40 {
+                        ctx.spacer();
+                        if ctx
+                            .disabled(!scoped, |ctx| secondary_button(ctx, "All"))
+                            .clicked
+                        {
+                            state.selected_project = None;
+                            ctx.request_frame();
+                        }
+                    }
+                });
+                if width < 40
+                    && height >= 7
+                    && ctx
                         .disabled(!scoped, |ctx| secondary_button(ctx, "All"))
                         .clicked
-                    {
-                        state.selected_project = None;
-                        ctx.request_frame();
-                    }
+                {
+                    state.selected_project = None;
+                    ctx.request_frame();
                 }
-            });
-            if width < 40
-                && height >= 7
-                && ctx
-                    .disabled(!scoped, |ctx| secondary_button(ctx, "All"))
-                    .clicked
-            {
-                state.selected_project = None;
-                ctx.request_frame();
             }
             if changed_lane {
                 state.attention.rows.clear();

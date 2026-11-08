@@ -6,6 +6,7 @@ use slt::{Border, Color, Context, KeyCode, SpinnerState, TabsState, palette::tai
 
 #[derive(Debug, Default)]
 pub(super) struct State {
+    pub(super) demo: bool,
     keys: Vec<String>,
     selected: usize,
     controller_selection: usize,
@@ -40,10 +41,16 @@ pub(super) fn draw(
         .w(width)
         .h(height)
         .border(Border::Rounded)
-        .title("Browse")
+        .title(if state.demo {
+            "Conversations"
+        } else {
+            "Browse"
+        })
         .focus_within_border_fg(theme.primary)
         .col(|ctx| {
-            state.lanes.labels = if width < 33 {
+            state.lanes.labels = if state.demo && width >= 31 {
+                ["● Unread", "◌ Run", "◆ Pins"].map(str::to_owned).to_vec()
+            } else if width < 33 {
                 ["Unread", "Run", "Pins"].map(str::to_owned).to_vec()
             } else {
                 ["Unread", "Running", "Pins"].map(str::to_owned).to_vec()
@@ -84,10 +91,18 @@ pub(super) fn draw(
                 ctx.text(elide(scope, width.saturating_sub(2) as usize))
                     .dim();
             }
-            let separator_rows = u32::from(height >= 14);
+            let separator_rows = if state.demo && height >= 16 {
+                2
+            } else {
+                u32::from(height >= 14)
+            };
             ctx.container().h(separator_rows).col(|ctx| {
                 if separator_rows > 0 {
-                    ctx.text("─".repeat(width.saturating_sub(2) as usize)).dim();
+                    if state.demo {
+                        ctx.text(" ");
+                    } else {
+                        ctx.text("─".repeat(width.saturating_sub(2) as usize)).dim();
+                    }
                 }
             });
             let keys: Vec<_> = view.rows.iter().map(|row| row.key.clone()).collect();
@@ -107,9 +122,10 @@ pub(super) fn draw(
                 });
             let extra_selected_row =
                 u32::from(shared_scope.is_none() && height >= 10) + u32::from(long_selected);
+            let record_gap = u32::from(state.demo && height >= 16);
             let capacity = (height.saturating_sub(
                 5 + separator_rows + u32::from(shared_scope.is_some()) + extra_selected_row,
-            ) / 2)
+            ) / (2 + record_gap))
                 .max(1) as usize;
             let mut open = false;
             let before = state.selected;
@@ -152,8 +168,10 @@ pub(super) fn draw(
                     let selected = state.selected == index;
                     let attached = row.key == presentation.attached_key;
                     let filled = selected && attached;
-                    let record_bg = if filled || (index % 2 == 0) {
+                    let record_bg = if filled || (index % 2 == 0 && !state.demo) {
                         theme.surface
+                    } else if state.demo && index % 2 == 0 {
+                        theme.surface.blend_f64(theme.bg, 0.35)
                     } else {
                         theme.bg
                     };
@@ -193,7 +211,15 @@ pub(super) fn draw(
                                 );
                                 match row.status.as_str() {
                                     "working" | "running" => {
-                                        ctx.spinner(spinner);
+                                        if state.demo {
+                                            ctx.text(spinner.frame(ctx.tick() / 8).to_string())
+                                                .dim();
+                                            ctx.request_frame_after(
+                                                std::time::Duration::from_millis(120),
+                                            );
+                                        } else {
+                                            ctx.spinner(spinner);
+                                        }
                                     }
                                     "failed" => {
                                         ctx.text("!").bold().fg(tailwind::RED.c400);
@@ -205,8 +231,16 @@ pub(super) fn draw(
                                         ctx.text(" ");
                                     }
                                 }
-                                ctx.text(if row.section == "Unread" { "▶" } else { " " })
-                                    .fg(tailwind::GREEN.c400);
+                                ctx.text(if row.section == "Unread" {
+                                    if state.demo { "●" } else { "▶" }
+                                } else {
+                                    " "
+                                })
+                                .fg(if state.demo {
+                                    tailwind::CYAN.c300
+                                } else {
+                                    tailwind::GREEN.c400
+                                });
                                 ctx.text(if row.pinned { "◆" } else { " " })
                                     .fg(tailwind::AMBER.c300);
                                 let title = if row.title.is_empty() {
@@ -263,6 +297,9 @@ pub(super) fn draw(
                         state.selected = index;
                         open = true;
                         ctx.focus_by_name("navigator");
+                    }
+                    if record_gap > 0 {
+                        ctx.container().h(record_gap).col(|_| {});
                     }
                 }
             });

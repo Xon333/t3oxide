@@ -2,6 +2,7 @@
 //! authority; every write is journaled before it reaches the adapter.
 mod actions;
 mod checks;
+mod companion_demo;
 mod content;
 mod context;
 mod context_worker;
@@ -66,6 +67,10 @@ impl Pool {
 }
 
 pub(super) enum Background {
+    DemoCompanion {
+        tool: String,
+        result: Result<(), String>,
+    },
     Page {
         profile: usize,
         generation: u64,
@@ -1147,6 +1152,10 @@ impl App {
 
     fn handle(&mut self, event: Background) -> Result<()> {
         match event {
+            Background::DemoCompanion { tool, result } => match result {
+                Ok(()) => self.notice = format!("{tool} pane created · demo"),
+                Err(error) => self.error(error),
+            },
             Background::Check { attempt, result } => self.check_done(&attempt, result)?,
             Background::Context(event) => self.handle_context_event(event)?,
             Background::Saved {
@@ -2093,7 +2102,7 @@ impl App {
                 format!(
                     "{e:#}{}",
                     if state.pending(&env.environment_id, stop).is_some() {
-                        " · original operation saved; Recover for explicit reconciliation"
+                        " · original saved; open Recovery"
                     } else {
                         ""
                     }
