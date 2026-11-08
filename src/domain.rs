@@ -117,10 +117,31 @@ impl Thread {
             })
     }
     pub fn attention(&self) -> bool {
-        self.inbox()["pendingRequestCount"].as_u64().unwrap_or(0) > 0
-            || flag(self.inbox(), "pendingChildRequest")
-            || flag(self.inbox(), "pendingReview")
-            || self.status == "failed"
+        self.status == "failed"
+            || self.inbox()["attention"].as_bool().unwrap_or_else(|| {
+                self.inbox()["pendingRequestCount"].as_u64().unwrap_or(0) > 0
+                    || flag(self.inbox(), "pendingChildRequest")
+                    || flag(self.inbox(), "pendingReview")
+            })
+    }
+    /// Presentation follows qualified live membership without inventing a run ID.
+    pub fn presentation_status(&self) -> &str {
+        if self.status == "failed" {
+            "failed"
+        } else if self.attention() {
+            "needs_input"
+        } else if self.working() {
+            if matches!(
+                self.status.as_str(),
+                "preparing" | "queued" | "starting" | "running" | "waiting"
+            ) {
+                &self.status
+            } else {
+                "running"
+            }
+        } else {
+            &self.status
+        }
     }
     /// Running view membership is independent of read and settlement state.
     pub fn running(&self) -> bool {
@@ -435,6 +456,18 @@ pub struct Action {
 }
 pub const ACTIONS: &[Action] = &[
     Action {
+        name: "check",
+        label: "Run check",
+        description: "One finite check beside this pane; retain output and selected source for a targeted follow-up",
+        key: "",
+    },
+    Action {
+        name: "check-result",
+        label: "Check result",
+        description: "Read the original attempt and its finding without rerunning",
+        key: "",
+    },
+    Action {
         name: "context",
         label: "Context records",
         description: "Recall captured decisions, evidence, journals and local open loops",
@@ -462,7 +495,7 @@ pub const ACTIONS: &[Action] = &[
         name: "new",
         label: "New conversation",
         description: "Choose native project and defaults; review before creating",
-        key: "n",
+        key: "",
     },
     Action {
         name: "commands",
@@ -480,13 +513,31 @@ pub const ACTIONS: &[Action] = &[
         name: "views",
         label: "Conversation tabs",
         description: "Unread and Completed, Running, Pins and Settled",
-        key: "v",
+        key: "",
+    },
+    Action {
+        name: "switch",
+        label: "Switch conversation",
+        description: "Fuzzy find loaded conversations and open the exact source in an internal tab",
+        key: "Ctrl+F · /switch · /threads",
     },
     Action {
         name: "env",
         label: "Environment scope",
         description: "Browse one or all configured environments",
-        key: "e",
+        key: "",
+    },
+    Action {
+        name: "graph",
+        label: "Loaded relationship graph",
+        description: "Full view of loaded native lineage; selection, camera and source return stay independent",
+        key: "Ctrl+G · /graph",
+    },
+    Action {
+        name: "orchestration",
+        label: "Orchestration guidance",
+        description: "Project default and conversation override; inspect exact appended prompt text",
+        key: "Orch · /orchestration",
     },
     Action {
         name: "filter",
@@ -510,25 +561,31 @@ pub const ACTIONS: &[Action] = &[
         name: "search",
         label: "Search server conversations",
         description: "Explicit native recent-message search; results are bounded",
-        key: "Ctrl+F",
+        key: "/search",
+    },
+    Action {
+        name: "search-scope",
+        label: "Search scope",
+        description: "Choose a project, environment or all projects",
+        key: "",
     },
     Action {
         name: "preview",
         label: "Preview highlighted conversation",
         description: "Read-only preview; does not change the attached thread",
-        key: "Space",
+        key: "",
     },
     Action {
         name: "parent",
         label: "Open parent conversation",
         description: "Use authoritative native lineage",
-        key: "Alt+Up",
+        key: "",
     },
     Action {
         name: "recent",
         label: "Recent conversations",
         description: "Return to an exact source and draft",
-        key: "Alt+Left",
+        key: "",
     },
     Action {
         name: "requests",
@@ -540,7 +597,7 @@ pub const ACTIONS: &[Action] = &[
         name: "send",
         label: "Send draft",
         description: "Send the human message with native delivery semantics",
-        key: "Ctrl+]",
+        key: "Ctrl+Enter | Ctrl+] | Ctrl+\\",
     },
     Action {
         name: "stop",
@@ -558,25 +615,25 @@ pub const ACTIONS: &[Action] = &[
         name: "earlier",
         label: "Earlier messages",
         description: "Read an earlier native page; pause live detail",
-        key: "[",
+        key: "",
     },
     Action {
         name: "latest",
         label: "Latest live conversation",
         description: "Resume the current native subscription",
-        key: "]",
+        key: "",
     },
     Action {
         name: "activity",
         label: "Tools and activity",
         description: "Inspect bounded tool source, arguments and results",
-        key: "a",
+        key: "",
     },
     Action {
         name: "review",
         label: "Changes and pull requests",
         description: "Read native workspace diff and linked PRs",
-        key: "d",
+        key: "",
     },
     Action {
         name: "reviewed",
@@ -612,7 +669,7 @@ pub const ACTIONS: &[Action] = &[
         name: "model",
         label: "Model and options",
         description: "Stage model, effort and service tier from native catalog",
-        key: "m",
+        key: "",
     },
     Action {
         name: "override",
@@ -678,19 +735,19 @@ pub const ACTIONS: &[Action] = &[
         name: "recall",
         label: "Recall a sent prompt",
         description: "Restore a source-qualified human prompt into the composer",
-        key: "Alt+R",
+        key: "",
     },
     Action {
         name: "edit",
         label: "Edit draft externally",
         description: "Use VISUAL or EDITOR; save back to the same conversation",
-        key: "Ctrl+E",
+        key: "",
     },
     Action {
         name: "layout",
         label: "Workspace layout",
         description: "Split, focused conversation, or wide inspector",
-        key: "F3",
+        key: "",
     },
     Action {
         name: "theme",
@@ -701,7 +758,7 @@ pub const ACTIONS: &[Action] = &[
     Action {
         name: "mouse",
         label: "Toggle mouse",
-        description: "Mouse interaction or native terminal selection",
+        description: "Save mouse interaction or native terminal selection for the next launch",
         key: "",
     },
     Action {
@@ -712,9 +769,9 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         name: "help",
-        label: "Keyboard help",
+        label: "Commands and shortcuts",
         description: "Context-aware shortcuts and workflow",
-        key: "Alt+H / F1 / ?",
+        key: "F1 | Alt+H",
     },
     Action {
         name: "quit",
@@ -726,7 +783,7 @@ pub const ACTIONS: &[Action] = &[
         name: "find",
         label: "Find in loaded messages",
         description: "Search the current bounded transcript page",
-        key: "Ctrl+F in transcript",
+        key: "",
     },
     Action {
         name: "find-next",
@@ -751,6 +808,12 @@ pub const ACTIONS: &[Action] = &[
         label: "Copy exact text",
         description: "Choose answer, draft, page, detail, code or inspected tool text",
         key: "",
+    },
+    Action {
+        name: "copy-draft",
+        label: "Copy draft",
+        description: "Copy the whole active prompt draft",
+        key: "Ctrl+Alt+C",
     },
     Action {
         name: "project",
@@ -818,11 +881,20 @@ mod tests {
             )
             .unwrap();
             assert!(row.running(), "native background work: {status}");
+            assert!(matches!(row.presentation_status(), "running" | "waiting"));
             assert!(
                 !row.matches_lane("Open"),
                 "background work is not Completed"
             );
         }
+        let nonblocking = Thread::parse(
+            0,
+            json!({"id":"active","status":"running",
+            "inbox":{"working":true,"attention":false,"pendingRequestCount":1}}),
+        )
+        .unwrap();
+        assert!(nonblocking.working() && !nonblocking.attention());
+        assert_eq!(nonblocking.presentation_status(), "running");
         for status in [
             "completed",
             "stopped",

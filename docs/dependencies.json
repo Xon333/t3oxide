@@ -4116,11 +4116,14 @@
         }
       ],
       "vendoredPath": "vendor/superlighttui",
-      "patch": "ordered-activation-v2",
+      "patch": "ordered-activation-v2+textarea-word-wrap-v1+textarea-viewport-v1",
       "modifiedFiles": {
         "src/runtime/config.rs": "79db097cdec906477169cd84bae7ee76f7cce0395bae8f1de8385484416f3128",
         "src/runtime/kernel.rs": "9e53df759e12b56b45d923098042a0a854c0147c45c902330c9b49834188e6b3",
-        "src/runtime/frame_state.rs": "442d5cdd058f852cc4783fa4509b17c1e53dc1c13dac29ad3c78714c3c98c0d1"
+        "src/runtime/frame_state.rs": "442d5cdd058f852cc4783fa4509b17c1e53dc1c13dac29ad3c78714c3c98c0d1",
+        "src/context/helpers.rs": "3417bd0045d6d0339303624649f353fc9661f60d4730f5a90bef870c106a91f2",
+        "src/widgets/text_input.rs": "ed4b75796ecd33e622ee3feddf15bd52231d7a3c60973274801e9f74787a2d80",
+        "src/context/widgets/text_input/textarea.rs": "210010440d9fffb5ab22166ff6f5ad1bdcd6fb9c1893a13e61202d26754a9739"
       }
     },
     {

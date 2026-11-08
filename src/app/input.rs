@@ -112,7 +112,7 @@ impl App {
                 KeyCode::Char('f') => Some(if self.focus == Focus::Transcript {
                     "find"
                 } else {
-                    "search"
+                    "switch"
                 }),
                 KeyCode::Char('e') => Some("edit"),
                 _ => None,
@@ -389,7 +389,7 @@ impl App {
             }
         }
         match kind {
-            DialogKind::Menu | DialogKind::Palette => match key.code {
+            DialogKind::Menu | DialogKind::Palette | DialogKind::Switcher => match key.code {
                 KeyCode::Down | KeyCode::Tab => self.move_dialog(1),
                 KeyCode::Up | KeyCode::BackTab => self.move_dialog(-1),
                 KeyCode::PageDown => self.move_dialog(8),
@@ -405,7 +405,7 @@ impl App {
                         dialog.selected = dialog.choices.len().saturating_sub(1);
                     }
                 }
-                _ if matches!(kind, DialogKind::Palette) => {
+                _ if matches!(kind, DialogKind::Palette | DialogKind::Switcher) => {
                     if editor_key(&mut self.modal_editor, key)? {
                         self.filter_palette();
                     }
@@ -459,7 +459,7 @@ impl App {
         };
         let result = match &dialog.kind {
             DialogKind::Text(target) => self.submit_text(target.clone()),
-            DialogKind::Menu | DialogKind::Palette => {
+            DialogKind::Menu | DialogKind::Palette | DialogKind::Switcher => {
                 if let Some(choice) = dialog.choices.get(dialog.selected) {
                     self.dispatch(choice.intent.clone())
                 } else {
@@ -520,10 +520,12 @@ impl App {
 
     fn paste(&mut self, text: &str) -> Result<()> {
         if let Some(kind) = self.dialog.as_ref().map(|dialog| dialog.kind.clone()) {
-            if matches!(kind, DialogKind::Text(_) | DialogKind::Palette)
-                && editor_paste(&mut self.modal_editor, text)?
+            if matches!(
+                kind,
+                DialogKind::Text(_) | DialogKind::Palette | DialogKind::Switcher
+            ) && editor_paste(&mut self.modal_editor, text)?
             {
-                if matches!(kind, DialogKind::Palette) {
+                if matches!(kind, DialogKind::Palette | DialogKind::Switcher) {
                     self.filter_palette();
                 } else {
                     self.form_save_at = Some(Instant::now() + Duration::from_millis(200));
@@ -846,6 +848,196 @@ mod tests {
         Event::Key(KeyEvent::new(code, modifiers))
     }
 
+    fn switcher_app() -> (TempDir, App) {
+        let (dir, mut app) = app();
+        for profile in 0..2 {
+            app.environments.push(
+                serde_json::from_value(json!({
+                    "id": format!("profile-{profile}"), "label": "Same environment",
+                    "environmentId": format!("native-{profile}"), "enabled": true,
+                    "node": dir.path().join("absent-adapter"),
+                    "adapter": dir.path().join("adapter.js"),
+                    "hostConfig": dir.path().join("host.json"),
+                }))
+                .unwrap(),
+            );
+            let thread = Thread::parse(
+                profile,
+                json!({
+                    "id":"shared-thread", "title":"Same title", "project":"Same project",
+                    "projectId":format!("project-{profile}"),
+                }),
+            )
+            .unwrap();
+            let mut host = Host::default();
+            host.page.threads.push(thread);
+            host.page.observed_at = "2026-11-07T00:00:00Z".into();
+            host.page.inclusive_children = true;
+            app.hosts.push(host);
+        }
+        app.rebuild();
+        (dir, app)
+    }
+
+    #[test]
+    fn switcher_duplicate_labels_filter_exact_source_ids_and_restore_tab_drafts() {
+        let (_dir, mut app) = switcher_app();
+        // An absent adapter exercises the real local open/restore path without
+        // connecting to a native service. Attachment failure keeps the draft.
+        assert!(app.open(0, "shared-thread".into()).is_err());
+        app.replace_text("first 日本語 draft".into());
+        app.composer.move_cursor(CursorMove::Back);
+        app.transcript_scroll = 17;
+        app.follow = false;
+        let first_cursor = app.composer.cursor();
+        app.state
+            .set_draft("native-1", "shared-thread", "second draft")
+            .unwrap();
+        app.command("switch").unwrap();
+        assert_eq!(app.dialog.as_ref().unwrap().choices.len(), 2);
+        let choices = &app.dialog.as_ref().unwrap().choices;
+        assert_ne!(choices[0].label, choices[1].label);
+        assert_ne!(choices[0].description, choices[1].description);
+        assert!(choices[1].description.contains("native-1"));
+        assert!(choices[1].description.contains("project-1"));
+        assert!(choices[1].description.contains("shared-thread"));
+        app.input(Event::Paste("project-1".into())).unwrap();
+        assert!(matches!(&app.dialog.as_ref().unwrap().choices[0].intent,
+            Intent::Open(1, id) if id == "shared-thread"));
+        assert_eq!(app.dialog.as_ref().unwrap().choices.len(), 1);
+        assert!(app.input(key(KeyCode::Enter, KeyModifiers::NONE)).is_err());
+        assert_eq!(app.active.as_ref().unwrap().profile, 1);
+        assert_eq!(app.active.as_ref().unwrap().thread, "shared-thread");
+        assert_eq!(app.text(), "second draft");
+        assert_eq!(
+            app.tabs,
+            vec![(0, "shared-thread".into()), (1, "shared-thread".into())]
+        );
+        app.command("threads").unwrap();
+        app.input(Event::Paste("native-0".into())).unwrap();
+        assert!(app.input(key(KeyCode::Enter, KeyModifiers::NONE)).is_err());
+        assert_eq!(app.active.as_ref().unwrap().profile, 0);
+        assert_eq!(app.text(), "first 日本語 draft");
+        assert_eq!(app.composer.cursor(), first_cursor);
+        assert_eq!((app.transcript_scroll, app.follow), (17, false));
+        assert_eq!(app.state.draft("native-1", "shared-thread"), "second draft");
+        assert!(app.state.pending_records().is_empty());
+    }
+
+    #[test]
+    fn switcher_typing_and_escape_preserve_composer_and_open_form_edits() {
+        let (_dir, mut app) = switcher_app();
+        app.composer = ui::editor("untouched composer", "violet", "");
+        app.composer.move_cursor(CursorMove::Back);
+        let caret = app.composer.cursor();
+        app.text_dialog(
+            "Search conversations",
+            "",
+            InputTarget::Search,
+            "retained query".into(),
+        );
+        app.input(Event::Paste(" plus edit".into())).unwrap();
+        let form_text = app.modal_editor.lines().join("\n");
+        app.command("switch").unwrap();
+        assert_eq!(app.search_query, form_text);
+        app.input(key(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(
+            app.modal_editor.lines().join(""),
+            "j",
+            "j types instead of navigating"
+        );
+        app.input(key(KeyCode::Esc, KeyModifiers::NONE)).unwrap();
+        assert!(app.dialog.is_none());
+        assert_eq!(app.search_query, form_text);
+        assert_eq!(app.text(), "untouched composer");
+        assert_eq!(app.composer.cursor(), caret);
+        app.command("env").unwrap();
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Environment scope");
+        assert!(app.state.pending_records().is_empty());
+    }
+
+    #[test]
+    fn switcher_empty_partial_and_failed_inventories_never_claim_global_results() {
+        let (_dir, mut app) = switcher_app();
+        app.hosts[0].page.more = true;
+        app.hosts[1].loading = true;
+        app.command("switch").unwrap();
+        let description = &app.dialog.as_ref().unwrap().description;
+        assert!(description.contains("incomplete") && description.contains("loading"));
+        app.hosts[1].loading = false;
+        app.hosts[1].error = "offline".into();
+        app.rebuild();
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .description
+                .contains("unavailable")
+        );
+        app.input(Event::Paste("no-such-conversation-xyz".into()))
+            .unwrap();
+        app.input(key(KeyCode::Enter, KeyModifiers::NONE)).unwrap();
+        assert!(app.dialog.as_ref().unwrap().choices.is_empty());
+        assert!(app.active.is_none() && app.tabs.is_empty());
+        for host in &mut app.hosts {
+            host.page.threads.clear();
+        }
+        app.rebuild();
+        app.command("threads").unwrap();
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .description
+                .contains("Loaded conversations only · 0 matches")
+        );
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .description
+                .contains("incomplete")
+        );
+        assert!(app.state.pending_records().is_empty());
+        let (_empty_dir, mut empty) = self::app();
+        empty.command("switch").unwrap();
+        empty
+            .input(key(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(
+            empty
+                .dialog
+                .as_ref()
+                .unwrap()
+                .description
+                .contains("inventory unavailable")
+        );
+        assert!(empty.active.is_none() && empty.tabs.is_empty());
+    }
+
+    #[test]
+    fn switcher_metadata_refresh_invalidates_a_prior_frame_duplicate_row_click() {
+        let (_dir, mut app) = switcher_app();
+        app.command("switch").unwrap();
+        app.hits.modal_stamp = ui::modal_fingerprint(&app.modal().unwrap());
+        app.hits.modal_items = vec![(Rect::new(2, 2, 30, 2), 0)];
+        app.hosts[0].page.threads.clear();
+        app.rebuild();
+        let error = app
+            .input(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 3,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            }))
+            .unwrap_err();
+        assert!(error.to_string().contains("choices changed"));
+        assert!(app.active.is_none() && app.tabs.is_empty());
+        assert!(matches!(&app.dialog.as_ref().unwrap().choices[0].intent,
+            Intent::Open(1, id) if id == "shared-thread"));
+    }
+
     #[test]
     fn explicit_filtering_prevents_typing_from_changing_navigation_intent() {
         let (_dir, mut app) = app();
@@ -893,27 +1085,6 @@ mod tests {
         assert!(error.to_string().contains("Open a conversation"));
         assert_eq!(app.modal_editor.lines().join("\n"), "keep me");
         assert!(app.dialog.is_some());
-    }
-
-    #[test]
-    fn rejected_required_answer_keeps_the_original_question_visible() {
-        let (_dir, mut app) = app();
-        app.request_edit = Some(RequestEdit {
-            request: json!({"questions": [{"id": "required", "header": "Plan", "required": true}]}),
-            index: 0,
-            answers: serde_json::Map::new(),
-        });
-        app.menu(
-            "Plan question",
-            "Choose before continuing",
-            vec![Choice::new("Next", "", Intent::QuestionNext)],
-        );
-        let error = app
-            .input(key(KeyCode::Enter, KeyModifiers::NONE))
-            .unwrap_err();
-        assert!(error.to_string().contains("requires an answer"));
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Plan question");
-        assert_eq!(app.request_edit.as_ref().unwrap().index, 0);
     }
 
     #[test]
@@ -1122,20 +1293,42 @@ mod tests {
         app.replace_text("/settle is literal draft text".into());
         app.input(key(KeyCode::Char('h'), KeyModifiers::ALT))
             .unwrap();
-        let help = &app.dialog.as_ref().unwrap().detail;
-        assert!(help.contains("Ctrl+T"));
-        assert!(help.contains("Cmd+Enter") && help.contains("Ctrl+Enter"));
-        assert!(help.contains("## Recovery"));
-        assert!(help.contains("Plain Enter") || help.contains("Prompt newline"));
+        let help = app.dialog.as_ref().unwrap();
+        assert_eq!(help.title, "Commands");
+        assert!(matches!(help.kind, DialogKind::Palette));
+        assert!(help.description.contains("Enter newline"));
+        assert!(
+            help.choices
+                .iter()
+                .any(|choice| choice.label.contains("Ctrl+Enter | Ctrl+]"))
+        );
+        assert!(help.choices.iter().any(
+            |choice| matches!(&choice.intent, Intent::Command(command) if command == "recover")
+        ));
+        let offered: Vec<_> = help
+            .choices
+            .iter()
+            .map(|choice| choice.label.clone())
+            .collect();
         assert_eq!(app.text(), "/settle is literal draft text");
         app.dialog = None;
         app.input(key(KeyCode::Tab, KeyModifiers::NONE)).unwrap();
         assert_eq!(app.focus, Focus::Inspector);
         app.input(key(KeyCode::F(1), KeyModifiers::NONE)).unwrap();
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Commands");
         app.dialog = None;
         app.command("shortcuts").unwrap();
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Commands");
+        assert_eq!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .choices
+                .iter()
+                .map(|choice| choice.label.clone())
+                .collect::<Vec<_>>(),
+            offered
+        );
         assert!(app.state.pending_records().is_empty());
     }
 

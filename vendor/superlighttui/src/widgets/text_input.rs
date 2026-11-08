@@ -1999,6 +1999,21 @@ impl TextareaState {
         self
     }
 
+    /// Count visual rows using the same cached, whitespace-preserving layout as the textarea.
+    ///
+    /// Use this after setting `wrap_width` to size an editor without duplicating
+    /// its wrapping or changing the source text and cursor coordinates.
+    pub fn visual_line_count(&mut self) -> usize {
+        match self.wrap_width {
+            Some(width) => self
+                .wrap_cache
+                .visual_lines(&self.lines, width)
+                .len()
+                .max(1),
+            None => self.lines.len().max(1),
+        }
+    }
+
     /// Override the maximum number of undo steps kept (default `100`).
     ///
     /// When the history exceeds this cap the oldest step is dropped.

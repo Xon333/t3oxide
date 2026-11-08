@@ -2,12 +2,27 @@ use super::*;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 impl App {
+    fn preserve_dialog(&mut self) -> bool {
+        if self.dialog.is_none() {
+            return true;
+        }
+        if let Err(error) = self.preserve_open_form() {
+            self.error(error);
+            return false;
+        }
+        true
+    }
+
     pub(super) fn menu(
         &mut self,
         title: impl Into<String>,
         description: impl Into<String>,
         choices: Vec<Choice>,
     ) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         self.dialog = Some(Dialog {
             title: title.into(),
             description: description.into(),
@@ -21,6 +36,10 @@ impl App {
         self.dirty = true;
     }
     pub(super) fn detail(&mut self, title: impl Into<String>, text: impl Into<String>) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         let title = title.into();
         let text = text.into();
         self.capture_detail(&title, &text);
@@ -43,6 +62,10 @@ impl App {
         target: InputTarget,
         text: String,
     ) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         self.modal_editor = ui::editor(&text, &self.theme, "Type here…");
         self.dialog = Some(Dialog {
             title: title.into(),
@@ -57,10 +80,14 @@ impl App {
         self.dirty = true;
     }
     pub(super) fn palette(&mut self) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
         self.modal_editor = ui::editor("", &self.theme, "Find an action…");
         self.dialog = Some(Dialog {
             title: "Commands".into(),
-            description: "Actions use the current source. Type to filter.".into(),
+            description: input_guidance(),
             detail: String::new(),
             choices: Vec::new(),
             selected: 0,
@@ -71,6 +98,45 @@ impl App {
         self.filter_palette();
         self.dirty = true;
     }
+    pub(super) fn switcher(&mut self) {
+        if !self.preserve_dialog() {
+            return;
+        }
+        self.invalidate_context_view();
+        self.modal_editor = ui::editor("", &self.theme, "Find a loaded conversation…");
+        self.dialog = Some(Dialog {
+            title: "Switch conversation".into(),
+            description: String::new(),
+            detail: String::new(),
+            choices: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            kind: DialogKind::Switcher,
+            footer: "Type to filter · ↑↓ choose · Enter open tab · Esc close".into(),
+        });
+        self.filter_palette();
+    }
+
+    pub(super) fn refresh_switcher(&mut self) {
+        let selected = self.dialog.as_ref().and_then(|dialog| {
+            dialog.choices.get(dialog.selected).and_then(|choice| {
+                if let Intent::Open(profile, thread) = &choice.intent {
+                    Some((*profile, thread.clone()))
+                } else {
+                    None
+                }
+            })
+        });
+        self.filter_palette();
+        if let Some((profile, thread)) = selected
+            && let Some(dialog) = &mut self.dialog
+        {
+            dialog.selected = dialog.choices.iter().position(|choice| {
+                matches!(&choice.intent, Intent::Open(p, id) if *p == profile && id == &thread)
+            }).unwrap_or(0);
+        }
+    }
+
     pub(super) fn filter_palette(&mut self) {
         use nucleo_matcher::{
             Config, Matcher, Utf32Str,
@@ -85,6 +151,115 @@ impl App {
         );
         let mut matcher = Matcher::new(Config::DEFAULT);
         let mut scratch = Vec::new();
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|d| matches!(d.kind, DialogKind::Switcher))
+        {
+            let mut matches: Vec<_> = self
+                .threads
+                .iter()
+                .enumerate()
+                .filter_map(|(index, thread)| {
+                    let env = self.environments.get(thread.profile)?;
+                    let label = format!("{} · {} · {}", thread.title, thread.project, env.label);
+                    let description = format!(
+                        "Environment: {} · profile: {}\nProject: {}\nThread: {}",
+                        env.environment_id,
+                        env.id,
+                        if thread.project_id.is_empty() {
+                            "unavailable"
+                        } else {
+                            &thread.project_id
+                        },
+                        thread.id,
+                    );
+                    let text = format!("{label} {description}");
+                    pattern
+                        .score(Utf32Str::new(&text, &mut scratch), &mut matcher)
+                        .map(|score| {
+                            (
+                                score,
+                                index,
+                                Choice::new(
+                                    label,
+                                    description,
+                                    Intent::Open(thread.profile, thread.id.clone()),
+                                ),
+                            )
+                        })
+                })
+                .collect();
+            matches.sort_by_key(|(score, index, _)| (std::cmp::Reverse(*score), *index));
+            let mut labels = HashMap::new();
+            for (_, _, choice) in &matches {
+                *labels.entry(choice.label.clone()).or_insert(0) += 1;
+            }
+            for (_, index, choice) in &mut matches {
+                if labels[&choice.label] > 1 {
+                    let thread = &self.threads[*index];
+                    let env = &self.environments[thread.profile];
+                    choice.label = format!(
+                        "{}/{}/{} · {}",
+                        env.environment_id, thread.project_id, thread.id, choice.label
+                    );
+                }
+            }
+            let mut qualifications = Vec::new();
+            for (env, host) in self.environments.iter().zip(&self.hosts) {
+                let status = if !host.error.is_empty() {
+                    Some("unavailable; incomplete")
+                } else if host.loading {
+                    Some("loading; incomplete")
+                } else if host.page.observed_at.is_empty() {
+                    Some("not loaded; incomplete")
+                } else if host.page.more
+                    || host.page.next_cursor.is_some()
+                    || host.windowed
+                    || host.page.search
+                    || host.page.navigation_pins_only
+                    || !host.page.inclusive_children
+                {
+                    Some("incomplete")
+                } else {
+                    None
+                };
+                if let Some(status) = status {
+                    qualifications
+                        .push(format!("{} [{}]: {status}", env.label, env.environment_id));
+                }
+            }
+            let coverage = if self.environments.is_empty()
+                || self.hosts.iter().any(|host| !host.error.is_empty())
+            {
+                "Unavailable sources; incomplete · "
+            } else if self.hosts.iter().any(|host| host.loading) {
+                "Loading; incomplete · "
+            } else if !qualifications.is_empty() {
+                "Incomplete · "
+            } else {
+                ""
+            };
+            let mut description = format!(
+                "{coverage}Loaded conversations only · {} matches. /search uses native server search.",
+                matches.len()
+            );
+            if self.environments.is_empty() {
+                description.push_str(" No environments loaded; inventory unavailable.");
+            }
+            if !qualifications.is_empty() {
+                description.push('\n');
+                description.push_str(&qualifications.join(" · "));
+            }
+            if let Some(dialog) = &mut self.dialog {
+                dialog.choices = matches.into_iter().map(|(_, _, choice)| choice).collect();
+                dialog.selected = 0;
+                dialog.scroll = 0;
+                dialog.description = description;
+            }
+            self.dirty = true;
+            return;
+        }
         let mut matches: Vec<_> = domain::ACTIONS
             .iter()
             .enumerate()
@@ -109,7 +284,7 @@ impl App {
                         if action.key.is_empty() {
                             String::new()
                         } else {
-                            format!("  {}", action.key)
+                            format!("  [{}]", action.key)
                         }
                     ),
                     action.description,
@@ -126,10 +301,21 @@ impl App {
     }
 
     pub(super) fn dispatch(&mut self, intent: Intent) -> Result<()> {
-        self.preserve_workspace_position()?;
-        self.dialog = None;
+        self.preserve_open_form()?;
+        self.invalidate_context_view();
+        let previous = self.dialog.take();
         self.dirty = true;
+        let result = self.dispatch_intent(intent);
+        if result.is_err() && self.dialog.is_none() {
+            self.dialog = previous;
+        }
+        result
+    }
+
+    fn dispatch_intent(&mut self, intent: Intent) -> Result<()> {
         match intent {
+            Intent::Guidance(action) => self.guidance_action(action)?,
+            Intent::CheckSend(attempt) => self.check_send(&attempt)?,
             Intent::Context(action) => self.context_action(action)?,
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
             Intent::Command(command) => self.command(&command)?,
@@ -155,7 +341,10 @@ impl App {
                 }
                 ui::style_editor(&mut self.composer, &self.theme);
             }
-            Intent::Layout(layout) => self.layout = layout,
+            Intent::Layout(layout) => {
+                self.layout = layout;
+                self.save_ui()?;
+            }
             Intent::Open(profile, thread) => self.open(profile, thread)?,
             Intent::NewEnvironment(profile, purpose) => self.choose_project(profile, purpose)?,
             Intent::Project(profile, project, purpose) => {
@@ -308,7 +497,15 @@ impl App {
             .trim_start_matches('/')
             .split_once(' ')
             .unwrap_or((command.trim().trim_start_matches('/'), ""));
+        if std::env::var_os("T3OXIDE_DEMO_COMPANIONS").is_some()
+            && matches!(name, "graph" | "guide" | "review" | "mermaid" | "form")
+        {
+            return self.demo_companion(name, None);
+        }
         if self.context_command(name, args)? {
+            return Ok(());
+        }
+        if self.check_command(name, args)? {
             return Ok(());
         }
         match name {
@@ -321,7 +518,7 @@ impl App {
             ),
             "quit" => {
                 self.flush_draft()?;
-                self.quit = true;
+                self.begin_context_shutdown();
             },
             "mode" => {
                 ensure!(["", "dev", "developer", "agentbox"].contains(&args), "Workspace is Dev");
@@ -338,7 +535,13 @@ impl App {
                 .collect();
                 self.menu("Views", "Dev conversations", choices);
             },
-            "env" | "switch" | "threads" => {
+            "switch" | "threads" => self.switcher(),
+            "graph" => {
+                self.preserve_open_form()?;
+                self.graph_requested = true;
+                self.dirty = true;
+            },
+            "env" => {
                 let mut choices = vec![Choice::new(
                     "All environments",
                     "Keep unavailable sources visible",
@@ -371,6 +574,7 @@ impl App {
                     self.refresh(false, true)?;
                 }
             },
+            "search-scope" => self.search_scopes(),
             "preview" => {
                 let selected = self.selected_thread().cloned().context("Select a conversation")?;
                 self.source_read(
@@ -469,11 +673,14 @@ impl App {
             "reviewed" | "settle" | "unreviewed" | "unsettle" | "snooze" | "unsnooze" | "pin" => self.thread_action(name)?,
             "model" | "settings" | "effort" | "speed" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
-                self.model_edit = None;
+                if name != "effort" {
+                    self.model_edit = None;
+                }
+                let scope = if args == "next" { ModelScope::Next } else { ModelScope::Current };
                 self.read(
                     "models",
                     json!({"threadId": a.thread}),
-                    ReadKind::Models(if args == "next" { ModelScope::Next } else { ModelScope::Current }),
+                    if name == "effort" { ReadKind::Effort(scope) } else { ReadKind::Models(scope) },
                 )?;
                 self.notice = "Reading native model catalog…".into();
             },
@@ -486,6 +693,7 @@ impl App {
                     self.read("models", json!({"threadId": a.thread}), ReadKind::Models(ModelScope::Next))?;
                 }
             },
+            "orchestration" | "guidance" => self.guidance_menu()?,
             "presets" => self.presets()?,
             "runtime" => {
                 let m = self.metadata();
@@ -496,7 +704,7 @@ impl App {
                     serde_json::to_string_pretty(&m["providerIdentity"])?,
                 ));
             },
-            "recover" | "pending" | "retry" | "retry-launch" | "resolve" => self.recovery_menu()?,
+            "recovery" | "recover" | "pending" | "retry" | "retry-launch" | "resolve" => self.recovery_menu()?,
             "reconnect" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 let target = (a.profile, a.thread.clone());
@@ -525,6 +733,7 @@ impl App {
             ),
             "mouse" => {
                 self.mouse = !self.mouse;
+                self.save_ui()?;
                 self.notice = if self.mouse {
                     "Mouse enabled for next launch".into()
                 } else {
@@ -537,7 +746,7 @@ impl App {
                     .unwrap_or_else(|| "No webURL configured for this environment".into()));
             },
             "help" | "shortcuts" => {
-                self.detail("Keyboard help", HELP_TEXT);
+                self.palette();
             },
             "" => {},
             _ => ensure!(self.workspace_command(name, args)?, "Unknown action /{name}; Ctrl+P lists supported actions"),
@@ -568,6 +777,7 @@ impl App {
             fields["modelSelection"] = selection["selection"].clone();
             fields["modelOverrideId"] = selection["id"].clone();
         }
+        let fields = crate::guidance::prepare_send_fields(&fields, self.send_guidance()?)?;
         self.mutate(profile, "send", fields, None)
     }
     fn thread_action(&mut self, name: &str) -> Result<()> {
@@ -652,18 +862,19 @@ impl App {
                 );
                 Choice::new(
                     label,
-                    "Review exact source, payload and recovery options",
+                    "Inspect original action",
                     Intent::ReviewRecovery(record, pending.stop),
                 )
             })
             .collect::<Vec<_>>();
         if choices.is_empty() {
-            self.detail(
-                "Recovery",
-                "No unresolved operations. Drafts remain saved independently.",
-            );
+            self.detail("Recovery", "No pending actions. Drafts saved separately.");
         } else {
-            self.menu("Saved actions","These may already have reached T3. Select an action to inspect its original identity and payload.",choices);
+            self.menu(
+                "Pending actions",
+                "Delivery unknown · inspect before recovery",
+                choices,
+            );
         }
         Ok(())
     }
@@ -676,7 +887,7 @@ impl App {
         let detail = serde_json::to_string_pretty(&record)?;
         let mut choices = vec![Choice::new(
             "Keep saved",
-            "Leave this exact recovery record intact",
+            "Retain original record",
             Intent::Close,
         )];
         if self
@@ -686,16 +897,20 @@ impl App {
         {
             choices.push(Choice::new(
                 "Reconcile original action",
-                "Use this saved operation ID and unchanged payload; no new action identity",
+                "Same operation ID and payload",
                 Intent::Recover(record.clone(), stop),
             ));
         }
         choices.push(Choice::new(
             "Clear this local recovery record",
-            "Only after inspecting native outcome; this removes local retry, not native work",
+            "Inspect native outcome first; clears local record only",
             Intent::Forget(record, stop),
         ));
-        self.menu("Review saved action",format!("Original environment: {environment}. Acceptance is unknown until native reconciliation. Clearing is an explicit local decision."),choices);
+        self.menu(
+            "Pending action",
+            format!("{environment} · delivery unknown"),
+            choices,
+        );
         if let Some(dialog) = &mut self.dialog {
             dialog.detail = detail;
         }
@@ -750,4 +965,22 @@ impl App {
     }
 }
 
-const HELP_TEXT: &str = include_str!("../../docs/shortcuts.md");
+fn input_guidance() -> String {
+    // The maintained shortcut document supplies non-command bindings as well.
+    // Keep one menu and one source of help data, including editor/navigation keys.
+    let mut guidance = String::from("Prompt: Enter newline · Commands: Enter runs\n");
+    for line in include_str!("../../docs/shortcuts.md").lines() {
+        if !line.starts_with("| ") {
+            continue;
+        }
+        let mut columns = line.trim_matches('|').split('|').map(str::trim);
+        if let (Some(action), Some(keys)) = (columns.next(), columns.next())
+            && action != "Action"
+            && !action.starts_with("---")
+            && columns.next().is_none()
+        {
+            guidance.push_str(&format!("{action} [{}]\n", keys.replace("; ", " | ")));
+        }
+    }
+    guidance
+}

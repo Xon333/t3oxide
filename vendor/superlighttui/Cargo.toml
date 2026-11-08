@@ -175,5 +175,5 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.t3oxide-vendor]
 upstream-commit = "d4537d74f4b42188e06cb224fbfe7684397897fb"
-patch = "ordered-activation-v2"
-modified-files = ["src/runtime/config.rs", "src/runtime/kernel.rs", "src/runtime/frame_state.rs"]
+patch = "ordered-activation-v2+textarea-word-wrap-v1+textarea-viewport-v1"
+modified-files = ["src/runtime/config.rs", "src/runtime/kernel.rs", "src/runtime/frame_state.rs", "src/context/helpers.rs", "src/widgets/text_input.rs", "src/context/widgets/text_input/textarea.rs"]
