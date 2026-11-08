@@ -188,14 +188,29 @@ impl Canvas {
         let mut layout = graph.compute_layout_with_config(&config);
         let options = RenderOptions::plain();
         let mut planner = ScenePlanner::new();
-        let mut scene = planner.plan(&layout, &options.plan).quiet()?;
-        // Preserve source ancestry instead of panning a wide parent off-screen
-        // merely to fit its selected child. Use the library's vertical layout.
-        if !edges.is_empty() && scene.width() > label_width + 4 {
+        let (horizontal_width, horizontal_cells) = {
+            let scene = planner.plan(&layout, &options.plan).quiet()?;
+            (scene.width(), scene.width().checked_mul(scene.height()))
+        };
+        // Preserve visible ancestry when a vertical scene narrows the graph.
+        // Broad lineage can instead spread it far wider: choose the smaller
+        // scene then, without discarding a usable DAG for an over-budget one.
+        if !edges.is_empty() && horizontal_width > label_width + 4 {
             config.direction = Direction::TopDown;
-            layout = graph.compute_layout_with_config(&config);
-            scene = planner.plan(&layout, &options.plan).quiet()?;
+            let vertical = graph.compute_layout_with_config(&config);
+            let (vertical_width, vertical_cells) = {
+                let scene = planner.plan(&vertical, &options.plan).quiet()?;
+                (scene.width(), scene.width().checked_mul(scene.height()))
+            };
+            if vertical_cells.is_some_and(|cells| {
+                cells <= 1_000_000
+                    && (vertical_width <= horizontal_width
+                        || horizontal_cells.is_none_or(|horizontal| cells < horizontal))
+            }) {
+                layout = vertical;
+            }
         }
+        let scene = planner.plan(&layout, &options.plan).quiet()?;
         ensure!(
             nodes
                 .iter()
@@ -833,6 +848,16 @@ mod tests {
                 .to_string()
                 .contains("budget")
         );
+        let oversized: Vec<_> = (0..100)
+            .map(|n| node("env", &n.to_string(), &"x".repeat(4096)))
+            .collect();
+        assert!(
+            Canvas::build(&oversized, &[], 4096)
+                .unwrap_err()
+                .to_string()
+                .contains("cell budget"),
+            "a scene that cannot fit the cell budget is still rejected"
+        );
         let mut thread = nodes[0].clone();
         thread.id = NodeId::Thread {
             profile: 1,
@@ -841,6 +866,46 @@ mod tests {
             thread_id: "thread".into(),
         };
         assert!(Canvas::build(&[thread], &[], 20).is_ok());
+    }
+
+    #[test]
+    fn large_loaded_lineage_keeps_every_source_within_cell_budget() {
+        // A project with multiple generations and broad sibling groups. Project
+        // membership and explicit parent edges both participate in layout.
+        let nodes: Vec<_> = (0..155)
+            .map(|n| {
+                node(
+                    "env",
+                    &n.to_string(),
+                    &format!("Source {n:03} {}", "x".repeat(80)),
+                )
+            })
+            .collect();
+        let mut edges = Vec::new();
+        for index in 1..nodes.len() {
+            edges.push(Edge {
+                from: nodes[0].id.clone(),
+                to: nodes[index].id.clone(),
+            });
+            if index > 7 {
+                edges.push(Edge {
+                    from: nodes[1 + (index - 8) / 24].id.clone(),
+                    to: nodes[index].id.clone(),
+                });
+            }
+        }
+        for label_width in [32, 62, 132, 220] {
+            let canvas = Canvas::build(&nodes, &edges, label_width)
+                .unwrap_or_else(|error| panic!("label width {label_width}: {error}"));
+            assert!(canvas.width * canvas.height <= 1_000_000);
+            for (node, bounds) in nodes.iter().zip(&canvas.bounds) {
+                assert_eq!(
+                    canvas.hit(bounds.x as usize + 1, bounds.y as usize + 1),
+                    Some(&node.id),
+                    "source remains selectable at label width {label_width}"
+                );
+            }
+        }
     }
 
     #[test]

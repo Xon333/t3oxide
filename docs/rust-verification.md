@@ -1,5 +1,44 @@
 # Rust / SLT verification
 
+## Large loaded-lineage layout correction — 2026-11-08
+
+A large project could show the node-list fallback despite fitting the retained
+node/edge limits: the renderer replaced a usable horizontal scene with an
+over-budget vertical one merely because it exceeded one label's width. It now
+keeps a bounded vertical scene when that narrows the graph or reduces its area;
+otherwise it retains the horizontal scene. Identity, cycle, label, node/edge and
+one-million-cell limits remain unchanged. No admitted nodes are dropped.
+
+The failing-first 155-node/301-edge regression reproduces the cell-budget error,
+then verifies exact hit identity for every source at four label widths. Existing
+compact ancestry coverage caught an intermediate area-only policy that panned
+the project label away; the final width preference preserves that behavior.
+Independent final consequential review found no actionable issue. Final source
+passes **342 Rust tests** (327 library +15 integration), workspace/vendor
+formatting, both Clippy checks and diff whitespace.
+
+A fresh locked offline arm64 release is **9,718,944 bytes**, SHA256
+`fd995e1be312b896ea24b1dd658ccff67893433358d769426d283ba333c9ff63`;
+version and strict signature verification pass. A read-only native metadata page
+supplied a partial 154-thread topology, replayed with anonymous IDs/titles and
+synthetic content. At label width 132 its horizontal scene uses 291,600 cells,
+versus 1,388,881 vertically. Controlled release PTYs at 140×38, 70×22, 40×12 and
+228×53 show the graph without fallback and actual camera movement, then return
+to the exact Unicode draft with original nonempty pending and Stop records and
+zero synthetic mutation dispatches. All four clients normally wait and exit zero;
+eight frames are retained. The first observation client also exits zero: an
+unnecessary Tab moved focus away before the attempted pan. The corrected run
+uses Graph's existing entry focus; no focus source change was needed. An initial
+system Python lacked the capture dependency; the maintained cached tooling was
+used instead. Failed observations remain separate from passing evidence.
+
+These are terminal-cell observations, not physical Rex or native mutation
+acceptance. Large graphs still require panning at actual cell density; Fit does
+not zoom, both orientations may legitimately exceed the budget, and loaded
+lineage stays partial. Graph/forms remain internal; the existing finite-check
+Rex integration does not establish external graph selection return. No user live
+pane was driven or restarted. Historical acceptance and backend limits remain.
+
 ## Compact Commands and recovery readback — 2026-11-08
 
 Commands now omits vertical padding at compact heights, keeping Close visible

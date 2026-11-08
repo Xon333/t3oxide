@@ -38,6 +38,9 @@ width changes. Shift+arrows and the wheel pan;
 Center reveals the selected node. Fit reports overflow instead of pretending to
 zoom. Relationships remain partial; provider/family detail is not admitted and
 subagent/unknown-lineage conversations remain read-only in this view.
+The graph and native forms are internal views. Rex companion panes currently
+serve finite checks; opening this client in a Rex pane does not externalize its
+graph or forms. An external graph selection return is not implemented.
 Context uses F4 and a compact overlay
 where a permanent sidebar would crowd the content.
 
