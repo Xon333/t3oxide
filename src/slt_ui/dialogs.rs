@@ -880,7 +880,7 @@ pub(super) fn draw(
             .bg(theme.bg)
             .align(Align::Start)
             .px(1)
-            .py(u32::from(!switcher || height >= 14))
+            .py(u32::from(!(switcher || palette) || height >= 14))
             .gap(spacing)
             .col(|ctx| {
                 ctx.container().w(inner_width).bg(theme.surface).row(|ctx| {
@@ -1564,6 +1564,41 @@ mod tests {
             },
         );
         assert!(matches!(actions.as_slice(), [Action::ModalChoice(18)]));
+        assert_eq!(editor.lines().join("\n"), "");
+    }
+
+    #[test]
+    fn compact_commands_keep_guidance_and_close_keyboard_accessible() {
+        let mut backend = TestBackend::new(40, 12);
+        let mut state = SurfaceState::new();
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal = menu();
+        modal.title = "Commands".into();
+        modal.editor = true;
+        modal.description = format!(
+            "GUIDANCE-START\n{}GUIDANCE-END",
+            "Retained editor and navigation bindings\n".repeat(12)
+        );
+        warm(&mut backend, &modal, &mut editor, &mut state);
+        backend.assert_contains("GUIDANCE-START");
+        backend.assert_contains("Close");
+        let mut actions = Vec::new();
+        for code in [KeyCode::BackTab, KeyCode::End] {
+            backend.run_with_events(EventBuilder::new().key_code(code).build(), |ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+            });
+        }
+        backend.assert_contains("GUIDANCE-END");
+        backend.run_with_events(EventBuilder::new().key_code(KeyCode::Home).build(), |ctx| {
+            draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+        });
+        backend.assert_contains("GUIDANCE-START");
+        for code in [KeyCode::BackTab, KeyCode::Enter] {
+            backend.run_with_events(EventBuilder::new().key_code(code).build(), |ctx| {
+                draw(ctx, &modal, &mut editor, &mut state, &mut actions);
+            });
+        }
+        assert!(matches!(actions.as_slice(), [Action::CloseModal]));
         assert_eq!(editor.lines().join("\n"), "");
     }
 

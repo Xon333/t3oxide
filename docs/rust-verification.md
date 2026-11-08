@@ -1,5 +1,40 @@
 # Rust / SLT verification
 
+## Compact Commands and recovery readback — 2026-11-08
+
+Commands now omits vertical padding at compact heights, keeping Close visible
+at 40×12 alongside the query and selected command. The failing-first regression
+reproduces the missing Close control, then verifies guidance End/Home navigation
+and keyboard dismissal without activating a command. Other dialogs and taller
+Commands layouts retain their previous padding. Independent consequential review
+found no material issues in this scoped change.
+
+Final source passed **341 Rust tests** (326 library +15 integration),
+workspace/vendor formatting, both Clippy checks and diff whitespace. A fresh
+locked offline arm64 release is **9,718,784 bytes**, SHA256
+`0952a62bab587c1001fa57b66560b1b01ae8b17c2fdb7e2c91ccfc26c2b63019`;
+version and strict signature checks pass. One controlled release PTY verifies
+visible Close at 140×38, 70×22 and 40×12. At 40×12, Shift+Tab reaches guidance,
+End/Up reveals its final binding, Home returns to the start, and Shift+Tab/Enter
+closes Commands without sending or changing the unrelated Unicode draft.
+
+The same PTY verifies the existing recovery path without recovery source changes:
+Tab passes through the selected-choice description to the original JSON detail;
+End/Home and arrows reach all fields. Its 21 displayed rows equal the complete
+original JSON after removing display whitespace and scrollbar markers, while
+the exact saved original and nonempty independent Stop record remain unchanged.
+No synthetic native mutation occurs. Thirty terminal-cell frames are retained;
+the one client normally waits and exits zero, with tracked bytes/modes unchanged
+during qualification. Two preceding observation clients also exit normally;
+their initial incorrect focus assumption remains disclosed. A preflight found
+only the prior post-run verification-document change; no product launched until
+the source/binary binding was reconciled.
+
+These are synthetic PTY observations with the retained parser/rasterizer limits,
+not physical Rex, native Send/Apply, M4 or whole-product visual acceptance.
+Historical R9 NOT_ACCEPTED, native/graph/lifecycle PARTIAL, R7 ordering uncertainty
+and backend zero-sample/no-gain limits remain unchanged.
+
 ## Ordinary-send orchestration guidance — 2026-11-08
 
 Orch, Commands and `/orchestration` share one local preference menu. Optional
