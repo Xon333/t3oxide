@@ -21,7 +21,6 @@ SLT owns Tab/Shift+Tab focus, mouse hit tests, text selection and terminal input
 | Settle native thread | Ctrl+T; /settle |
 | Restore settled thread | /unsettle |
 | Close tab, retain draft | Cmd+W / Ctrl+W where delivered; tab close button |
-| Context capture / recall / resume | Context controls; /context-save, /context, /resume |
 | Help | F1; ? button; /help |
 | Save and exit | Ctrl+Q; /quit |
 

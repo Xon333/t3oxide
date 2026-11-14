@@ -195,6 +195,8 @@ test('opt-in opening trace records stage timing and counters without user or cre
 test('native Working membership separates background waits, failure, plan review and request attention',()=>{
   const base={latestRunId:'run-a',status:'completed',activeRunId:null,pendingRuntimeRequest:null};
   assert.equal(nativeWorking(base),false);
+  assert.equal(nativeWorking({...base,status:'idle',pendingBackgroundTasks:[]}),false);
+  assert.equal(nativeWorking({...base,activityRunStatus:'idle',pendingBackgroundTasks:[]}),false);
   assert.equal(nativeWorking({...base,status:'running',latestRunId:null,activeProviderThreadId:null}),false);
   assert.equal(nativeWorking({...base,status:'running'}),true);
   assert.equal(nativeWorking({...base,pendingBackgroundTasks:[{kind:'command',awaited:false}]}),false);
@@ -207,16 +209,67 @@ test('native Working membership separates background waits, failure, plan review
   assert.equal(nativeWorking({...base,interactionMode:'plan',hasActionableProposedPlan:true,pendingBackgroundTasks:[{kind:'subagent'}]}),false);
 });
 
-test('only live native-managed child approvals change the parent Working membership',()=>{
+test('only live native-managed child requests change the parent Working membership',()=>{
   const parent={id:'parent',projectId:'project-a',title:'Parent',updatedAt:stamp,status:'running',latestRunId:'run-parent',
     lineage:{relationshipToParent:null,parentThreadId:null,rootThreadId:'parent'}};
   const child={...parent,id:'child',title:'Child',latestRunId:'run-child',creationSource:'orchestrator',
     lineage:{relationshipToParent:'subagent',parentThreadId:'parent',rootThreadId:'parent'},pendingRuntimeRequest:{id:'request',kind:'approval'}};
   function classify(changes={}) {return threadList({projects:[{id:'project-a'}],threads:[parent,{...child,...changes}]},'',{activeOnly:true}).threads.find(t=>t.id==='parent').inbox}
   assert.equal(classify().working,false);assert.equal(classify().pendingChildRequest,true);
-  for(const change of [{status:'completed'},{activityRunStatus:null},{creationSource:'provider'},{pendingRuntimeRequest:{id:'request',kind:'user_input'}}]) {
+  for(const change of [{status:'completed'},{activityRunStatus:null},{activityRunStatus:'idle'},{creationSource:'provider'}]) {
     assert.equal(classify(change).working,true);assert.equal(classify(change).pendingChildRequest,false);
   }
+  assert.equal(classify({pendingRuntimeRequest:{id:'request',kind:'user_input'}}).pendingChildRequest,true);
+});
+
+test('navigation presents qualified work and attention consistently without historical idle spinners',()=>{
+  const base={id:'thread-a',projectId:'project-a',title:'Thread',updatedAt:stamp,status:'idle',
+    activeRunId:null,latestRunId:'historical-run',pendingBackgroundTasks:[]};
+  const row=changes=>threadList({projects:[{id:'project-a'}],threads:[{...base,...changes}]},'',{activeOnly:true}).threads[0];
+  assert.equal(row({}).inbox.working,false);
+  assert.equal(row({}).inbox.workingKnown,true);
+  assert.equal(row({status:'future-status'}).inbox.workingKnown,false);
+  const background=row({pendingBackgroundTasks:[{taskId:'task-a',kind:'subagent'}]});
+  assert.equal(background.inbox.working,true);
+  assert.equal(background.inbox.backgroundHolding,true);
+  assert.equal(background.status,'waiting');
+  assert.equal(background.inbox.nativeStatus,'idle');
+  for(const request of [{kind:'auth_refresh'},{kind:'user_input',blocking:false}]) {
+    const running=row({status:'running',pendingRuntimeRequest:request});
+    assert.equal(running.inbox.working,true);
+    assert.equal(running.inbox.attention,false);
+  }
+  assert.equal(row({pendingRuntimeRequest:{kind:'user_input',blocking:false}}).inbox.attention,true);
+  assert.equal(row({status:'failed'}).inbox.attention,true);
+  assert.equal(row({status:'failed',pendingBackgroundTasks:[{kind:'subagent'}]}).status,'failed');
+});
+
+test('bounded live views present native background waits without inventing a stoppable app run',()=>{
+  const source=snapshot();
+  source.projection.runs=[{id:'historical-run',status:'completed',providerThreadId:'provider-a'}];
+  source.projection.thread.activeProviderThreadId='provider-a';
+  source.projection.providerThreads=[{id:'provider-a',appThreadId:'thread-a',status:'idle',
+    pendingBackgroundTasks:[{taskId:'child-task',kind:'subagent'}]}];
+  let projected=modelView(source,'thread-a');
+  assert.equal(projected.status,'waiting');
+  assert.equal(projected.runtimeDetails.status,'waiting');
+  assert.equal(projected.activeRunId,null);
+  assert.equal(projected.backgroundHolding,true);
+  source.projection.providerThreads[0].pendingBackgroundTasks=[{taskId:'server',kind:'command'}];
+  assert.equal(modelView(source,'thread-a').status,'completed');
+  source.projection.providerThreads[0].pendingBackgroundTasks=[{taskId:'monitor',kind:'monitor',awaited:true}];
+  assert.equal(modelView(source,'thread-a').status,'waiting');
+  source.projection.runs[0].status='failed';
+  assert.equal(modelView(source,'thread-a').status,'failed');
+  source.projection.runs[0].status='completed';
+  source.projection.providerThreads[0].pendingBackgroundTasks=[];
+  source.projection.turnItems=[{id:'child',runId:'historical-run',type:'subagent',status:'pending'}];
+  assert.equal(modelView(source,'thread-a').status,'waiting');
+  source.projection.turnItems=[{id:'server',runId:'historical-run',type:'dynamic_tool',status:'running',input:{persistent:true}}];
+  assert.equal(modelView(source,'thread-a').status,'completed');
+  source.projection.runs=[];
+  source.projection.thread.pullRequests=[{watch:{},source:'manual'}];
+  assert.equal(modelView(source,'thread-a').status,'waiting');
 });
 
 test('server search uses one bounded native RPC, exact shell identity and explicit incompleteness',async t=>{

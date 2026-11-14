@@ -33,7 +33,7 @@ client startup nor reconnect deletes it or replays writes.
 Ordinary drafts are qualified by exact native environment and thread. Launch
 forms are also bound to their profile, native environment and project. Changing
 a browsing scope does not change a draft's destination or the creation pin.
-Developer and AgentBox share the same composer and active connection.
+A and native-question B share the same composer and active connection.
 
 Typing and bracketed paste schedule a 200 ms durable save. Source changes,
 explicit actions, focus loss and orderly exit flush relevant input. Storage has
@@ -107,25 +107,23 @@ matching saved form. It cannot erase a newer form, replace a changed workspace
 selection or redirect a user who moved to another conversation or opened another
 dialog. Saved and imported forms remain accessible through Saved launch forms.
 
-## AgentBox presentation and filing
+## Retained inputs from removed workflows
 
-Attention, Working, Queued, Later and Reviewed reflect native metadata. Local
-priority and project order affect presentation only. They never claim tasks,
-start agents or schedule execution. Local rank changes have a revision guard and
-an explicit guarded undo. Viewing, scrolling and searching never settle a task.
-Reviewed, Restore to inbox, snooze and pin are explicit native actions.
+Native attention and work status are read from source-qualified metadata. Viewing,
+scrolling and searching do not answer or settle a task. The reduced client does
+not create a local task queue, rank dependencies, accumulate Context/fael records
+or append orchestration instructions to the human prompt.
 
-File multiple tasks accepts a human-authored list. Each item receives a separate
-project/default/model/workspace review and an explicit Create. The remaining
-text is a draft, not a queued operation. Bounded receipts distinguish
-Acknowledged, Needs recovery and Remaining draft. Saving a pending launch and
-its receipt item is one transaction; acknowledging it and retiring only its exact
-unchanged prefix is another. A newer edited list is never overwritten.
+Previously saved launch forms, batch receipts and exact pending launch operations
+remain accessible as recovery evidence. A historical batch form stays read-only; ordinary New saves in a separate native-conversation form slot so it cannot replace that input or inherit its batch binding. Acknowledgements retain the exact original form key. Opening historical inputs never submits remaining
+human text automatically or restarts a batch-task creation loop. Unknown effects
+retain their original identity and require explicit reconciliation. Removed catalog
+entries do not delete drafts, preference fields, receipts or historical files.
 
-Batch receipt and remaining-draft views survive restart. Resuming opens the
-original source and human text for review; it never submits the remaining list
-automatically. An uncertain item must be reconciled before continuing. Native T3
-remains responsible for execution after an accepted launch and after client exit.
+Local image-review feedback is independent of client drafts and native questions.
+The existing optional Rex utility keeps its own deck binding, comments, drafts and
+history. A deliberate exact-file read/return to the original thread is separate
+from a native send or approval; closing a review does not mean native delivery.
 
 ## Verification boundary
 

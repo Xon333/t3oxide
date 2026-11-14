@@ -1,8 +1,8 @@
-# Rust workspace architecture
+# Terminal client architecture
 
 The application is one event-driven Rust client. T3 remains the authority for native threads, agents, execution, permissions, queues, worktrees, requests and settings. t3oxide stores only presentation preferences, human drafts and exact client-side recovery records. Its Node companion remains a compatibility and durable receipt boundary on the host; it is not another agent service.
 
-The reference baseline is t3oxide `e73caacd673d1a9bbceea8a7ed240b2a068ba5a7`. The current authoritative T3 source review is `ac8dce0cc3abd8a337f2d806b5082a6834b9b81a`; [contract evidence](rust-contracts.md) pins the exact upstream files. [Source decisions](rust-source-reuse.md) records every supplied source and its licensing boundary.
+The reduced client is based on adopted Rust/SLT main `4543e73`, preserving the selected runtime and native boundary. The historical Go reference is `e73caacd673d1a9bbceea8a7ed240b2a068ba5a7`. The retained T3 source review is `ac8dce0cc3abd8a337f2d806b5082a6834b9b81a`; [contract evidence](rust-contracts.md) pins the exact upstream files. [Source decisions](rust-source-reuse.md) records every supplied source and its licensing boundary.
 
 ## Modules and ownership
 
@@ -19,17 +19,17 @@ The reference baseline is t3oxide `e73caacd673d1a9bbceea8a7ed240b2a068ba5a7`. Th
 | `src/app/input.rs` | Retained legacy input regressions, compiled for tests only. |
 | `src/attention.rs` | Actual native question admission, stable controls, revision-bound drafts and receipt validation. |
 | `src/app/actions.rs`, `src/app/native.rs` | Action dispatch, model/request/launch forms, native capability checks and reviewed operations. |
-| `src/app/workspace.rs` | Local project/priority views, reading coordinates, loaded-content navigation and source copying. |
+| `src/app/workspace.rs` | Project scope, retained recovery inputs, reading coordinates, loaded-content navigation and source copying. |
 | `src/ui.rs` | Pure presentation, responsive layouts, bounded Markdown reuse, editor styling and exact drawn hit targets. |
 | `adapter/` | Existing verified native integration, bounded source projection and durable host receipts. |
 
-Developer and AgentBox are views over these same models. They share the active connection, draft, projection, requests, recovery and creation forms. Mode changes alter visual priority and default lanes; layouts alter pane space and focus. Neither creates a native session or a separate execution owner.
+A (conversations) and B (native questions) are views over these same models. They share the active connection, draft, projection, requests, recovery and creation forms. Mode changes alter visual priority and default lanes; layouts alter pane space and focus. Neither creates a native session or a separate execution owner.
 
 ## Component decisions
 
-Ratatui 0.30.2 and Crossterm 0.29 provide the only terminal framework. Ratatui handles cell-buffer differences, clipping and layout; the application does not maintain a parallel ANSI renderer. `ratatui-textarea` 0.9.3 supplies Unicode editor movement, wrapping, selection, undo/redo and screen-to-data mouse mapping. `tui-markdown` 0.3.13 supplies Markdown rendering with optional syntax-highlighting dependencies disabled. `nucleo-matcher` 0.3.1 supplies fuzzy action scoring without its threaded application index.
+SLT 0.26.0 owns the active terminal loop, widgets, focus and output. Retained Ratatui 0.30.2/Crossterm 0.29 helpers support existing editor, compatibility and test paths; they do not run a second terminal loop. `ratatui-textarea` 0.9.3 supplies Unicode editor movement, wrapping, selection, undo/redo and screen-to-data mouse mapping. `tui-markdown` 0.3.13 supplies Markdown rendering with optional syntax-highlighting dependencies disabled. `nucleo-matcher` 0.3.1 supplies fuzzy action scoring without its threaded application index.
 
-Ordinary threads and bounded Crossbeam channels are sufficient for this process/stdio transport. Separate pools handle two foreground reads, one metadata read per configured source (at most eight) and one storage task at a time, with bounded queues of 16, 16 and 4. Each metadata source has an available slot even when other hosts hang, and unavailable sources cannot occupy the workers needed to attach a conversation or save a draft; the UI receives typed background events. No async executor, HTTP proxy, terminal multiplexer, database, scheduler or second UI framework is introduced. Pingora does not address a missing transport need. Herdr and TUIOS supply useful interaction principles while their daemon and PTY ownership remain outside this client's scope. Restricted FrankenTUI code is not incorporated.
+Ordinary threads and bounded Crossbeam channels are sufficient for this process/stdio transport. Separate pools handle two foreground reads, one metadata read per configured source (at most eight) and one storage task at a time, with bounded queues of 16, 16 and 4. Each metadata source has an available slot even when other hosts hang, and unavailable sources cannot occupy the workers needed to attach a conversation or save a draft; the UI receives typed background events. SLT’s existing async wake bridge is retained; no HTTP proxy, terminal multiplexer, database, scheduler or additional UI runtime is introduced. Pingora does not address a missing transport need. Herdr and TUIOS supply useful interaction principles while their daemon and PTY ownership remain outside this client's scope. Restricted FrankenTUI code is not incorporated.
 
 Cargo.lock pins the complete dependency graph. `docs/dependencies.json` records source archives/checksums and `LICENSES/rust-third-party.txt` retains license texts. The MPL-covered fuzzy matcher is an unmodified library with its corresponding source link supplied; no covered source file is copied into t3oxide's own modules.
 
@@ -43,12 +43,9 @@ The active runtime is pinned `subinium/SuperLightTUI@d4537d74f4b42188e06cb224fbf
 | Conversation A4, S4 | Native source-qualified projection; one tab per conversation | Exact snapshot/delta revision; reconnect resets projection base | SLT Markdown/scroll region; bounded adapter excerpt; source IDs retained |
 | Prompt A4–A5 | Conversation draft + SLT TextareaState | Human edits, 200ms durable save, source switch/exit flush | SLT focus; public indexed key consumption before textarea for command/send; plain Enter newline |
 | Models A4 | Native catalog and exact thread/provider selection | Native catalog revision and acknowledgement | Existing native review controls; defaults require a separate explicit action |
-| Human queue B1–B3, S5–S6 | Actual native request summary, full offer and revision | Native pending-request changes; failure/prose alone never creates a question | Project-grouped SLT region; mouse/Tab; source opens in A |
+| Human queue B1–B3, S5–S6 | Actual native request summary, full offer and revision | Native pending-request changes; failure/prose alone never creates a question | Direct project/question SLT list; mouse/Tab; source opens in A |
 | Form B3 | Exact environment/thread/request/revision draft | Every field edit/choice; current-offer validation; explicit Submit | Stable field/choice values; local completion never delivery |
 | Supporting content B3 | Existing native source items | Source/content revision and excerpt flags, geometry and renderer process inputs | Separate SLT Markdown + TermiFlow flowcharts; unsupported/overflow preserves original source |
-| Project graph B1 | Native inventory, stable project/question identities | Inventory/revision/geometry, previous displayed hit owners | ascii-dag scene adapted to clipped SLT cells, Tab/arrows/Enter/mouse; zero-question projects retained |
-| Context B3 | Explicitly owned local fael store | Immutable source-qualified events and verified full-source blobs | Explicit capture/recall/history/revisit/supersession; local close has no native effect |
-| Dependency synthesis B3 | Explicit admitted native question revisions and edge reasons | Edge/coverage revisions; stable dependency ordering and visible cycles | petgraph; native offers currently expose no edge/coverage capability, so Unknown remains visible |
 | Recovery S6 | Client pending records + host durable receipt journal | Explicit original-ID reconciliation only | Matched acknowledgement; independent Stop; no automatic retries |
 
 Read state, native run state and settlement are separate. Source-qualified observed events survive lifecycle-only shells and restart; evicting an observation also expires its read markers conservatively. Open verifies a live source before recording its event as read, and never settles it. Running includes running/needs-input/failed even after reading. Unread and Completed share view 1; Pins is independent and Settled is an on-demand explorer. Host pagination and local ordering use meaningful activity, excluding shell `updatedAt`/token/tool churn. The compact shell cannot expose unseen mid-run replies it omits; it cannot be treated as a full transcript. Actual subagent counts come from `knownChildCount`, never the loaded-page length. Project inventory is bounded to 200 entries / 48 KiB of record content, with explicit incompleteness; older helpers that omit inventory do not establish completeness.
@@ -113,27 +110,34 @@ The previous terminal state is imported only when the Rust file is absent, after
 
 Composer autosaves are debounced and versioned. Launch-form autosaves are also debounced; leaving a form, losing focus or quitting flushes applicable edits. Acknowledgements use the current version/text, not a stale editor snapshot. The external editor temporarily restores the terminal, keeps native background events flowing and returns text only to the original draft. Failure or oversized output is retained for recovery rather than silently discarded.
 
-Unsent launch forms use `rustLaunchForms`, keyed by canonical `[profileId, environmentId, projectId]` identity, with a local revision and a 40-form bound. A pending launch carries the exact form key and digest; its acknowledgement retires only that unchanged form in the same atomic transaction. Supported imported launch forms remain reachable through Saved launch forms.
+Unsent launch forms use `rustLaunchForms`, keyed by canonical `[profileId, environmentId, projectId]` identity, with a local revision and a 40-form bound. When that slot preserves a historical batch form, ordinary native New uses the separate `[profileId, environmentId, projectId, "native-conversation"]` slot. The original form and any unresolved operation remain intact; subsequent saves and acknowledgements retain their exact selected slot. A pending launch carries the exact form key and digest; its acknowledgement retires only that unchanged form in the same atomic transaction. Supported imported launch forms remain reachable through Saved launch forms.
 
-Local project scope, priority, reading anchor and review coordinates describe presentation only. Transcript anchors restore a wrapped offset only when the same source row and content digest remain on the loaded page; diff anchors require the same complete native source hashes. Exact source and content digests prevent an old coordinate or click from becoming a different native action. They neither schedule native work nor replace its state.
+Local project scope, reading anchors and review coordinates describe presentation only. Historical priority fields remain preserved but do not filter or rank native rows. Transcript anchors restore a wrapped offset only when the same source row and content digest remain on the loaded page; diff anchors require the same complete native source hashes. Exact source and content digests prevent an old coordinate or click from becoming a different native action. They neither schedule native work nor replace its state.
 
-## Explicit local context
+## Reduced ownership and retained history
 
-`/context-save` captures a completed native source item only by explicit action.
-An excerpt cannot be silently promoted to complete source. The private store is
-an explicit state-sibling directory, not an auto-discovered repository journal.
-fael-core supplies actual row, open/history, supersession and ranked query
-semantics; no hooks, crew, daemon or new orchestration is enabled. Full captured
-payloads are content-addressed separately from fael's 10 KiB row limit.
+The active crate excludes the historical `context_store`, `project_graph` and
+`attention_rank` modules and their fael/ascii-dag/petgraph dependencies. No Context
+command handler, local capture/recall, graph construction or dependency synthesis
+runs in the terminal path. Native T3 supplies context, orchestration, questions,
+graphs and queues; terminal rendering never becomes a second authority.
 
-Each immutable event and source blob uses a private temporary file, file fsync,
-atomic no-clobber publication and directory fsync. Source blobs commit before
-referencing rows. Interrupted temporary/orphan inputs remain recoverable;
-traversal, parse and hash failures mark recall degraded. This is the tested
-filesystem syscall boundary, not a hardware power-loss guarantee. Bounded
-structured packs retain exact known totals, omissions, source/content revisions,
-observation metadata and pack identity. `/resume` adds actual protected drafts,
-original pending operations and native requests; nothing is executed or resolved.
+The command catalog omits local priority/preset management and batch creation.
+Existing saved launch forms, batch receipts, drafts and exact uncertain operations
+remain readable/recoverable. They are protected human input and effect evidence,
+not a reason to restart the removed creation loop. Ordinary sends carry reviewed
+human text with no client-owned orchestration suffix.
+
+Historical source modules, prior source commits, optional manually invoked
+Markdown/Mermaid renderers and unique local data are retained. This is a product
+reduction, not a language or rendering-library rewrite. Historical Context controls
+in [context-controls](context-controls.md) describe preserved source, not active
+commands.
+
+Native previews/annotations are the default shared UI feedback surface. Optional
+Rex image review uses the existing local utility and file/history persistence,
+with a deliberate handback to the pinned original native thread. It has no
+Artifact API dependency, second native writer or automatic completion inference.
 
 ## Verification boundaries
 

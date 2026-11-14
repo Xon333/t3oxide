@@ -1,7 +1,6 @@
 //! One event-driven client workspace. Background reads never acquire mutation
 //! authority; every write is journaled before it reaches the adapter.
 mod actions;
-mod context;
 #[cfg(test)]
 mod input;
 #[cfg(test)]
@@ -131,20 +130,16 @@ pub(super) enum ModelScope {
 }
 #[derive(Clone, Debug)]
 pub(super) enum InputTarget {
-    ContextQuery(crate::context_store::Scope),
-    ContextRevisit(Box<crate::context_store::PackRow>),
     Search,
     LoadedSearch,
     LaunchTitle,
     LaunchMessage,
     Batch,
     Question,
-    Favorite,
     Command,
 }
 #[derive(Clone, Debug)]
 pub(super) enum Intent {
-    Context(context::Action),
     Workspace(workspace::WorkspaceAction),
     Command(String),
     Lane(String),
@@ -166,7 +161,6 @@ pub(super) enum Intent {
     Option(String),
     OptionValue(String, Value),
     ModelApply,
-    ModelSave,
     ClearOverride,
     Request(Value),
     SavedAnswer(Value),
@@ -227,6 +221,7 @@ pub(super) struct Dialog {
 #[derive(Clone, Debug)]
 pub(super) struct Launch {
     profile: usize,
+    form_key: String,
     project: Value,
     defaults: Value,
     title: String,

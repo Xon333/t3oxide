@@ -29,6 +29,8 @@ test('nested subagents expand independently without conflating forks',()=>{
 });
 test('all four filters preserve authoritative classification and status values',()=>{
  const rows=[thread('main'),thread('a','subagent','main','running'),thread('b','subagent','main','waiting'),thread('c','subagent','main','completed'),thread('d','subagent','main','failed'),thread('fork','fork','main'),{...thread('unknown'),lineage:null}];
+ // Running/waiting status requires actual native execution identity.
+ for (const row of rows.filter(row=>['running','waiting'].includes(row.status))) row.activeRunId=`run-${row.id}`;
  const data=shell(rows);
  assert.deepEqual(ids(threadList(data,'',{typeFilter:'main',grouped:true})),['main']);
  assert.deepEqual(ids(threadList(data,'',{typeFilter:'forks',grouped:true})),['fork']);

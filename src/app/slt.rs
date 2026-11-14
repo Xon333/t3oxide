@@ -482,29 +482,6 @@ impl App {
                 surface.retained_question = Some(question.clone());
             }
         }
-        // Current native request offers expose no dependency edges or coverage.
-        // Keep the synthesis role source-qualified without inventing independence.
-        let qualified: Vec<_> = surface
-            .questions
-            .iter()
-            .filter_map(|question| {
-                let revision = string(&question.request, "revision");
-                (!revision.is_empty()).then(|| crate::attention_rank::SourceId {
-                    environment_id: question.source.environment.clone(),
-                    thread_id: question.source.thread.clone(),
-                    request_id: string(&question.request, "id"),
-                    revision,
-                })
-            })
-            .collect();
-        surface.dependency_status = match crate::attention_rank::rank(
-            &qualified,
-            &[],
-            crate::attention_rank::EvidenceCoverage::Unknown,
-        ) {
-            Ok(_) => "Dependencies · unknown".into(),
-            Err(error) => format!("Dependencies unavailable · {error}"),
-        };
     }
 
     pub(super) fn observe_slt_layout(&mut self, surface: &SurfaceState) {

@@ -1,6 +1,6 @@
 # t3oxide
 
-A Rust terminal client for existing T3 Code environments. SLT v0.26.0 owns the terminal runtime, focus, editing and output. The retained Node adapter supplies native data, requests and durable operation receipts; T3 owns execution and orchestration.
+A lean Rust terminal client for existing T3 Code conversations and native questions. SLT v0.26.0 owns the terminal runtime, focus, editing and output. The retained Node adapter supplies native data, requests and durable operation receipts; T3 owns execution and orchestration.
 
 ## Build and connect
 
@@ -16,14 +16,15 @@ Use a current stable Rust toolchain (declared minimum 1.92), existing environmen
 
 ## Conversations and human questions
 
-**A** combines Unread and Completed, with unread first. Completed means opened, inactive and unsettled. Running contains active work, needs input and failures; read state remains independent. Pins and the on-demand Settled explorer retain their native identity. Ordering follows meaningful native activity rather than token/tool churn. Context shows the actual native direct-subagent count when available.
+**A** combines Unread and Completed, with unread first. Completed means opened, inactive and unsettled. Running contains active work, needs input and failures; read state remains independent. Pins and the on-demand Settled explorer retain their native identity. Ordering follows meaningful native activity rather than token/tool churn. Native metadata supplies delegated-work visibility; absent evidence stays unknown.
 
 Search starts with a project and supports environment/name/native-content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
 
-**B** groups actual native human questions by project. Its persistent project-navigation region changes level in place; returning globally retains the selected project and content. Supporting Markdown and supported Mermaid flowcharts remain separate from navigation; unsupported diagram types retain their source. Open in A retains source identity. Answers autosave against the exact source/request revision, validate native values, and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID.
+**B** lists actual native human questions by project. Select the source and answer its interactive native choices; Open in A retains the exact conversation. Answers autosave against the source/request revision and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID. Supporting Markdown and manually invoked Mermaid rendering remain available; they do not create requests or schedule work.
 
-Explicit `/context-save` captures a source-qualified decision, evidence, journal or local open loop. `/context` recalls those records; `/resume` adds protected drafts, original operations and native questions without executing them. [Context controls](docs/context-controls.md) describe durability, provenance, totals and degradation. Dependency synthesis requires explicit native evidence; current native offers leave coverage unknown.
+Native T3 owns graphs, context, orchestration, queues and recovery authority. The active client has no local Context/fael store, dependency-ranking pass, project graph or batch-task creation loop. Historical source and existing data remain preserved; saved launch forms, batch receipts and exact pending operations stay accessible for deliberate recovery. Outgoing messages use the reviewed human draft without an orchestration suffix.
 
+T3/ChatGPT previews and native annotations are the default for UI feedback. A manually invoked image review in Rex remains a small independent utility: a local artifact, preserved comments and deliberate return to the original thread. It needs no Artifact Library API, permanent backend or automatic Finish.
 The revised presentation preferences live under `sltUi`; old presentation preferences remain recoverable without overriding this contract. Existing accounts, manual names, drafts and uncertain operations are preserved. Internal tabs are always available, including inside Rex.
 
 ## Input

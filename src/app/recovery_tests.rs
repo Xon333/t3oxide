@@ -1,4 +1,5 @@
 use super::*;
+use sha2::Digest;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -242,81 +243,68 @@ fn launch_acknowledgement_is_bound_to_original_generated_identity() {
 }
 
 #[test]
-fn batch_receipts_advance_exact_items_and_require_each_native_launch_review() {
+fn retained_task_lists_are_read_only_and_keep_original_recovery() {
     let mut fixture = Fixture::new();
+    let source = "\0file-many/project-a";
+    let text = "first task\nsecond task\n";
+    let pending = json!({"id":"original-batch-operation","op":"launch","environmentId":"native-test","threadId":"original-thread"});
     fixture
         .app
-        .choose_project_result(
-            0,
-            json!({"id":"project-a","title":"Fixture project"}),
-            NewPurpose::Batch,
-        )
+        .state
+        .set_draft("native-test", source, text)
         .unwrap();
-    fixture.app.modal_editor = ui::editor("\nfirst task\n\nsecond task\n", &fixture.app.theme, "");
-    fixture.app.submit_text(InputTarget::Batch).unwrap();
-    fixture.until(|app| {
-        app.launch
-            .as_ref()
-            .is_some_and(|l| l.defaults["revision"].is_string())
-    });
-    let saved = fixture.app.state.snapshot();
-    let receipts = saved["batchReceipts"].as_object().unwrap();
-    assert_eq!(receipts.len(), 1);
-    let receipt_id = receipts.keys().next().unwrap().clone();
-    fixture.app.create_launch().unwrap();
-    assert!(fixture.wait_mutation());
-    let saved = fixture.app.state.snapshot();
-    let receipt = &saved["batchReceipts"][&receipt_id];
-    assert_eq!(receipt["items"][0]["state"], "Acknowledged");
-    assert_eq!(receipt["items"][1]["state"], "Remaining draft");
-    assert!(receipt["items"][0]["operationId"].is_string());
-    assert_eq!(
-        fixture
-            .app
-            .state
-            .draft("native-test", "\0file-many/project-a"),
-        "\nsecond task\n"
-    );
     fixture
         .app
-        .dispatch(Intent::Workspace(workspace::WorkspaceAction::ResumeBatch(
-            receipt_id.clone(),
+        .state
+        .save_pending("native-test", false, pending.clone())
+        .unwrap();
+    fixture.app.state.update(|state| {
+        state["batchReceipts"]["original-receipt"] = json!({
+            "id":"original-receipt", "environmentId":"native-test", "projectId":"project-a",
+            "source":source, "original":text, "createdAt":"2026-11-14T00:00:00Z",
+            "items":[{"start":0,"end":11,"state":"Remaining draft"},{"start":11,"end":text.len(),"state":"Remaining draft"}]
+        });
+        Ok(())
+    }).unwrap();
+    let before = fixture.app.state.snapshot();
+    assert!(fixture.app.command("batch").is_err());
+    fixture.app.command("batch-receipts").unwrap();
+    fixture
+        .app
+        .dispatch(Intent::Workspace(workspace::WorkspaceAction::BatchReceipt(
+            "original-receipt".into(),
         )))
         .unwrap();
-    assert_eq!(
-        fixture.app.modal_editor.lines().join("\n"),
-        "\nsecond task\n"
-    );
-    fixture.app.submit_text(InputTarget::Batch).unwrap();
-    fixture.until(|app| {
-        app.launch
-            .as_ref()
-            .is_some_and(|l| l.defaults["revision"].is_string())
-    });
-    assert!(fixture.app.state.pending("native-test", false).is_none());
-    assert_eq!(
-        fixture.app.state.snapshot()["batchReceipts"]
-            .as_object()
-            .unwrap()
-            .len(),
-        1
-    );
-    fixture.app.create_launch().unwrap();
-    assert!(fixture.wait_mutation());
-    assert!(
-        fixture
-            .app
-            .state
-            .draft("native-test", "\0file-many/project-a")
-            .is_empty()
-    );
-    assert!(
-        array(
-            &fixture.app.state.snapshot()["batchReceipts"][&receipt_id],
-            "items"
-        )
+    let view = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
         .iter()
-        .all(|item| item["state"] == "Acknowledged")
+        .find(|choice| choice.label == "View remaining draft")
+        .unwrap()
+        .intent
+        .clone();
+    fixture.app.dispatch(view).unwrap();
+    assert!(fixture.app.dialog.as_ref().unwrap().detail.contains(text));
+    fixture
+        .app
+        .dispatch(Intent::Workspace(workspace::WorkspaceAction::SavedBatch {
+            key: format!("native-test/{source}"),
+            text: text.into(),
+        }))
+        .unwrap();
+    assert!(fixture.app.dialog.as_ref().unwrap().detail.contains(text));
+    assert!(fixture.app.launch.is_none());
+    assert_eq!(fixture.app.state.snapshot(), before);
+    assert_eq!(
+        fixture.app.state.pending("native-test", false),
+        Some(pending)
+    );
+    assert!(
+        !fixture.directory.join("native-state.json").exists(),
+        "reading a retained list cannot dispatch"
     );
 }
 
@@ -335,6 +323,9 @@ fn imported_launch_is_accessible_and_project_forms_do_not_overwrite_each_other()
         .unwrap();
     fixture.app.launch = Some(Launch {
         profile: 0,
+        form_key: fixture
+            .app
+            .launch_form_key(0, &json!({"id":"project-empty"})),
         project: json!({"id":"project-empty"}),
         defaults: Value::Null,
         title: "Other project draft".into(),
@@ -377,7 +368,7 @@ fn imported_launch_is_accessible_and_project_forms_do_not_overwrite_each_other()
 }
 
 #[test]
-fn favorite_removal_is_source_exact_and_cannot_erase_a_changed_selection() {
+fn inactive_model_favorites_cannot_mutate_preserved_selections() {
     let mut fixture = Fixture::new();
     fixture.app.open(0, "thread-review".into()).unwrap();
     fixture.until(|app| {
@@ -385,46 +376,279 @@ fn favorite_removal_is_source_exact_and_cannot_erase_a_changed_selection() {
             .as_ref()
             .is_some_and(|a| !a.navigating && a.projection.snapshot().is_some())
     });
-    fixture.app.state.update(|v|{v["modelPresets"]["native-test"]=json!([{"name":"Focused","selection":{"instanceId":"fixture-provider","model":"fixture-model"}}]);Ok(())}).unwrap();
+    fixture.app.state.update(|v| {
+        v["modelPresets"]["native-test"] = json!([{"name":"Focused","selection":{"instanceId":"fixture-provider","model":"fixture-model"}}]);
+        Ok(())
+    }).unwrap();
+    let before = fixture.app.state.snapshot();
     fixture.app.presets().unwrap();
-    let choose = fixture.app.dialog.as_ref().unwrap().choices[0]
+    let old_choice = fixture.app.dialog.as_ref().unwrap().choices[0]
         .intent
         .clone();
-    fixture.app.dispatch(choose).unwrap();
+    assert!(fixture.app.dispatch(old_choice).is_err());
+    assert!(
+        fixture
+            .app
+            .dispatch(Intent::Workspace(
+                workspace::WorkspaceAction::RemovePreset {
+                    environment: "native-test".into(),
+                    name: "Focused".into(),
+                    selection: json!({"instanceId":"fixture-provider","model":"fixture-model"}),
+                }
+            ))
+            .is_err()
+    );
+    assert!(fixture.app.command("presets").is_err());
+    assert_eq!(fixture.app.state.snapshot(), before);
+
+    for command in ["model", "model next"] {
+        fixture.app.command(command).unwrap();
+        fixture.until(|app| {
+            app.dialog
+                .as_ref()
+                .is_some_and(|d| d.title.starts_with("Model ·"))
+        });
+        let choices = &fixture.app.dialog.as_ref().unwrap().choices;
+        assert!(
+            !choices
+                .iter()
+                .any(|c| c.label.to_lowercase().contains("favorite"))
+        );
+        assert!(
+            choices
+                .iter()
+                .any(|c| matches!(c.intent, Intent::ModelApply))
+        );
+        fixture.app.dialog = None;
+    }
+    fixture.app.command("model next").unwrap();
+    fixture.until(|app| {
+        app.dialog
+            .as_ref()
+            .is_some_and(|d| d.title.starts_with("Model ·"))
+    });
+    fixture.app.dispatch(Intent::Model(1)).unwrap();
+    fixture.app.dispatch(Intent::ModelApply).unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["modelOverrides"]["native-test/thread-review"]["selection"]["model"],
+        "fixture-fast"
+    );
+    assert_eq!(
+        fixture.app.state.snapshot()["modelPresets"],
+        before["modelPresets"]
+    );
+
+    fixture
+        .app
+        .choose_project_result(0, json!({"id":"project-a"}), NewPurpose::Launch)
+        .unwrap();
+    fixture.until(|app| {
+        app.launch
+            .as_ref()
+            .is_some_and(|l| l.defaults["revision"].is_string())
+    });
+    fixture.app.launch_models().unwrap();
+    let choices = &fixture.app.dialog.as_ref().unwrap().choices;
+    assert!(
+        !choices
+            .iter()
+            .any(|c| c.label.to_lowercase().contains("favorite"))
+    );
+    fixture.app.dispatch(Intent::Model(1)).unwrap();
+    fixture.app.dispatch(Intent::ModelApply).unwrap();
+    assert_eq!(
+        fixture.app.launch.as_ref().unwrap().selection["model"],
+        "fixture-fast"
+    );
+    assert_eq!(
+        fixture.app.state.snapshot()["modelPresets"],
+        before["modelPresets"]
+    );
+}
+
+#[test]
+fn historical_batch_form_preserves_identity_without_blocking_native_new() {
+    let mut fixture = Fixture::new();
+    let project = json!({"id":"project-a"});
+    let canonical = fixture.app.launch_form_key(0, &project);
+    let historical = json!({"projectId":"project-a", "title":"Historical batch", "message":"Exact old task\n日本語", "selection":null, "workspace":null, "batchBinding":{"original":"opaque retained binding"}});
+    fixture
+        .app
+        .state
+        .update(|v| {
+            v["rustLaunchForms"][&canonical] = historical.clone();
+            Ok(())
+        })
+        .unwrap();
+    let old_operation = json!({"id":"old-unknown-launch", "op":"launch-project", "environmentId":"native-test", "threadId":"old-source", "projectId":"project-a", "rustLaunchFormKey":canonical, "rustLaunchFormDigest":format!("{:x}", sha2::Sha256::digest(historical.to_string().as_bytes()))});
+    fixture
+        .app
+        .state
+        .save_pending("native-test", false, old_operation.clone())
+        .unwrap();
+    fixture
+        .app
+        .dispatch(Intent::Workspace(
+            workspace::WorkspaceAction::RestoreRustLaunch {
+                key: canonical.clone(),
+                draft: historical.clone(),
+            },
+        ))
+        .unwrap();
+    assert!(fixture.app.launch.is_none());
     assert!(
         fixture
             .app
             .dialog
             .as_ref()
             .unwrap()
-            .choices
-            .iter()
-            .any(|choice| choice.label == "Review for next message")
+            .detail
+            .contains("Exact old task")
     );
-    let remove = fixture
+    fixture
         .app
-        .dialog
-        .as_ref()
-        .unwrap()
-        .choices
-        .iter()
-        .find(|choice| choice.label == "Remove this favorite")
-        .unwrap()
-        .intent
-        .clone();
+        .choose_project_result(0, project.clone(), NewPurpose::Launch)
+        .unwrap();
+    fixture.until(|app| {
+        app.launch
+            .as_ref()
+            .is_some_and(|l| l.defaults["revision"].is_string())
+    });
+    let native_key = fixture.app.launch.as_ref().unwrap().form_key.clone();
+    assert_ne!(native_key, canonical);
+    assert_eq!(
+        serde_json::from_str::<Vec<String>>(&native_key).unwrap()[3],
+        "native-conversation"
+    );
+    let launch = fixture.app.launch.as_mut().unwrap();
+    launch.title = "Ordinary native New".into();
+    launch.message = "New human brief\n café".into();
+    assert!(launch.batch.is_none());
+    fixture.app.save_launch().unwrap();
+    let native_form = fixture.app.state.snapshot()["rustLaunchForms"][&native_key].clone();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustLaunchForms"][&canonical],
+        historical
+    );
+    assert_eq!(
+        fixture.app.state.pending("native-test", false),
+        Some(old_operation)
+    );
+    assert!(
+        !fixture.directory.join("native-state.json").exists(),
+        "opening New only reads defaults"
+    );
+
+    // A late acknowledgement may retire only its bound historical form.
+    fixture
+        .app
+        .state
+        .acknowledge("native-test", false, "old-unknown-launch", "old-source", "")
+        .unwrap();
+    assert!(
+        fixture.app.state.snapshot()["rustLaunchForms"]
+            .get(&canonical)
+            .is_none()
+    );
+    assert_eq!(
+        fixture.app.state.snapshot()["rustLaunchForms"][&native_key],
+        native_form
+    );
+    assert_eq!(fixture.app.launch_form_key(0, &project), native_key);
+    let mut fields = json!({});
+    fixture
+        .app
+        .bind_launch_submission(fixture.app.launch.as_ref().unwrap(), &mut fields)
+        .unwrap();
+    assert_eq!(fields["rustLaunchFormKey"], native_key);
+    fixture.app.launch = None;
+    fixture
+        .app
+        .dispatch(Intent::Workspace(
+            workspace::WorkspaceAction::RestoreRustLaunch {
+                key: native_key.clone(),
+                draft: native_form,
+            },
+        ))
+        .unwrap();
+    fixture.until(|app| {
+        app.launch
+            .as_ref()
+            .is_some_and(|l| l.defaults["revision"].is_string())
+    });
+    assert_eq!(
+        fixture.app.launch.as_ref().unwrap().message,
+        "New human brief\n café"
+    );
+    fixture.app.create_launch().unwrap();
+    assert!(fixture.wait_mutation());
+    assert!(
+        fixture.app.state.snapshot()["rustLaunchForms"]
+            .get(&native_key)
+            .is_none()
+    );
+}
+
+#[test]
+fn saved_launch_restoration_uses_the_exact_selected_form_slot() {
+    let mut fixture = Fixture::new();
+    let canonical = fixture.app.launch_form_key(0, &json!({"id":"project-a"}));
+    let native = json!([
+        "profile-test",
+        "native-test",
+        "project-a",
+        "native-conversation"
+    ])
+    .to_string();
+    let original = json!({"projectId":"project-a", "title":"Original", "message":"Canonical draft", "selection":null, "workspace":null});
+    let alternative = json!({"projectId":"project-a", "title":"New", "message":"Native draft", "selection":null, "workspace":null});
     fixture
         .app
         .state
         .update(|v| {
-            v["modelPresets"]["native-test"][0]["selection"]["model"] = json!("fixture-fast");
+            v["rustLaunchForms"][&canonical] = original.clone();
+            v["rustLaunchForms"][&native] = alternative.clone();
             Ok(())
         })
         .unwrap();
-    assert!(fixture.app.dispatch(remove).is_err());
+    fixture
+        .app
+        .choose_project_result(0, json!({"id":"project-a"}), NewPurpose::Launch)
+        .unwrap();
+    fixture.until(|app| {
+        app.launch
+            .as_ref()
+            .is_some_and(|l| l.defaults["revision"].is_string())
+    });
+    assert_eq!(fixture.app.launch.as_ref().unwrap().message, "Native draft");
+    fixture
+        .app
+        .dispatch(Intent::Workspace(
+            workspace::WorkspaceAction::RestoreRustLaunch {
+                key: canonical.clone(),
+                draft: original,
+            },
+        ))
+        .unwrap();
+    fixture.until(|app| {
+        app.launch
+            .as_ref()
+            .is_some_and(|l| l.defaults["revision"].is_string())
+    });
+    assert_eq!(fixture.app.launch.as_ref().unwrap().form_key, canonical);
     assert_eq!(
-        fixture.app.state.snapshot()["modelPresets"]["native-test"][0]["selection"]["model"],
-        "fixture-fast"
+        fixture.app.launch.as_ref().unwrap().message,
+        "Canonical draft"
     );
+    fixture.app.launch.as_mut().unwrap().message = "Edited canonical".into();
+    fixture.app.save_launch().unwrap();
+    let saved = fixture.app.state.snapshot();
+    assert_eq!(
+        saved["rustLaunchForms"][&canonical]["message"],
+        "Edited canonical"
+    );
+    assert_eq!(saved["rustLaunchForms"][&native]["message"], "Native draft");
+    assert!(fixture.app.state.pending("native-test", false).is_none());
 }
 
 #[test]
@@ -479,6 +703,7 @@ fn saved_launch_discard_is_explicit_and_cannot_erase_a_newer_edit() {
     let mut fixture = Fixture::new();
     fixture.app.launch = Some(Launch {
         profile: 0,
+        form_key: fixture.app.launch_form_key(0, &json!({"id":"project-a"})),
         project: json!({"id":"project-a"}),
         defaults: Value::Null,
         title: "Human form".into(),

@@ -2,6 +2,10 @@ use super::*;
 
 impl App {
     pub(super) fn begin_new(&mut self, purpose: NewPurpose) -> Result<()> {
+        ensure!(
+            purpose != NewPurpose::Batch,
+            "Task filing is retained for recovery only; use New for a native conversation"
+        );
         let snapshot = self.state.snapshot();
         let pin = &snapshot["creationDestination"];
         let profile = if let Some(p) = self.creation_profile {
@@ -60,6 +64,15 @@ impl App {
         project: Value,
         purpose: NewPurpose,
     ) -> Result<()> {
+        self.choose_project_form_result(profile, project, purpose, None)
+    }
+    pub(super) fn choose_project_form_result(
+        &mut self,
+        profile: usize,
+        project: Value,
+        purpose: NewPurpose,
+        restored_form_key: Option<String>,
+    ) -> Result<()> {
         ensure!(
             domain::valid_id(&string(&project, "id")),
             "Project identity is invalid"
@@ -85,11 +98,21 @@ impl App {
             "Saved launch destination changed; choose its original source"
         );
         let snapshot = self.state.snapshot();
-        let saved = &snapshot["rustLaunchForms"][self.launch_form_key(profile, &project)];
+        let form_key = restored_form_key.unwrap_or_else(|| self.launch_form_key(profile, &project));
+        let saved = &snapshot["rustLaunchForms"][&form_key];
+        ensure!(
+            !saved["batchBinding"].is_object(),
+            "Saved task forms are retained for readback and recovery only"
+        );
+        ensure!(
+            purpose != NewPurpose::Batch,
+            "Task filing is retained for recovery only"
+        );
         let restore = !explicit_import && saved["projectId"] == project["id"];
-        let previous = self.launch.take().filter(|l| {
-            !explicit_import && l.profile == profile && l.project["id"] == project["id"]
-        });
+        let previous = self
+            .launch
+            .take()
+            .filter(|l| !explicit_import && l.profile == profile && l.form_key == form_key);
         let (title, message, selection, workspace, mut batch) = if let Some(l) = previous {
             (l.title, l.message, l.selection, l.workspace, l.batch)
         } else if restore {
@@ -125,6 +148,7 @@ impl App {
         }
         self.launch = Some(Launch {
             profile,
+            form_key,
             project: project.clone(),
             defaults: Value::Null,
             title,
@@ -353,7 +377,7 @@ impl App {
 
     pub(super) fn save_launch(&self) -> Result<()> {
         if let Some(l) = &self.launch {
-            let key = self.launch_form_key(l.profile, &l.project);
+            let key = l.form_key.clone();
             if l.title.is_empty()
                 && l.message.is_empty()
                 && l.workspace.is_none()
@@ -496,11 +520,6 @@ impl App {
             "Input exceeds the editor limit"
         );
         match target {
-            InputTarget::ContextRevisit(row) => self.state.set_draft(
-                &row.source.environment_id,
-                &format!("context-revisit-{}", row.id),
-                text,
-            )?,
             InputTarget::LaunchTitle => {
                 ensure!(text.len() <= 512, "Title exceeds 512 bytes");
                 self.launch.as_mut().context("Launch form expired")?.title = text.to_owned();
@@ -542,8 +561,6 @@ impl App {
         self.preserve_form_edit(&target, &text)?;
         self.dialog = None;
         match target {
-            InputTarget::ContextRevisit(row) => self.context_revisit(&row, &text)?,
-            InputTarget::ContextQuery(scope) => self.context_recall(scope, &text, false, 0)?,
             InputTarget::Search => {
                 self.filter = text;
                 self.refresh(false, true)?;
@@ -552,41 +569,6 @@ impl App {
             InputTarget::LaunchTitle | InputTarget::LaunchMessage => self.launch_menu()?,
             InputTarget::Batch => self.prepare_batch(&text)?,
             InputTarget::Question => self.question_next()?,
-            InputTarget::Favorite => {
-                let name = text.trim();
-                ensure!(
-                    !name.is_empty() && name.len() <= 80,
-                    "Favorite needs a name of at most 80 bytes"
-                );
-                let edit = self.model_edit.as_ref().context("Model review expired")?;
-                let profile = if edit.scope == ModelScope::Launch {
-                    self.launch
-                        .as_ref()
-                        .context("Launch review expired")?
-                        .profile
-                } else {
-                    self.active.as_ref().context("Conversation closed")?.profile
-                };
-                let env = self.environments[profile].environment_id.clone();
-                let selection = edit.selection.clone();
-                self.state.update(|v| {
-                    if !v["modelPresets"].is_object() {
-                        v["modelPresets"] = json!({});
-                    }
-                    let mut presets = array(&v["modelPresets"], &env).to_vec();
-                    ensure!(
-                        !presets
-                            .iter()
-                            .any(|p| string(p, "name").to_lowercase() == name.to_lowercase()),
-                        "A favorite with this name exists; remove it explicitly before replacing"
-                    );
-                    ensure!(presets.len() < 32, "Favorite limit reached");
-                    presets.push(json!({"name":name,"selection":selection}));
-                    v["modelPresets"][&env] = json!(presets);
-                    Ok(())
-                })?;
-                self.model_menu()?;
-            }
             InputTarget::Command => self.command(&text)?,
         }
         Ok(())
@@ -741,11 +723,6 @@ impl App {
                 ModelScope::Launch => "Return to launch review without writing",
             },
             Intent::ModelApply,
-        ));
-        choices.push(Choice::new(
-            "Save favorite",
-            "Store this selection for this environment",
-            Intent::ModelSave,
         ));
         if edit.scope == ModelScope::Next {
             choices.push(Choice::new(

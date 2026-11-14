@@ -130,7 +130,6 @@ impl App {
         self.dialog = None;
         self.dirty = true;
         match intent {
-            Intent::Context(action) => self.context_action(action)?,
             Intent::Workspace(action) => self.workspace_dispatch(action)?,
             Intent::Command(command) => self.command(&command)?,
             Intent::Lane(lane) => {
@@ -192,12 +191,6 @@ impl App {
                 self.model_menu()?;
             }
             Intent::ModelApply => self.apply_model()?,
-            Intent::ModelSave => self.text_dialog(
-                "Save model favorite",
-                "Name this environment-scoped selection.",
-                InputTarget::Favorite,
-                String::new(),
-            ),
             Intent::ClearOverride => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 let key = format!(
@@ -308,9 +301,24 @@ impl App {
             .trim_start_matches('/')
             .split_once(' ')
             .unwrap_or((command.trim().trim_start_matches('/'), ""));
-        if self.context_command(name, args)? {
-            return Ok(());
-        }
+        ensure!(
+            !matches!(
+                name,
+                "context"
+                    | "context-save"
+                    | "context-find"
+                    | "context-history"
+                    | "resume"
+                    | "presets"
+                    | "priority"
+                    | "project-order"
+                    | "priority-filter"
+                    | "priority-undo"
+                    | "batch"
+                    | "file-many"
+            ),
+            "/{name} is inactive; retained drafts and original operations remain in Saved launches and Recovery"
+        );
         match name {
             "commands" => self.palette(),
             "command" => self.text_dialog(

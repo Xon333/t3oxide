@@ -1,4 +1,9 @@
-# Local context controls (B3, S6)
+# Historical local context controls (inactive)
+
+The reduced terminal client does not compile or dispatch this Context/fael path.
+This document and its source are retained for provenance and recovery of unique
+work; the controls below are historical, not commands available in the active
+client. Existing data is neither migrated nor deleted by the reduction.
 
 The owned context store uses `fael-core` 0.0.1 from
 `zecalis/fael@b00e312cc2c313e0595bb0a32214e914439105a8` (MIT). Only its row,
