@@ -32,12 +32,34 @@ Toolchain: Rust/Cargo 1.99.1, Node 24.22.3 on macOS ARM64. Historical
 results below remain evidence for their original source; they do not certify
 this reduced candidate or installed-host adoption.
 
-Host-local doctor checks currently stop at authenticated native HTTP 401 on both
-configured execution hosts. One M1 profile also points to a removed versioned
-Node executable; a private profile copy using the maintained Node path reached
-the same 401. No credential, profile, service or installed client was changed.
-A fresh native send/question/reconnect trial therefore remains pending credential
-renewal by the authorized host owner. No performance-gain claim is made.
+Follow-up native adoption on 2026-11-15 repaired the dedicated generic HTTP
+credentials through the installed CLI on each execution host, preserving their
+original files privately, intended environment/account and host configuration.
+The grants retain `cli-issued-session` with only orchestration read/operate and
+filesystem read scopes. The maintained Node executable path replaced the stale
+M1 versioned path through a guarded one-field profile repair. The source's HTTP
+401 guidance now describes rejection without prescribing renewal or asserting
+expiry; its 26 focused adapter tests passed. Separately approved native MCP
+profiles remained unchanged and independently passed reads on runtime `4695`.
+
+M1's rebuilt candidate completed a live disposable conversation: one exact
+multiline Unicode message was acknowledged, the next draft survived restart,
+and the original native turn completed with the expected response. The user
+answered its question through native T3 before the terminal driver opened the
+form, so this does not claim a live terminal answer-form pass. The existing
+source/fixture question tests remain their own evidence. The disposable source
+was settled with an exact-source acknowledgement; no pending request or client
+operation remained. Driver targeting failures before that send were retained;
+they created no native message and affected only isolated test state.
+
+M4's normal release pointer was guardedly published to the exact verified ARM64
+binary above. Version, hash, signature integrity and authenticated doctor checks
+through both existing execution-host routes passed. All existing draft/recovery
+and other state-file bytes were preserved; only the intended profile Node path
+changed. Previous release and exact profile bytes remain available for guarded
+rollback. No GUI, physical key/clipboard, visual or audio checks ran on M4.
+PR9's hosted Ubuntu Rust, macOS Rust and adapter/scripts checks all passed.
+No performance-gain claim is made.
 
 Native T3 preview/annotations are the default review surface. The optional local
 Rex reviewer has no Artifact API dependency. Its unchanged single-fixture proof
