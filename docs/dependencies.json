@@ -197,26 +197,6 @@
       ]
     },
     {
-      "name": "ascii-dag",
-      "version": "0.11.0",
-      "direct": true,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://github.com/AshutoshMahala/ascii-dag/archive/3e0eb3eb36c3871a2b1259d8eac4fcfd4eef34eb.tar.gz",
-      "checksum": null,
-      "repository": "https://github.com/AshutoshMahala/ascii-dag",
-      "commit": "3e0eb3eb36c3871a2b1259d8eac4fcfd4eef34eb",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "c56cf4037bb50794f7ecccc5a6b66d645a6a488b0637b2d826fe87ea56d714ba"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "ff8452b90ac3f6b5d1888f122ddceae6c54827b768615f87b8ea80527c4192ba"
-        }
-      ]
-    },
-    {
       "name": "atomic",
       "version": "0.6.1",
       "direct": false,
@@ -1221,62 +1201,6 @@
       ]
     },
     {
-      "name": "fael-core",
-      "version": "0.0.1",
-      "direct": true,
-      "license": "MIT",
-      "source": "https://github.com/zecalis/fael/archive/b00e312cc2c313e0595bb0a32214e914439105a8.tar.gz",
-      "checksum": null,
-      "repository": "https://github.com/zecalis/fael",
-      "commit": "b00e312cc2c313e0595bb0a32214e914439105a8",
-      "licenseFiles": [
-        {
-          "path": "../LICENSE",
-          "sha256": "cd0e7ba3b423a3fe1d6c45be22aba2542289c4a4b7f851107a79d6f25c07004d"
-        }
-      ]
-    },
-    {
-      "name": "fallible-iterator",
-      "version": "0.3.0",
-      "direct": false,
-      "license": "MIT/Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/fallible-iterator/0.3.0/download",
-      "checksum": "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649",
-      "repository": "https://github.com/sfackler/rust-fallible-iterator",
-      "commit": "11cfa0558045e52bdb473c9eab6a1eb35a54e302",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "0816e154b159ba255c563f7c8c7df5bbb8cc5fc96f5ab8cf9f4743b4f41fe7eb"
-        }
-      ]
-    },
-    {
-      "name": "fallible-streaming-iterator",
-      "version": "0.1.9",
-      "direct": false,
-      "license": "MIT/Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/fallible-streaming-iterator/0.1.9/download",
-      "checksum": "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a",
-      "repository": "https://github.com/sfackler/fallible-streaming-iterator",
-      "commit": null,
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "8dcec5569a9be5b0e086c80faed6f1aefa670af0ec29cecc2f714303096887e0"
-        }
-      ]
-    },
-    {
       "name": "fancy-regex",
       "version": "0.11.0",
       "direct": false,
@@ -1393,26 +1317,6 @@
       ]
     },
     {
-      "name": "fixedbitset",
-      "version": "0.5.7",
-      "direct": false,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/fixedbitset/0.5.7/download",
-      "checksum": "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99",
-      "repository": "https://github.com/petgraph/fixedbitset",
-      "commit": "f1db5d17dabc4b8f3ba68c1228a3ee7601c7f33c",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "ce592787ff2321feab698a4c612237f4378cc658ebb1d472913e5802cc47afb4"
-        }
-      ]
-    },
-    {
       "name": "fnv",
       "version": "1.0.7",
       "direct": false,
@@ -1429,22 +1333,6 @@
         {
           "path": "LICENSE-MIT",
           "sha256": "65fdb6c76cd61612070c066eec9ecdb30ee74fb27859d0d9af58b9f499fd0c3e"
-        }
-      ]
-    },
-    {
-      "name": "foldhash",
-      "version": "0.1.5",
-      "direct": false,
-      "license": "Zlib",
-      "source": "https://crates.io/api/v1/crates/foldhash/0.1.5/download",
-      "checksum": "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2",
-      "repository": "https://github.com/orlp/foldhash",
-      "commit": "42461756c3760f9165c90d9626a49e36980a1e47",
-      "licenseFiles": [
-        {
-          "path": "LICENSE",
-          "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744"
         }
       ]
     },
@@ -1622,26 +1510,6 @@
     },
     {
       "name": "hashbrown",
-      "version": "0.15.5",
-      "direct": false,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/hashbrown/0.15.5/download",
-      "checksum": "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1",
-      "repository": "https://github.com/rust-lang/hashbrown",
-      "commit": "b751eef8e99ccf3652046ef4a9e1ec47c1bfb78d",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
-        }
-      ]
-    },
-    {
-      "name": "hashbrown",
       "version": "0.17.1",
       "direct": false,
       "license": "MIT OR Apache-2.0",
@@ -1657,26 +1525,6 @@
         {
           "path": "LICENSE-MIT",
           "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
-        }
-      ]
-    },
-    {
-      "name": "hashlink",
-      "version": "0.12.2",
-      "direct": false,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/hashlink/0.12.2/download",
-      "checksum": "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb",
-      "repository": "https://github.com/djc/hashlink",
-      "commit": "c7aaa3c2504c08baf8c97da11f3536258464da8f",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "c144680885b29e4719e2a51f0aab5439a1e02d980692b5aaf086cae12727f28b"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "e915669a595b11a200873df8286561881b0e04932f6412a585db6297ba0bc97c"
         }
       ]
     },
@@ -2169,22 +2017,6 @@
         {
           "path": "LICENSE",
           "sha256": "8d073a6a80d1ef2d2fc2bc6c809aa221161bf1906c76d4aeef55fd2b999d9413"
-        }
-      ]
-    },
-    {
-      "name": "libsqlite3-sys",
-      "version": "0.39.1",
-      "direct": false,
-      "license": "MIT",
-      "source": "https://crates.io/api/v1/crates/libsqlite3-sys/0.39.1/download",
-      "checksum": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3",
-      "repository": "https://github.com/rusqlite/rusqlite",
-      "commit": "fb7c711f4e988db149f43cac68f7865b25d0b10e",
-      "licenseFiles": [
-        {
-          "path": "LICENSE",
-          "sha256": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f"
         }
       ]
     },
@@ -2901,26 +2733,6 @@
       ]
     },
     {
-      "name": "petgraph",
-      "version": "0.8.3",
-      "direct": true,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://github.com/petgraph/petgraph/archive/162903562ce5b00cdba390a0d9c1bb80f1c75bf5.tar.gz",
-      "checksum": null,
-      "repository": "https://github.com/petgraph/petgraph",
-      "commit": "162903562ce5b00cdba390a0d9c1bb80f1c75bf5",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "7576269ea71f767b99297934c0b2367532690f8c4badc695edf8e04ab6a1e545"
-        }
-      ]
-    },
-    {
       "name": "phf",
       "version": "0.11.3",
       "direct": false,
@@ -3017,26 +2829,6 @@
         {
           "path": "LICENSE-MIT",
           "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-        }
-      ]
-    },
-    {
-      "name": "pkg-config",
-      "version": "0.3.34",
-      "direct": false,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/pkg-config/0.3.34/download",
-      "checksum": "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548",
-      "repository": "https://github.com/rust-lang/pkg-config-rs",
-      "commit": "a8852cc148f8f7d504bf3a62444c298dcd3637f0",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
         }
       ]
     },
@@ -3492,39 +3284,6 @@
       ]
     },
     {
-      "name": "rsqlite-vfs",
-      "version": "0.2.0",
-      "direct": false,
-      "license": "MIT",
-      "source": "https://crates.io/api/v1/crates/rsqlite-vfs/0.2.0/download",
-      "checksum": "353b74f9810d5b085b6c42c9d86a5f0fdb795553235cdd48753b32e3809d18a7",
-      "repository": "https://github.com/Spxg/sqlite-wasm-rs",
-      "commit": "3d8318430bacd7d6a1aafdf5b5e54fb0fee8d451",
-      "licenseFiles": [
-        {
-          "path": "upstream license",
-          "sha256": "e1c1975c3474cce31722836f101a40ffaf1cc784e4d2f38ce3e77b9712934e78",
-          "source": "https://github.com/Spxg/sqlite-wasm-rs/blob/3d8318430bacd7d6a1aafdf5b5e54fb0fee8d451/LICENSE"
-        }
-      ]
-    },
-    {
-      "name": "rusqlite",
-      "version": "0.41.1",
-      "direct": false,
-      "license": "MIT",
-      "source": "https://crates.io/api/v1/crates/rusqlite/0.41.1/download",
-      "checksum": "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594",
-      "repository": "https://github.com/rusqlite/rusqlite",
-      "commit": "18ee76dbb976d5ef7e37ad5a8fffae678ca21a78",
-      "licenseFiles": [
-        {
-          "path": "LICENSE",
-          "sha256": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f"
-        }
-      ]
-    },
-    {
       "name": "rustc_version",
       "version": "0.4.1",
       "direct": false,
@@ -3753,26 +3512,6 @@
       ]
     },
     {
-      "name": "sha1",
-      "version": "0.11.0",
-      "direct": false,
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/sha1/0.11.0/download",
-      "checksum": "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214",
-      "repository": "https://github.com/RustCrypto/hashes",
-      "commit": "2f00175af936de46b3ddefe65c4de93cb4e876e4",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "831e0f43ad0bf014c1c4fec5767aae470434c1d66d6e671be2d823e729063e25"
-        }
-      ]
-    },
-    {
       "name": "sha2",
       "version": "0.10.9",
       "direct": true,
@@ -3969,22 +3708,6 @@
         {
           "path": "LICENSE-MIT",
           "sha256": "0b28172679e0009b655da42797c03fd163a3379d5cfa67ba1f1655e974a2a1a9"
-        }
-      ]
-    },
-    {
-      "name": "sqlite-wasm-rs",
-      "version": "0.6.2",
-      "direct": false,
-      "license": "MIT",
-      "source": "https://crates.io/api/v1/crates/sqlite-wasm-rs/0.6.2/download",
-      "checksum": "36bd8e29bf08189a005b2df1df99823aa0861cabe9044e5f31ed54ca292ee618",
-      "repository": "https://github.com/Spxg/sqlite-wasm-rs",
-      "commit": "4b5c931e88ac09a114bd58368402a74761cec311",
-      "licenseFiles": [
-        {
-          "path": "LICENSE",
-          "sha256": "e1c1975c3474cce31722836f101a40ffaf1cc784e4d2f38ce3e77b9712934e78"
         }
       ]
     },
@@ -4925,26 +4648,6 @@
         {
           "path": "LICENSE-MIT",
           "sha256": "436bc5a105d8e57dcd8778730f3754f7bf39c14d2f530e4cde4bd2d17a83ec3d"
-        }
-      ]
-    },
-    {
-      "name": "vcpkg",
-      "version": "0.2.15",
-      "direct": false,
-      "license": "MIT/Apache-2.0",
-      "source": "https://crates.io/api/v1/crates/vcpkg/0.2.15/download",
-      "checksum": "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426",
-      "repository": "https://github.com/mcgoo/vcpkg-rs",
-      "commit": "e7d37e095ef2aa85c80242aa3850d442832b7b54",
-      "licenseFiles": [
-        {
-          "path": "LICENSE-APACHE",
-          "sha256": "3708458dee7f359ac6c9c5558023ed481be87e5372c43ebd7f2ca7ad23c12026"
-        },
-        {
-          "path": "LICENSE-MIT",
-          "sha256": "ff7d99434986ba68f6575d689fd9cc11d93a486876b19004e1bacc0f6ca554d4"
         }
       ]
     },

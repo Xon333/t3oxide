@@ -1,3 +1,60 @@
+# Reduced terminal candidate — 2026-11-15
+
+This focused replacement starts at adopted Rust/SLT main `4543e73`. The large
+PR7 expansion and later demo source remain historical inputs, not an accepted
+merge. Unique local work, recovery inputs and the unfinished 17-card review deck
+were preserved before this reduction.
+
+The active crate excludes local Context/fael, project graph and dependency
+ranking. B lists native projects/questions directly. Retired local context,
+priority, preset and batch-creation commands reject dispatch; historical saved
+inputs remain readable. Ordinary New uses a separate durable slot when a
+historical batch form occupies its original slot. Sends preserve exact human
+text; reconnect retains original uncertain-operation identities without replay.
+Native T3 remains the owner of orchestration, graphs, context and requests.
+
+Current M1 checks:
+
+| Check | Result |
+| --- | --- |
+| `scripts/check-rust.sh` | Format and strict Clippy (application/vendor) passed; **129 library + 11 integration tests** passed after both review corrections |
+| `scripts/check.sh` | **259 Node + 5 Python tests** passed; adapter source unchanged after that run |
+| Dependency notices | Maintained generator recorded **274 upstream packages**; surviving locked versions were preserved |
+| Whitespace | `git diff --check` passed |
+| Release SLT PTY | **15 outcomes** passed with the rebuilt binary; synthetic native endpoints, no provider calls |
+| M1 release | `scripts/build-rust.sh` passed; ARM64 Mach-O, `codesign --verify --strict` passed |
+
+The release is **7,872,992 bytes**, SHA-256
+`4056b0a7d4b93d89cc53625e47db4f25abb7a9d69181d5e75ffecea704425ed6`. Signature verification is
+the build artifact’s ad-hoc integrity check, not notarization.
+
+Toolchain: Rust/Cargo 1.99.1, Node 24.22.3 on macOS ARM64. Historical
+results below remain evidence for their original source; they do not certify
+this reduced candidate or installed-host adoption.
+
+Host-local doctor checks currently stop at authenticated native HTTP 401 on both
+configured execution hosts. One M1 profile also points to a removed versioned
+Node executable; a private profile copy using the maintained Node path reached
+the same 401. No credential, profile, service or installed client was changed.
+A fresh native send/question/reconnect trial therefore remains pending credential
+renewal by the authorized host owner. No performance-gain claim is made.
+
+Native T3 preview/annotations are the default review surface. The optional local
+Rex reviewer has no Artifact API dependency. Its unchanged single-fixture proof
+covers draft/history persistence and deliberate return to the original thread;
+PTY Kitty acknowledgements alone do not establish native pixels or key handling.
+A fresh native M1 Rex check additionally received a real Kitty capability
+acknowledgement, entered the card screen, saved/revisited a Unicode fixture
+comment through native input and exited normally with code 0. Its exact owned
+background tab was closed after saved-file readback; unrelated layout/focus was
+unchanged. The live server was preview14/API12; the installed CLI was preview19.
+This qualifies protocol acceptance and lifecycle, not physical image pixels or
+keyboard chords. This thread has no callable Rex MCP connector; C supplied its
+separate MCP/native Lua findings. No new renderer or layout framework was added.
+The unfinished D01–D11/AM01–AM06 deck and user comments remain untouched.
+
+---
+
 # Revised Rust/SLT integration — 2026-11-05
 
 Current source integrates maintained Rust `58cb5f8b0dc4df27a2b414fa95903112a58783c8`

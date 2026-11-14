@@ -62,6 +62,13 @@ fn lane(stop: bool) -> &'static str {
     if stop { "pendingStops" } else { "pending" }
 }
 
+// Historical three-part keys remain exact. A separate single-conversation slot
+// avoids overwriting retained batch forms and their original pending identities.
+pub(crate) fn valid_launch_form_ids(ids: &[String]) -> bool {
+    (ids.len() == 3 || (ids.len() == 4 && ids[3] == "native-conversation"))
+        && ids.iter().all(|id| valid_id(id, 4096))
+}
+
 impl State {
     /// Import the former client state once, without changing its file or host journals.
     /// Existing Rust state always wins, including an intentionally empty state.
@@ -514,7 +521,9 @@ impl State {
                     let ids: Vec<String> = serde_json::from_str(form_key)
                         .context("invalid saved launch form source")?;
                     ensure!(
-                        ids.len() == 3 && ids[1] == environment && old["projectId"] == ids[2],
+                        valid_launch_form_ids(&ids)
+                            && ids[1] == environment
+                            && old["projectId"] == ids[2],
                         "launch form acknowledgement changed its original source"
                     );
                     if let Some(form) = value["rustLaunchForms"].get(form_key) {
@@ -895,8 +904,7 @@ fn validate(value: &Value) -> Result<()> {
             let ids: Vec<String> =
                 serde_json::from_str(key).context("launch form needs exact source identity")?;
             ensure!(
-                ids.len() == 3
-                    && ids.iter().all(|id| valid_id(id, 4096))
+                valid_launch_form_ids(&ids)
                     && serde_json::to_string(&ids)? == *key
                     && form["projectId"] == ids[2],
                 "invalid launch form source"

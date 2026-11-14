@@ -149,7 +149,6 @@ impl WorkspaceState {
                 .get("sltBrowserScope")
                 .filter(|v| v.is_object())
                 .cloned(),
-            ranks: saved["inboxPreferences"].clone(),
             ..Self::default()
         }
     }
@@ -357,6 +356,15 @@ impl App {
         Ok(true)
     }
     pub(super) fn workspace_dispatch(&mut self, action: WorkspaceAction) -> Result<()> {
+        ensure!(
+            !matches!(
+                action,
+                WorkspaceAction::Preset { .. }
+                    | WorkspaceAction::ApplyPreset { .. }
+                    | WorkspaceAction::RemovePreset { .. }
+            ),
+            "Model favorites are inactive; stored selections are preserved"
+        );
         match action {
             WorkspaceAction::SearchEnvironment(profile) => {
                 ensure!(profile < self.environments.len(), "Environment changed");
@@ -640,6 +648,10 @@ impl App {
                     self.state.snapshot()["rustLaunchForms"][&key] == draft,
                     "Saved form changed; reopen it"
                 );
+                if draft["batchBinding"].is_object() {
+                    self.detail("Saved task draft", serde_json::to_string_pretty(&draft)?);
+                    return Ok(());
+                }
                 self.menu(format!("Saved launch · {}",string(&draft,"title")),format!("Source: {key}. Restore opens a fresh native review. Discard removes only this exact local form."),vec![
                     Choice::new("Keep saved","",Intent::Close),
                     Choice::new("Restore launch review","Keep its original environment and project",Intent::Workspace(WorkspaceAction::RestoreRustLaunch{key:key.clone(),draft:draft.clone()})),
@@ -668,9 +680,11 @@ impl App {
                         .remove(&key);
                     Ok(())
                 })?;
-                if self.launch.as_ref().is_some_and(|launch| {
-                    self.launch_form_key(launch.profile, &launch.project) == key
-                }) {
+                if self
+                    .launch
+                    .as_ref()
+                    .is_some_and(|launch| launch.form_key == key)
+                {
                     self.launch = None;
                     self.workspace.batch = None;
                     self.workspace.legacy_launch = None;
@@ -683,16 +697,24 @@ impl App {
                     "Saved form changed; reopen it"
                 );
                 let ids: Vec<String> = serde_json::from_str(&key)?;
-                ensure!(ids.len() == 3, "Saved launch source is invalid");
+                ensure!(
+                    crate::state::valid_launch_form_ids(&ids),
+                    "Saved launch source is invalid"
+                );
+                if draft["batchBinding"].is_object() {
+                    self.detail("Saved task draft", serde_json::to_string_pretty(&draft)?);
+                    return Ok(());
+                }
                 let profile = self
                     .environments
                     .iter()
                     .position(|env| env.id == ids[0] && env.environment_id == ids[1])
                     .context("Original launch profile is unavailable")?;
-                self.choose_project_result(
+                self.choose_project_form_result(
                     profile,
                     json!({"id":ids[2],"title":ids[2]}),
                     NewPurpose::Launch,
+                    Some(key),
                 )?;
             }
             WorkspaceAction::SavedBatch { key, text } => {
@@ -700,17 +722,7 @@ impl App {
                     self.state.snapshot()["drafts"][&key] == text,
                     "Saved task list changed; reopen saved drafts"
                 );
-                let (environment, suffix) = key
-                    .split_once("/\0file-many/")
-                    .context("Task list has no exact source")?;
-                let profile = self
-                    .environments
-                    .iter()
-                    .position(|e| e.environment_id == environment)
-                    .context("Original task-list environment is unavailable")?;
-                self.workspace.resuming_batch =
-                    Some((environment.into(), format!("\0file-many/{suffix}")));
-                self.choose_project(profile, NewPurpose::Batch)?;
+                self.detail("Saved task list", format!("Source: {key}\n\n{text}"));
             }
             WorkspaceAction::ResetLaunchDefaults => {
                 let launch = self.launch.as_mut().context("Open a launch review first")?;
@@ -1285,7 +1297,22 @@ impl App {
     }
     pub(super) fn launch_form_key(&self, profile: usize, project: &Value) -> String {
         let env = &self.environments[profile];
-        json!([env.id, env.environment_id, string(project, "id")]).to_string()
+        let canonical = json!([env.id, env.environment_id, string(project, "id")]).to_string();
+        let native = json!([
+            env.id,
+            env.environment_id,
+            string(project, "id"),
+            "native-conversation"
+        ])
+        .to_string();
+        let saved = self.state.snapshot();
+        if saved["rustLaunchForms"][&canonical]["batchBinding"].is_object()
+            || saved["rustLaunchForms"].get(&native).is_some()
+        {
+            native
+        } else {
+            canonical
+        }
     }
     pub(super) fn restore_launch_bindings(
         &mut self,
@@ -1332,7 +1359,7 @@ impl App {
     pub(super) fn bind_launch_submission(&self, launch: &Launch, fields: &mut Value) -> Result<()> {
         let mut bindings = json!({});
         self.save_launch_bindings(launch, &mut bindings)?;
-        let form_key = self.launch_form_key(launch.profile, &launch.project);
+        let form_key = launch.form_key.clone();
         let saved = self.state.snapshot();
         let form = saved["rustLaunchForms"]
             .get(&form_key)
@@ -1499,7 +1526,7 @@ impl App {
             "Includes original imported drafts",
             Intent::Command("saved-launches".into()),
         ));
-        self.menu("Task filing receipts", "Each item records its own native operation identity. Continue always opens a new explicit review.", choices);
+        self.menu("Task filing receipts", "Each item records its own native operation identity. Saved lists remain readable; new work uses native conversations.", choices);
         Ok(())
     }
     fn batch_receipt(&mut self, id: &str) -> Result<()> {
@@ -1555,8 +1582,8 @@ impl App {
             .any(|item| item["state"] == "Remaining draft")
         {
             choices.push(Choice::new(
-                "Review next unfiled task",
-                "Restore the exact remaining human list",
+                "View remaining draft",
+                "Read the retained human list without filing tasks",
                 Intent::Workspace(WorkspaceAction::ResumeBatch(id.into())),
             ));
         }
@@ -1571,43 +1598,14 @@ impl App {
         let receipt = saved["batchReceipts"]
             .get(id)
             .context("Receipt is unavailable")?;
-        ensure!(
-            !array(receipt, "items")
-                .iter()
-                .any(|item| item["state"] == "Needs recovery"),
-            "Resolve the original operation before continuing this list"
-        );
         let environment = string(receipt, "environmentId");
-        let profile = self
-            .environments
-            .iter()
-            .position(|env| env.environment_id == environment)
-            .context("Original task environment is unavailable")?;
         let source = string(receipt, "source");
-        let item = array(receipt, "items")
-            .iter()
-            .find(|item| item["state"] == "Remaining draft")
-            .context("Every task is already acknowledged")?;
-        let original = string(receipt, "original");
-        let remaining = original
-            .get(item["start"].as_u64().unwrap_or(usize::MAX as u64) as usize..)
-            .context("Saved task offset is invalid")?;
-        ensure!(
-            self.state.draft(&environment, &source) == remaining,
-            "The remaining draft was edited; open Saved launch forms and task lists to review its newer text"
+        let remaining = self.state.draft(&environment, &source);
+        self.detail(
+            "Remaining task draft",
+            format!("Environment: {environment}\nSource: {source}\nReceipt: {id}\n\n{remaining}"),
         );
-        self.workspace.resuming_batch = Some((environment, source));
-        self.workspace.batch = None;
-        let project = string(receipt, "projectId");
-        if domain::valid_id(&project) {
-            self.choose_project_result(
-                profile,
-                json!({"id": project, "title": project}),
-                NewPurpose::Batch,
-            )
-        } else {
-            self.choose_project(profile, NewPurpose::Batch)
-        }
+        Ok(())
     }
     pub(super) fn preserve_workspace_position(&mut self) -> Result<()> {
         self.save_reading_position()?;
@@ -1732,20 +1730,14 @@ impl App {
         })
     }
     pub(super) fn workspace_order(&mut self) {
-        let preferences = &self.workspace.ranks;
         self.visible.retain(|(index, _)| {
             let thread = &self.threads[*index];
             let env = &self.environments[thread.profile];
-            let source_ok = self.workspace.project_scope.as_ref().is_none_or(|scope| {
+            self.workspace.project_scope.as_ref().is_none_or(|scope| {
                 scope["profileId"] == env.id
                     && scope["environmentId"] == env.environment_id
                     && scope["projectId"] == thread.project_id
-            });
-            let priority = preferences["taskPriorities"]
-                [rank_key(&env.environment_id, &thread.project_id, &thread.id)]
-            .as_u64()
-            .unwrap_or(1);
-            source_ok && priority >= self.workspace.minimum_priority
+            })
         });
         let present: HashSet<_> = self
             .visible

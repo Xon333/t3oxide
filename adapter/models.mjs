@@ -70,7 +70,7 @@ export function runtimeDetails(p) {
     runMessageId: optionalIdentifier(run?.userMessageId),
     providerThreadId: providerThread?.id ?? null,
     providerSessionId: session?.id ?? null,
-    status: clip(observed.source === 'provider-turn' ? observed.status : run?.status ?? providerThread?.status ?? 'unreported', 64).text,
+    status: clip(observed.status, 64).text,
     activitySource: observed.source,
     runModelSelection: optionalSelection(run?.modelSelection),
     providerReportedSelection: optionalSelection(providerThread?.nativeMetadata?.modelSelection),

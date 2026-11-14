@@ -599,29 +599,52 @@ fn uncertain_settlement_retains_original_id_and_reconciles_only_explicitly() {
 fn acknowledged_send_preserves_newer_identical_human_draft() {
     let mut fixture = Fixture::new(600);
     fixture.open(0);
-    fixture.app.replace_text("same human text".into());
+    fixture
+        .app
+        .replace_text("Exact human text\n日本語 · no orchestration suffix".into());
     fixture.app.flush_draft().unwrap();
     let submitted = fixture.app.draft_version;
     fixture.app.command("send").unwrap();
+    let original = fixture.app.state.pending("native-0", false).unwrap();
+    assert_eq!(
+        original["message"],
+        "Exact human text\n日本語 · no orchestration suffix"
+    );
     fixture.wait_native_effect(0);
+    let native: Value =
+        serde_json::from_slice(&fs::read(&fixture.native_states[0]).unwrap()).unwrap();
+    assert!(
+        array(&native["projections"]["thread-a"], "turnItems")
+            .iter()
+            .any(|item| { item["type"] == "user_message" && item["text"] == original["message"] }),
+        "native dispatch must preserve the human message exactly"
+    );
     fixture.app.replace_text(String::new());
-    fixture.app.replace_text("same human text".into());
+    fixture
+        .app
+        .replace_text("Exact human text\n日本語 · no orchestration suffix".into());
     fixture.app.flush_draft().unwrap();
     assert!(fixture.app.draft_version > submitted);
     let event = fixture.next_mutation();
     assert!(matches!(&event, Background::Mutation { result: Ok(_), .. }));
     fixture.app.handle(event).unwrap();
-    assert_eq!(fixture.app.text(), "same human text");
+    assert_eq!(
+        fixture.app.text(),
+        "Exact human text\n日本語 · no orchestration suffix"
+    );
     assert_eq!(
         fixture.app.state.draft("native-0", "thread-a"),
-        "same human text"
+        "Exact human text\n日本語 · no orchestration suffix"
     );
     assert!(fixture.app.state.pending("native-0", false).is_none());
     let disk: Value = serde_json::from_slice(
         &fs::read(fixture.directory.path().join("rust-state.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(disk["drafts"]["native-0/thread-a"], "same human text");
+    assert_eq!(
+        disk["drafts"]["native-0/thread-a"],
+        "Exact human text\n日本語 · no orchestration suffix"
+    );
 }
 
 #[test]
@@ -1023,87 +1046,6 @@ fn obsolete_navigation_ack_cannot_unlock_the_current_live_transition() {
         .unwrap();
     assert!(!fixture.app.active.as_ref().unwrap().navigating);
     assert!(fixture.app.active.as_ref().unwrap().navigation.is_none());
-}
-
-#[test]
-fn context_capture_and_resume_keep_original_native_scope_without_dispatch() {
-    use crate::context_store::{Query, Scope, Store};
-    let mut fixture = Fixture::new(0);
-    fixture.load_pages();
-    fixture.open_thread(0, "thread-review");
-    fixture.app.command("context-save").unwrap();
-    let capture = fixture
-        .app
-        .dialog
-        .as_ref()
-        .unwrap()
-        .choices
-        .iter()
-        .find(|choice| choice.label == "Evidence")
-        .unwrap()
-        .intent
-        .clone();
-    fixture.open_thread(1, "thread-review");
-    fixture.app.dispatch(capture).unwrap();
-    let mut context_path = fixture.app.state.path().as_os_str().to_os_string();
-    context_path.push(".context");
-    let store = Store::open(Path::new(&context_path)).unwrap();
-    let query = Query::new(Scope {
-        environment_id: "native-0".into(),
-        project_id: Some("project-a".into()),
-        thread_id: Some("thread-review".into()),
-    });
-    let pack = store.recall(&query).unwrap();
-    assert_eq!(pack.eligible, 1);
-    assert_eq!(pack.rows[0].source.environment_id, "native-0");
-    assert_eq!(
-        pack.rows[0].source.item_id.as_deref(),
-        Some("thread-review-answer")
-    );
-    let captured: Value =
-        serde_json::from_slice(&store.source(&pack.rows[0].id).unwrap().bytes).unwrap();
-    assert!(string(&captured, "text").contains("日本語 café 🙂"));
-    assert_eq!(
-        store
-            .recall(&Query::new(Scope {
-                environment_id: "native-1".into(),
-                ..query.scope.clone()
-            }))
-            .unwrap()
-            .eligible,
-        0
-    );
-    drop(store);
-    fixture
-        .app
-        .context_action(context::Action::Source(pack.rows[0].id.clone()))
-        .unwrap();
-    let detail = &fixture.app.dialog.as_ref().unwrap().detail;
-    assert!(detail.contains("native-0") && detail.contains("project-a"));
-    assert!(detail.contains("capturedItemOnly") && detail.contains("historical"));
-    fixture.open_thread(0, "thread-review");
-    fixture.app.replace_text("Unsent exact draft 日本語".into());
-    fixture.app.flush_draft().unwrap();
-    let pending = json!({"id":"original-context-operation","environmentId":"native-0","threadId":"thread-review","op":"answer","requestId":"original-request","revision":"original-request-revision","answers":{"field":"value"}});
-    fixture
-        .app
-        .state
-        .save_pending("native-0", false, pending.clone())
-        .unwrap();
-    fixture.app.command("resume").unwrap();
-    let dialog = fixture.app.dialog.as_ref().unwrap();
-    assert!(dialog.detail.contains("original-context-operation"));
-    assert!(dialog.detail.contains("original-request-revision"));
-    assert!(dialog.detail.contains("original-request"));
-    assert!(dialog.detail.contains("Unsent exact draft 日本語"));
-    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
-    assert_eq!(fixture.app.text(), "Unsent exact draft 日本語");
-    for file in &fixture.native_states {
-        assert!(
-            !file.exists(),
-            "context capture/recall/resume must not dispatch native effects"
-        );
-    }
 }
 
 #[test]
@@ -1849,4 +1791,80 @@ fn restore_shortcut_uses_retained_settled_summary_after_unpin_removes_the_row() 
     assert!(
         matches!(&event,Background::Mutation{context,fields,..} if context.profile==0 && fields["threadId"]=="thread-review" && fields["action"]=="unsettle")
     );
+}
+
+#[test]
+fn terminal_default_ignores_retained_context_and_preserves_uncertain_identity() {
+    for retained in [false, true] {
+        let mut fixture = Fixture::new(0);
+        let path = fixture.app.state.path().with_extension("json.context");
+        if retained {
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("unique-history"), b"retained opaque source").unwrap();
+        }
+        fixture.load_pages();
+        fixture.open(0);
+        fixture
+            .app
+            .replace_text("Protected human draft 日本語".into());
+        fixture.app.flush_draft().unwrap();
+        let original = json!({"id":"exact-uncertain-id", "op":"send", "environmentId":"native-0", "threadId":"thread-a", "message":"Original bytes\n日本語", "mode":"auto"});
+        fixture
+            .app
+            .state
+            .save_pending("native-0", false, original.clone())
+            .unwrap();
+        let before = fixture.app.state.snapshot();
+        for command in [
+            "context",
+            "context-save",
+            "context-find",
+            "context-history",
+            "resume",
+            "presets",
+            "priority",
+            "project-order",
+            "priority-filter",
+            "priority-undo",
+            "batch",
+            "file-many",
+        ] {
+            assert!(
+                fixture.app.command(command).is_err(),
+                "retired /{command} must not open a local store"
+            );
+        }
+        fixture.app.command("reconnect").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fixture.app.active.as_ref().unwrap().navigating {
+            let event = fixture
+                .app
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap();
+            fixture.app.handle(event).unwrap();
+        }
+        let mut surface = crate::slt_ui::SurfaceState::new();
+        fixture.app.populate_surface(&mut surface);
+        surface.attention_mode = true;
+        fixture.app.populate_surface(&mut surface);
+        assert_eq!(fixture.app.state.pending("native-0", false), Some(original));
+        assert_eq!(fixture.app.state.snapshot()["drafts"], before["drafts"]);
+        assert_eq!(
+            path.exists(),
+            retained,
+            "ordinary navigation must not initialize context storage"
+        );
+        if retained {
+            assert_eq!(
+                fs::read(path.join("unique-history")).unwrap(),
+                b"retained opaque source"
+            );
+            assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+        }
+        assert!(
+            fixture.native_states.iter().all(|path| !path.exists()),
+            "reconnect never replays the uncertain mutation"
+        );
+    }
 }

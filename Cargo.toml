@@ -9,14 +9,11 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-ascii-dag = { git = "https://github.com/AshutoshMahala/ascii-dag", rev = "3e0eb3eb36c3871a2b1259d8eac4fcfd4eef34eb", version = "=0.11.0" }
 base64 = "0.22"
 crossbeam-channel = "0.5"
 crossterm = "0.29"
-fael-core = { git = "https://github.com/zecalis/fael", rev = "b00e312cc2c313e0595bb0a32214e914439105a8", version = "=0.0.1" }
 libc = "0.2"
 nucleo-matcher = "=0.3.1"
-petgraph = { git = "https://github.com/petgraph/petgraph", rev = "162903562ce5b00cdba390a0d9c1bb80f1c75bf5", version = "=0.8.3" }
 pulldown-cmark = "0.13"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 ratatui-textarea = "=0.9.3"

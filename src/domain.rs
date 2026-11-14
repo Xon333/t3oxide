@@ -435,24 +435,6 @@ pub struct Action {
 }
 pub const ACTIONS: &[Action] = &[
     Action {
-        name: "context",
-        label: "Context records",
-        description: "Recall captured decisions, evidence, journals and local open loops",
-        key: "",
-    },
-    Action {
-        name: "context-save",
-        label: "Capture source",
-        description: "Explicitly retain the latest native agent message and its provenance",
-        key: "",
-    },
-    Action {
-        name: "resume",
-        label: "Resume context",
-        description: "Review local context with protected drafts, original operations and native questions",
-        key: "",
-    },
-    Action {
         name: "answer-drafts",
         label: "Saved answers",
         description: "Review retained answers and original source revisions",
@@ -621,12 +603,6 @@ pub const ACTIONS: &[Action] = &[
         key: "",
     },
     Action {
-        name: "presets",
-        label: "Model favorites",
-        description: "Save and apply environment-scoped selections",
-        key: "",
-    },
-    Action {
         name: "runtime",
         label: "Effective runtime",
         description: "Compare saved, requested and provider-reported selections",
@@ -648,12 +624,6 @@ pub const ACTIONS: &[Action] = &[
         name: "new-same",
         label: "New in same project",
         description: "Carry project identity; resolve native defaults afresh",
-        key: "",
-    },
-    Action {
-        name: "batch",
-        label: "File multiple tasks",
-        description: "Review separate native launches from human-authored briefs",
         key: "",
     },
     Action {
@@ -756,30 +726,6 @@ pub const ACTIONS: &[Action] = &[
         name: "project",
         label: "Browse project",
         description: "Scope loaded conversations without changing creation destination",
-        key: "",
-    },
-    Action {
-        name: "priority",
-        label: "Task priority",
-        description: "Local presentation rank; no execution scheduling",
-        key: "",
-    },
-    Action {
-        name: "project-order",
-        label: "Project order",
-        description: "Arrange exact native projects locally",
-        key: "",
-    },
-    Action {
-        name: "priority-filter",
-        label: "Minimum local priority",
-        description: "Show all, Medium, High or Urgent tasks",
-        key: "",
-    },
-    Action {
-        name: "priority-undo",
-        label: "Undo local priority change",
-        description: "Restore prior ranks only if their revision is unchanged",
         key: "",
     },
     Action {

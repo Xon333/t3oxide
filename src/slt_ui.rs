@@ -1,7 +1,7 @@
 //! SLT owns active terminal rendering, widget focus and editor input (A1–A5, B1–B3).
 //! Controller actions retain native source identities; a widget never acknowledges a write.
 
-use crate::{domain, project_graph, reports, ui};
+use crate::{domain, reports, ui};
 use ratatui_textarea::TextArea;
 use serde_json::Value;
 use slt::{
@@ -84,14 +84,13 @@ pub struct SurfaceState {
     pub thread_sources: BTreeMap<String, Source>,
     pub projects: Vec<Source>,
     pub questions: Vec<AttentionItem>,
-    pub dependency_status: String,
     pub attention_mode: bool,
     pub internal_tabs: bool,
     pub show_context: bool,
     pub(crate) focus: Option<ui::Focus>,
     pub selected_project: Option<String>,
     pub selected_question: Option<String>,
-    pub graph_global: bool,
+    pub projects_global: bool,
     composer: TextareaState,
     composer_key: String,
     tab_editors: HashMap<String, TextareaState>,
@@ -107,8 +106,8 @@ pub struct SurfaceState {
     pub(crate) transcript_jump: Option<(String, String, usize)>,
     controller_scroll: Option<(usize, bool)>,
     attention_scroll: ScrollState,
+    projects_scroll: ScrollState,
     support_scroll: ScrollState,
-    project_graph: project_graph::ProjectGraph,
     modal_scroll: ScrollState,
     context_scroll: ScrollState,
     command_selected: usize,
@@ -124,7 +123,7 @@ impl SurfaceState {
     pub fn new() -> Self {
         Self {
             internal_tabs: true,
-            graph_global: true,
+            projects_global: true,
             transcript: ScrollState::new().stick_to_bottom(true),
             ..Self::default()
         }
@@ -273,15 +272,6 @@ fn draw_context(
                 if !value.is_empty() {
                     ctx.text(label).dim();
                     ctx.text(value).wrap();
-                }
-            }
-            for (label, command) in [
-                ("Records", "context"),
-                ("Capture source", "context-save"),
-                ("Resume", "resume"),
-            ] {
-                if ctx.button(label).clicked {
-                    actions.push(Action::Command(command.into()));
                 }
             }
         });
@@ -778,124 +768,55 @@ fn draw_attention(
                     }
                 });
             // B1: level changes retain this region and the selected report.
-            let graph_height = (height / 3).clamp(6, 11);
-            ctx.container()
-                .h(graph_height)
+            let project_height = (height / 3).clamp(6, 11);
+            ctx.scrollable(&mut state.projects_scroll)
+                .h(project_height)
                 .border(Border::Rounded)
                 .title("Projects")
                 .col(|ctx| {
-                    if !state.graph_global && ctx.button("↑ All projects").clicked {
-                        state.graph_global = true;
+                    if !state.projects_global && ctx.button("↑ All projects").clicked {
+                        state.projects_global = true;
                     }
-                    let mut sources = state.projects.clone();
-                    for question in &state.questions {
-                        if !sources
-                            .iter()
-                            .any(|source| source.project_key() == question.source.project_key())
-                        {
-                            sources.push(question.source.clone());
-                        }
-                    }
-                    let mut nodes = Vec::new();
-                    let mut edges = Vec::new();
-                    for source in &sources {
-                        if !state.graph_global
-                            && state.selected_project.as_deref() != Some(&source.project_key())
-                        {
+                    for (key, (name, environment, count)) in &projects {
+                        if !state.projects_global && state.selected_project.as_ref() != Some(key) {
                             continue;
                         }
-                        let project_id = project_node(source);
-                        nodes.push(project_graph::Node {
-                            id: project_id.clone(),
-                            label: source.project.clone(),
-                            color: identity_color(&source.project_key()),
-                        });
-                        if !state.graph_global {
-                            for question in state.questions.iter().filter(|question| {
-                                question.source.project_key() == source.project_key()
-                            }) {
-                                let id = question_node(question);
-                                nodes.push(project_graph::Node {
-                                    id: id.clone(),
-                                    label: question.title.clone(),
-                                    color: identity_color(&source.project_key()),
-                                });
-                                edges.push(project_graph::Edge {
-                                    from: project_id.clone(),
-                                    to: id,
-                                });
-                            }
-                        }
-                    }
-                    let selected = if state.graph_global {
-                        sources
-                            .iter()
-                            .find(|source| {
-                                state.selected_project.as_deref() == Some(&source.project_key())
-                            })
-                            .map(project_node)
-                    } else {
-                        state
-                            .questions
-                            .iter()
-                            .find(|question| {
-                                Some(&question.key) == state.selected_question.as_ref()
-                            })
-                            .map(question_node)
-                    };
-                    match state.project_graph.draw(
-                        ctx,
-                        &nodes,
-                        &edges,
-                        selected.as_ref(),
-                        26,
-                        graph_height.saturating_sub(if state.graph_global { 2 } else { 3 }),
-                    ) {
-                        Ok(response) => {
-                            if let Some(activated) = response.activated {
-                                match activated {
-                                    project_graph::NodeId::Project {
-                                        environment_id,
-                                        project_id,
-                                    } => {
-                                        let key = format!("{environment_id}\0{project_id}");
-                                        if state.selected_project.as_ref() != Some(&key) {
-                                            let question = state
-                                                .questions
-                                                .iter()
-                                                .find(|question| {
-                                                    question.source.project_key() == key
-                                                })
-                                                .cloned();
-                                            state.selected_question = question
-                                                .as_ref()
-                                                .map(|question| question.key.clone());
-                                            state.retained_question = question.clone();
-                                            if let Some(question) = question {
-                                                actions.push(Action::InspectQuestion(question));
-                                            }
-                                        }
-                                        state.selected_project = Some(key);
-                                        state.graph_global = false;
-                                    }
-                                    id @ project_graph::NodeId::Question { .. } => {
-                                        if let Some(question) = state
-                                            .questions
-                                            .iter()
-                                            .find(|question| question_node(question) == id)
-                                        {
-                                            state.selected_project =
-                                                Some(question.source.project_key());
-                                            state.selected_question = Some(question.key.clone());
-                                            state.retained_question = Some(question.clone());
-                                            actions.push(Action::InspectQuestion(question.clone()));
-                                        }
-                                    }
+                        ctx.register_focusable_named(&format!("project:{key}"));
+                        if ctx
+                            .button(format!("{name} · {environment} · {count}"))
+                            .clicked
+                        {
+                            if state.selected_project.as_ref() != Some(key) {
+                                let question = state
+                                    .questions
+                                    .iter()
+                                    .find(|question| question.source.project_key() == *key)
+                                    .cloned();
+                                state.selected_question = question.as_ref().map(|q| q.key.clone());
+                                state.retained_question = question.clone();
+                                if let Some(question) = question {
+                                    actions.push(Action::InspectQuestion(question));
                                 }
                             }
+                            state.selected_project = Some(key.clone());
+                            state.projects_global = false;
                         }
-                        Err(error) => {
-                            ctx.text(error.to_string()).fg(tailwind::AMBER.c300).wrap();
+                        if !state.projects_global {
+                            for question in state
+                                .questions
+                                .iter()
+                                .filter(|question| question.source.project_key() == *key)
+                            {
+                                ctx.register_focusable_named(&format!(
+                                    "project-question:{}",
+                                    question.key
+                                ));
+                                if ctx.button(&question.title).clicked {
+                                    state.selected_question = Some(question.key.clone());
+                                    state.retained_question = Some(question.clone());
+                                    actions.push(Action::InspectQuestion(question.clone()));
+                                }
+                            }
                         }
                     }
                 });
@@ -913,9 +834,6 @@ fn draw_attention(
                     });
                     ctx.text(&question.title).bold();
                     source_tags(ctx, &question.source);
-                    if !state.dependency_status.is_empty() {
-                        ctx.text(&state.dependency_status).dim().wrap();
-                    }
                     ctx.text(&question.summary).wrap();
                     if !unchanged {
                         ctx.text(if current.is_some() {
@@ -966,21 +884,6 @@ fn draw_attention(
                 }
             });
     });
-}
-
-fn project_node(source: &Source) -> project_graph::NodeId {
-    project_graph::NodeId::Project {
-        environment_id: source.environment.clone(),
-        project_id: source.project_id.clone(),
-    }
-}
-fn question_node(question: &AttentionItem) -> project_graph::NodeId {
-    project_graph::NodeId::Question {
-        environment_id: question.source.environment.clone(),
-        project_id: question.source.project_id.clone(),
-        thread_id: question.source.thread.clone(),
-        request_id: domain::string(&question.request, "id"),
-    }
 }
 
 fn source_tags(ctx: &mut Context, source: &Source) {
@@ -1641,7 +1544,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_mouse_navigation_retains_content_and_exact_source() {
+    fn project_list_navigation_retains_content_and_exact_source() {
         use slt::{EventBuilder, TestBackend};
         let mut state = SurfaceState::new();
         state.attention_mode = true;
@@ -1689,10 +1592,7 @@ mod tests {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
         backend.render(|ctx| {
-            ctx.focus_by_name("question:remote/question");
-            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
-        });
-        backend.run_with_events(EventBuilder::new().key_code(KeyCode::Tab).build(), |ctx| {
+            ctx.focus_by_name(&format!("project:{}", source.project_key()));
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
         backend.run_with_events(
@@ -1701,7 +1601,7 @@ mod tests {
                 draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
             },
         );
-        assert!(!state.graph_global);
+        assert!(!state.projects_global);
         backend.render(|ctx| {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
@@ -1711,7 +1611,7 @@ mod tests {
         backend.run_with_events(EventBuilder::new().click(x, y).build(), |ctx| {
             draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
         });
-        assert!(state.graph_global);
+        assert!(state.projects_global);
         assert_eq!(
             state.selected_project.as_deref(),
             Some(source.project_key().as_str())
