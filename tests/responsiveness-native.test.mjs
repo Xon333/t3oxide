@@ -310,3 +310,23 @@ test('server search retains shell title matches and matching children with sourc
   assert.equal(first.searchScope,'shell names and native recent message search');
   assert.equal(calls.length,2);assert.equal(server.receipts.size,0);
 });
+
+
+test('HTTP rejection preserves authorization failure without prescribing renewal or trying MCP', async t => {
+  const paths = [];
+  const server = new T3({baseUrl:'http://127.0.0.1:1234',token:'fixture-http'}, () => {}, {
+    fetch: async (url, options) => {
+      paths.push(url.pathname);
+      assert.equal(options.headers.Authorization, 'Bearer fixture-http');
+      return Response.json({code:'auth_invalid',reason:'invalid_credential'}, {status:401});
+    }
+  });
+  t.after(() => server.close());
+  await assert.rejects(server.http('/api/orchestration/shell'), error => {
+    assert.equal(error.code, 'authorization');
+    assert.match(error.message, /HTTP 401.*HTTP credential.*does not establish expiry/);
+    assert.doesNotMatch(error.message, /renew/);
+    return true;
+  });
+  assert.deepEqual(paths, ['/api/orchestration/shell']);
+});

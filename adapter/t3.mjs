@@ -148,7 +148,7 @@ export class T3 {
         headers: { 'x-t3-orchestration-protocol': '2', ...(authenticated ? { Authorization: `Bearer ${this.config.token}` } : {}) }
       });
       if (!response.ok) throw new Fault(response.status === 401 || response.status === 403 ? 'authorization' :
-        response.status === 404 ? 'unavailable' : 'upstream', `T3 HTTP ${response.status}; ${response.status === 401 ? 'renew this host credential' : 'check the host adapter compatibility'}.`);
+        response.status === 404 ? 'unavailable' : 'upstream', `T3 HTTP ${response.status}; ${response.status === 401 ? 'verify this host HTTP credential and intended endpoint; rejection does not establish expiry' : 'check the host adapter compatibility'}.`);
       requireThat(response.body, 'Empty T3 response.', 'incompatible');
       const reader = response.body.getReader(), parts = []; let total = 0;
       for (;;) {
