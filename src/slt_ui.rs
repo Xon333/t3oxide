@@ -105,6 +105,9 @@ pub struct SurfaceState {
     pub(crate) transcript_layout: Option<ui::TranscriptLayout>,
     pub(crate) transcript_jump: Option<(String, String, usize)>,
     controller_scroll: Option<(usize, bool)>,
+    viewport: Option<(u32, u32, bool, u32, u32)>,
+    focused_control: Option<String>,
+    pending_transcript_down: Option<usize>,
     attention_scroll: ScrollState,
     projects_scroll: ScrollState,
     support_scroll: ScrollState,
@@ -141,7 +144,8 @@ pub fn draw(
 ) -> Vec<Action> {
     let mut actions = Vec::new();
     state.transcript_layout = None;
-    if state.composer_key != state.active_key {
+    let source_changed = state.composer_key != state.active_key;
+    if source_changed {
         if !state.composer_key.is_empty() {
             state.tab_editors.insert(
                 state.composer_key.clone(),
@@ -155,14 +159,55 @@ pub fn draw(
         state.composer_key = state.active_key.clone();
         state.transcript = ScrollState::new().stick_to_bottom(true);
         state.controller_scroll = None;
+        state.pending_transcript_down = None;
         state.command_escape = None;
         state.command_open = false;
         ctx.focus_by_name("composer");
         ctx.request_frame();
     }
     sync_editor(&mut state.composer, composer);
+    if modal.is_none() && !state.active_key.is_empty() {
+        let copy_draft = KeyModifiers(KeyModifiers::CONTROL.0 | KeyModifiers::ALT.0);
+        let presses: Vec<_> = ctx
+            .key_presses_when(true)
+            .filter(|(_, key)| key.code == KeyCode::Char('c') && key.modifiers == copy_draft)
+            .map(|(index, _)| index)
+            .collect();
+        for index in presses {
+            // Claim the whole draft before textarea's selection-copy handler.
+            ctx.consume_event(index);
+            ctx.copy_to_clipboard(state.composer.value());
+        }
+    }
     let width = ctx.width();
     let height = ctx.height();
+    state.composer.wrap_width = Some(
+        conversation_width(width, state.show_context)
+            .saturating_sub(3)
+            .max(1),
+    );
+    let conversation_height = height.saturating_sub(3 + u32::from(!view.notice.is_empty()));
+    let rows = editor_rows(&mut state.composer, conversation_height);
+    let completion_rows = if state.command_open {
+        completion_indices(&state.composer.value(), state.command_escape.as_deref())
+            .len()
+            .min(4) as u32
+    } else {
+        0
+    };
+    let geometry = (width, height, state.show_context, rows, completion_rows);
+    let resized = state
+        .viewport
+        .replace(geometry)
+        .is_some_and(|old| old != geometry);
+    let restore_focus = (resized && !source_changed)
+        .then(|| state.focused_control.clone())
+        .flatten();
+    if resized {
+        // Fresh SLT bounds must rebind the controller's follow/manual intent.
+        state.controller_scroll = None;
+        state.pending_transcript_down = None;
+    }
     ctx.disabled(modal.is_some(), |ctx| {
         ctx.container().grow(1).col(|ctx| {
             ctx.row(|ctx| {
@@ -196,7 +241,7 @@ pub fn draw(
                     }
                     ctx.container().grow(1).col(|ctx| {
                         draw_transcript(ctx, view, state, &mut actions);
-                        draw_composer(ctx, view, composer, state, height, &mut actions);
+                        draw_composer(ctx, view, composer, state, rows, &mut actions);
                     });
                     if state.show_context && width >= 110 {
                         ctx.container()
@@ -233,8 +278,16 @@ pub fn draw(
     if modal.is_none() {
         // Buttons and content outside navigation act on the displayed source.
         // Preserve the invoking context while a modal owns SLT focus.
+        if let Some(name) = restore_focus {
+            if !ctx.focus_by_name(&name) {
+                ctx.focus_by_name("composer");
+            }
+            ctx.request_frame();
+        }
+        state.focused_control = ctx.focused_name().map(str::to_owned);
         state.focus = Some(match ctx.focused_name() {
             Some("navigator") => ui::Focus::Navigator,
+            Some("transcript") => ui::Focus::Transcript,
             Some(name) if name.starts_with("thread:") => ui::Focus::Navigator,
             _ => ui::Focus::Composer,
         });
@@ -530,10 +583,55 @@ fn draw_transcript(
             Some(offset.saturating_add((*inner).min(height.saturating_sub(1))))
         });
     let mut jumped = false;
+    let mut keyboard_scrolled = false;
+    let mut keyboard_down = false;
     let before_binding = state.transcript.offset;
+    let wheel_down = !ctx.is_disabled()
+        && state.controller_scroll.is_some()
+        && measured.is_some_and(|rect| {
+            ctx.events().any(|event| {
+                matches!(event,
+                slt::Event::Mouse(mouse) if mouse.kind == slt::MouseKind::ScrollDown
+                    && rect.contains(mouse.x, mouse.y))
+            })
+        });
+    let down_origin = if wheel_down {
+        Some(before_binding)
+    } else {
+        state.pending_transcript_down.take()
+    };
     state.transcript.follow_focus = false;
     state.transcript.stick_to_bottom = view.follow && state.transcript_jump.is_none();
     ctx.group(&group).grow(1).col(|ctx| {
+        let focused = ctx.register_focusable_named("transcript");
+        // An old focus slot cannot scroll a replacement source or stale geometry.
+        let keys: Vec<_> = ctx
+            .key_presses_when(focused && state.controller_scroll.is_some())
+            .filter(|(_, key)| {
+                key.modifiers == KeyModifiers::NONE
+                    && matches!(
+                        key.code,
+                        KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown
+                    )
+            })
+            .map(|(index, key)| (index, key.code.clone()))
+            .collect();
+        for (index, code) in keys {
+            state.transcript.offset = state.transcript.offset.min(state.transcript.max_offset());
+            let page = (state.transcript.viewport_height() as usize).max(1);
+            match code {
+                KeyCode::Up => state.transcript.scroll_up(1),
+                KeyCode::Down => state.transcript.scroll_down(1),
+                KeyCode::PageUp => state.transcript.scroll_up(page),
+                KeyCode::PageDown => state.transcript.scroll_down(page),
+                _ => unreachable!("filtered transcript navigation key"),
+            }
+            keyboard_scrolled = true;
+            keyboard_down = matches!(code, KeyCode::Down | KeyCode::PageDown);
+            state.transcript.stick_to_bottom = false;
+            ctx.consume_event(index);
+            ctx.request_frame();
+        }
         let mut viewport = ctx.scrollable(&mut state.transcript);
         // Bind first so SLT can accept deferred adjustments and fresh bounds.
         // Then the explicit, source-qualified jump overrides that accepted offset.
@@ -574,10 +672,17 @@ fn draw_transcript(
     {
         let top = state.transcript.offset;
         let max = state.transcript.max_offset();
+        let followed_down =
+            keyboard_down && top > before_binding || down_origin.is_some_and(|origin| top > origin);
         let follow = !jumped
             && state.transcript_jump.is_none()
             && top == max
-            && (view.follow || top > before_binding);
+            && (view.follow && !keyboard_scrolled || followed_down);
+        state.pending_transcript_down = if wheel_down && top == before_binding {
+            Some(before_binding)
+        } else {
+            None
+        };
         // Feedback describes accepted state, so the next controller frame does
         // not rewrite SLT's pending adjustment with its previous input tuple.
         state.controller_scroll = Some((top, follow));
@@ -607,37 +712,39 @@ fn transcript_message_group(message: &ui::MessageView) -> String {
     )
 }
 
+fn conversation_width(width: u32, show_context: bool) -> u32 {
+    let sidebar = if width >= 100 {
+        36
+    } else if width >= 65 {
+        27
+    } else {
+        0
+    };
+    let context = if show_context && width >= 110 { 26 } else { 0 };
+    width.saturating_sub(sidebar + context)
+}
+
+fn editor_rows(editor: &mut TextareaState, height: u32) -> u32 {
+    let lines = u32::try_from(editor.visual_line_count()).unwrap_or(u32::MAX);
+    let max = height
+        .saturating_sub(7)
+        .min((height / 3).clamp(1, 12))
+        .max(1);
+    lines.clamp(2.min(max), max)
+}
+
 fn draw_composer(
     ctx: &mut Context,
     view: &ui::View,
     legacy: &mut TextArea<'static>,
     state: &mut SurfaceState,
-    height: u32,
+    rows: u32,
     actions: &mut Vec<Action>,
 ) {
     ctx.container()
         .border(Border::Rounded)
         .title("Prompt")
         .col(|ctx| {
-            let available = ctx.width().saturating_sub(8).max(10);
-            state.composer.wrap_width = Some(available);
-            let focused = ctx.register_focusable_named("composer");
-            let typed_slash = ctx.key_presses_when(focused).any(|(_, key)| {
-                key.code == KeyCode::Char('/') && key.modifiers == KeyModifiers::NONE
-            });
-            composer_keys(ctx, focused, state, actions);
-            if ctx
-                .textarea(&mut state.composer, if height < 24 { 3 } else { 5 })
-                .changed
-            {
-                *legacy = ui::editor(&state.composer.value(), &view.theme, "Write a message…");
-                state.command_selected = 0;
-                if typed_slash && state.composer.value().starts_with('/') {
-                    state.command_open = true;
-                    state.command_escape = None;
-                }
-                actions.push(Action::DraftChanged);
-            }
             let indices = if state.command_open {
                 completion_indices(&state.composer.value(), state.command_escape.as_deref())
             } else {
@@ -666,6 +773,20 @@ fn draw_composer(
                         state.command_open = false;
                     }
                 }
+            }
+            let focused = ctx.register_focusable_named("composer");
+            let typed_slash = ctx.key_presses_when(focused).any(|(_, key)| {
+                key.code == KeyCode::Char('/') && key.modifiers == KeyModifiers::NONE
+            });
+            composer_keys(ctx, focused, state, actions);
+            if ctx.textarea(&mut state.composer, rows).changed {
+                *legacy = ui::editor(&state.composer.value(), &view.theme, "Write a message…");
+                state.command_selected = 0;
+                if typed_slash && state.composer.value().starts_with('/') {
+                    state.command_open = true;
+                    state.command_escape = None;
+                }
+                actions.push(Action::DraftChanged);
             }
             let compact = ctx.width() < 110 || state.show_context;
             if compact {
@@ -1212,8 +1333,326 @@ fn identity_color(identity: &str) -> Color {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    struct Cells(slt::Buffer);
+
+    impl slt::Backend for Cells {
+        fn size(&self) -> (u32, u32) {
+            (self.0.area.width, self.0.area.height)
+        }
+        fn buffer_mut(&mut self) -> &mut slt::Buffer {
+            &mut self.0
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The public SLT frame path with a real geometry change and retained focus/layout state.
+    pub(crate) struct ResizableBackend {
+        cells: Cells,
+        state: slt::AppState,
+        config: slt::RunConfig,
+    }
+
+    impl ResizableBackend {
+        pub(crate) fn new(width: u32, height: u32) -> Self {
+            Self {
+                cells: Cells(slt::Buffer::empty(slt::Rect::new(0, 0, width, height))),
+                state: slt::AppState::new(),
+                config: slt::RunConfig::default(),
+            }
+        }
+        pub(crate) fn with_activation_boundaries(mut self) -> Self {
+            self.config = self.config.activation_boundaries(true);
+            self
+        }
+        pub(crate) fn render(&mut self, draw: impl FnMut(&mut Context)) {
+            self.run_with_events(Vec::new(), draw);
+        }
+        pub(crate) fn run_with_events(
+            &mut self,
+            events: Vec<slt::Event>,
+            mut draw: impl FnMut(&mut Context),
+        ) {
+            for event in &events {
+                if let slt::Event::Resize(width, height) = *event {
+                    self.cells.0.resize(slt::Rect::new(0, 0, width, height));
+                }
+            }
+            self.cells.0.reset();
+            slt::frame_owned(
+                &mut self.cells,
+                &mut self.state,
+                &self.config,
+                events,
+                &mut draw,
+            )
+            .unwrap();
+        }
+        fn line(&self, y: u32) -> String {
+            (0..self.cells.0.area.width)
+                .map(|x| self.cells.0.get(x, y).symbol.as_str())
+                .collect()
+        }
+        pub(crate) fn text(&self) -> String {
+            (0..self.cells.0.area.height)
+                .map(|y| self.line(y))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        pub(crate) fn find_text(&self, expected: &str) -> Option<(u32, u32)> {
+            (0..self.cells.0.area.height).find_map(|y| {
+                let line = self.line(y);
+                line.find(expected).map(|byte| {
+                    (
+                        unicode_width::UnicodeWidthStr::width(&line[..byte]) as u32,
+                        y,
+                    )
+                })
+            })
+        }
+        pub(crate) fn assert_contains(&self, expected: &str) {
+            assert!(
+                self.find_text(expected).is_some(),
+                "missing {expected:?}:\n{}",
+                self.text()
+            );
+        }
+    }
+
+    #[test]
+    fn growing_composer_measures_shared_rows_and_keeps_the_draft_through_reflow() {
+        let mut backend = ResizableBackend::new(86, 31);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/thread".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        assert_eq!(editor_rows(&mut state.composer, 28), 2);
+        let draft = "café 日本語 e\u{301} 👩\u{200d}💻  \n".repeat(20);
+        backend.run_with_events(slt::EventBuilder::new().paste(&draft).build(), |ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        assert_eq!(editor.lines().join("\n"), draft);
+        assert_eq!(editor_rows(&mut state.composer, 28), 9);
+        let cursor = (state.composer.cursor_row, state.composer.cursor_col);
+        for (width, height) in [(140, 50), (65, 22), (86, 31)] {
+            backend.run_with_events(
+                slt::EventBuilder::new().resize(width, height).build(),
+                |ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                },
+            );
+            for _ in 0..3 {
+                backend.render(|ctx| {
+                    draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                });
+            }
+            assert_eq!(editor.lines().join("\n"), draft);
+            assert_eq!(
+                (state.composer.cursor_row, state.composer.cursor_col),
+                cursor
+            );
+            assert_eq!(
+                state.composer.wrap_width,
+                Some(conversation_width(width, false) - 3)
+            );
+            let rows = editor_rows(&mut state.composer, height - 3);
+            assert!(rows <= 12 && rows <= (height - 3) / 3);
+            assert!(
+                state.composer.scroll_offset > 0,
+                "overflow keeps the caret in the bounded viewport"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_is_above_the_prompt_and_whole_copy_preserves_editor_ownership() {
+        let mut backend = slt::TestBackend::new(110, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "environment/current-thread".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        backend.run_with_events(slt::EventBuilder::new().key('/').build(), |ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .key('m')
+                .key('o')
+                .key('d')
+                .key('e')
+                .key('l')
+                .build(),
+            |ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            },
+        );
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        assert_eq!(
+            editor.lines().join("\n"),
+            "/model",
+            "completion controls retain editor typing"
+        );
+        let completion = backend
+            .find_text("/model")
+            .expect("slash completion visible");
+        let cursor = backend.find_text("▎").expect("composer caret visible");
+        assert!(
+            completion.1 < cursor.1,
+            "completion stays above the editable prompt"
+        );
+        backend.run_with_events(
+            slt::EventBuilder::new().key_code(KeyCode::Enter).build(),
+            |ctx| {
+                let actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                assert!(
+                    actions
+                        .iter()
+                        .any(|a| matches!(a, Action::Command(name) if name == "model"))
+                );
+                assert!(!actions.iter().any(|a| matches!(a, Action::Send)));
+            },
+        );
+        let draft = "café 日本語 e\u{301} 👩\u{200d}💻  \nsecond line  ";
+        editor = ui::editor(draft, "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        backend.run_with_events(
+            slt::EventBuilder::new().key_code(KeyCode::Left).build(),
+            |ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            },
+        );
+        let caret = (state.composer.cursor_row, state.composer.cursor_col);
+        let modifiers = KeyModifiers(KeyModifiers::CONTROL.0 | KeyModifiers::ALT.0);
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .key_with(KeyCode::Char('c'), modifiers)
+                .build(),
+            |ctx| {
+                let actions = draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+                assert!(
+                    !ctx.key_mod('c', modifiers),
+                    "whole-draft copy claims the chord"
+                );
+                assert!(actions.is_empty());
+            },
+        );
+        assert_eq!(editor.lines().join("\n"), draft);
+        assert_eq!(
+            (state.composer.cursor_row, state.composer.cursor_col),
+            caret
+        );
+        assert_eq!(state.active_key, "environment/current-thread");
+        assert!(state.composer.selected_text().is_none());
+        let modal = ui::Modal {
+            title: "Write answer".into(),
+            editor: true,
+            action_stamp: 7,
+            ..ui::Modal::default()
+        };
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+            });
+        }
+        backend.run_with_events(
+            slt::EventBuilder::new()
+                .key_with(KeyCode::Char('c'), modifiers)
+                .build(),
+            |ctx| {
+                draw(
+                    ctx,
+                    &view,
+                    &mut editor,
+                    &mut modal_editor,
+                    Some(&modal),
+                    &mut state,
+                );
+                assert!(ctx.raw_events().any(|event| matches!(event, slt::Event::Key(key) if key.code == KeyCode::Char('c') && key.modifiers == modifiers)), "a modal excludes whole-draft copy");
+            },
+        );
+        assert_eq!(editor.lines().join("\n"), draft);
+        assert_eq!(
+            (state.composer.cursor_row, state.composer.cursor_col),
+            caret
+        );
+    }
+
+    #[test]
+    fn source_switch_with_a_growing_draft_returns_focus_to_the_composer() {
+        let mut backend = slt::TestBackend::new(110, 38);
+        let mut state = SurfaceState::new();
+        state.active_key = "env/first".into();
+        let view = ui::View::default();
+        let mut editor = ui::editor("", "violet", "");
+        let mut modal_editor = ui::editor("", "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        backend.render(|ctx| {
+            ctx.focus_by_name("transcript");
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        backend.render(|ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        assert_eq!(state.focused_control.as_deref(), Some("transcript"));
+        state.active_key = "env/second".into();
+        editor = ui::editor(&"Different source draft\n".repeat(10), "violet", "");
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+            });
+        }
+        assert_eq!(state.focused_control.as_deref(), Some("composer"));
+        backend.run_with_events(slt::EventBuilder::new().key('X').build(), |ctx| {
+            draw(ctx, &view, &mut editor, &mut modal_editor, None, &mut state);
+        });
+        assert!(editor.lines().join("\n").ends_with('X'));
+        assert_eq!(state.active_key, "env/second");
+    }
 
     #[test]
     fn modal_open_requests_layout_and_focus_before_typing() {

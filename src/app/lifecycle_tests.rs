@@ -1868,3 +1868,375 @@ fn terminal_default_ignores_retained_context_and_preserves_uncertain_identity() 
         );
     }
 }
+
+#[test]
+fn retained_slt_resize_preserves_tail_follow_and_manual_reading_position() {
+    fn restart(mut fixture: Fixture) -> Fixture {
+        let environments = fixture.app.environments.clone();
+        let native_states = fixture.native_states.clone();
+        let directory =
+            std::mem::replace(&mut fixture.directory, tempfile::TempDir::new().unwrap());
+        drop(fixture);
+        let state = Arc::new(State::open(&directory.path().join("rust-state.json")).unwrap());
+        Fixture {
+            app: App::new(Args::default(), environments, state).unwrap(),
+            directory,
+            native_states,
+        }
+    }
+
+    let mut fixture = Fixture::new(0);
+    let config_path = &fixture.app.environments[0].host_config;
+    let mut config: Value = serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+    config["fixture"]["persistInitialState"] = json!(true);
+    fs::write(config_path, config.to_string()).unwrap();
+    fixture.open(0);
+    let draft = "Tail 日本語 café e\u{301} 👩\u{200d}💻  \nold tail  \n";
+    fixture.app.composer = ui::editor(draft, &fixture.app.theme, "");
+    fixture.app.flush_draft().unwrap();
+    let other = "Other source 日本語  \n";
+    fixture
+        .app
+        .state
+        .set_draft("native-0", "thread-review", other)
+        .unwrap();
+    let pending = json!({"id":"resize-preserved-operation","environmentId":"native-0",
+        "threadId":"thread-review","op":"send","message":"Existing uncertain intent"});
+    fixture
+        .app
+        .state
+        .save_pending("native-0", false, pending.clone())
+        .unwrap();
+    let native_before = fs::read(&fixture.native_states[0]).unwrap();
+    let native_mode = fs::metadata(&fixture.native_states[0])
+        .unwrap()
+        .permissions()
+        .mode();
+    let journal = fixture.directory.path().join("host-0/operations-v1");
+    assert!(
+        !journal.exists(),
+        "read-only fixture starts without a host journal"
+    );
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    let mut backend =
+        crate::slt_ui::tests::ResizableBackend::new(70, 22).with_activation_boundaries();
+    for _ in 0..5 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Up)
+            .key_code(::slt::KeyCode::End)
+            .key_code(::slt::KeyCode::Left)
+            .key_code(::slt::KeyCode::Left)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    for _ in 0..4 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.assert_contains("old tail▎");
+    backend.assert_contains("cargo test");
+    assert!(fixture.app.follow);
+    assert!(
+        fixture.app.transcript_scroll > 0,
+        "compact transcript overflows"
+    );
+    fixture.app.save_ui().unwrap();
+    let identity = json!(["profile-0", "native-0", "thread-a"]).to_string();
+    let saved = fixture.app.state.snapshot()["rustReadingPositions"][&identity].clone();
+    assert_eq!(saved["follow"], true);
+    assert_eq!(saved["rowKey"], "thread-a/thread-a-answer");
+    let durable_before = fixture.app.state.snapshot();
+    let caret = fixture.app.composer.cursor();
+    let painted_caret = backend.find_text("▎").unwrap();
+    for (width, height) in [(140, 38), (70, 22)] {
+        backend.run_with_events(
+            ::slt::EventBuilder::new().resize(width, height).build(),
+            |ctx| fixture.draw_slt(ctx, &mut surface),
+        );
+        assert!(
+            fixture.app.follow,
+            "resize {width}x{height} must retain follow intent"
+        );
+        for frame in 0..5 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+            assert!(
+                fixture.app.follow,
+                "layout feedback lost tail follow at {width}x{height}, frame {frame}:\n{}",
+                backend.text()
+            );
+        }
+        if width == 140 {
+            assert_eq!(
+                surface.transcript_layout.as_ref().unwrap().max,
+                0,
+                "wide viewport must fit the complete transcript"
+            );
+            backend.assert_contains("Inspect Active implementation.");
+        }
+        backend.assert_contains("cargo test");
+        assert_eq!(fixture.app.composer.cursor(), caret);
+        assert_eq!(fixture.app.text(), draft);
+    }
+    assert_eq!(backend.find_text("▎"), Some(painted_caret));
+    fixture.app.save_ui().unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+        saved,
+        "normal close checkpoint must preserve the exact source-qualified tail anchor"
+    );
+    assert_eq!(
+        fixture.app.state.snapshot(),
+        durable_before,
+        "resize and normal close checkpoint preserve the complete durable state"
+    );
+    // A real wheel gesture must still leave follow mode, including across a
+    // fit/overflow transition and a source return through the production App.
+    let (x, y) = backend.find_text("cargo test").unwrap();
+    let mut wheel = ::slt::EventBuilder::new();
+    for _ in 0..20 {
+        wheel = wheel.scroll_up(x, y);
+    }
+    backend.run_with_events(wheel.build(), |ctx| fixture.draw_slt(ctx, &mut surface));
+    for _ in 0..4 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert!(
+        !fixture.app.follow,
+        "manual wheel scrolling disengages follow"
+    );
+    assert_eq!(fixture.app.transcript_scroll, 0);
+    fixture.app.save_ui().unwrap();
+    let manual = fixture.app.state.snapshot()["rustReadingPositions"][&identity].clone();
+    assert_eq!(manual["follow"], false);
+    assert_eq!(manual["rowKey"], "thread-a/thread-a-user");
+    for (width, height) in [(140, 38), (70, 22)] {
+        backend.run_with_events(
+            ::slt::EventBuilder::new().resize(width, height).build(),
+            |ctx| fixture.draw_slt(ctx, &mut surface),
+        );
+        for _ in 0..5 {
+            backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+            assert!(
+                !fixture.app.follow,
+                "resize must retain manual reading intent"
+            );
+        }
+    }
+    fixture.app.save_ui().unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+        manual
+    );
+    fixture.open_thread(0, "thread-review");
+    for _ in 0..4 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    fixture.open(0);
+    for _ in 0..5 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert!(!fixture.app.follow);
+    backend.assert_contains("Inspect Active implementation.");
+    fixture.app.save_ui().unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+        manual
+    );
+    assert_eq!(fixture.app.composer.cursor(), caret);
+    fixture = restart(fixture);
+    fixture.open(0);
+    surface = crate::slt_ui::SurfaceState::new();
+    backend = crate::slt_ui::tests::ResizableBackend::new(70, 22).with_activation_boundaries();
+    for _ in 0..5 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert!(
+        !fixture.app.follow,
+        "restart restores the manual source-qualified anchor"
+    );
+    backend.assert_contains("Inspect Active implementation.");
+    fixture.app.save_ui().unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+        manual
+    );
+    fixture.app.command("latest").unwrap();
+    for _ in 0..5 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert!(fixture.app.follow, "explicit Latest resumes tail following");
+    backend.assert_contains("cargo test");
+    fixture.app.save_ui().unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+        saved
+    );
+    fixture = restart(fixture);
+    fixture.open(0);
+    surface = crate::slt_ui::SurfaceState::new();
+    backend = crate::slt_ui::tests::ResizableBackend::new(70, 22).with_activation_boundaries();
+    for _ in 0..5 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert!(fixture.app.follow, "restart retains tail-follow intent");
+    backend.assert_contains("cargo test");
+    fixture.app.save_ui().unwrap();
+    assert_eq!(
+        fixture.app.state.snapshot()["rustReadingPositions"][&identity],
+        saved
+    );
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.state.draft("native-0", "thread-review"), other);
+    assert_eq!(fixture.app.state.pending("native-0", false), Some(pending));
+    assert_eq!(fs::read(&fixture.native_states[0]).unwrap(), native_before);
+    assert_eq!(
+        fs::metadata(&fixture.native_states[0])
+            .unwrap()
+            .permissions()
+            .mode(),
+        native_mode
+    );
+    assert!(
+        !journal.exists(),
+        "resize/reading must not create operation records"
+    );
+}
+
+#[test]
+fn focused_transcript_keys_and_wheel_preserve_editor_and_modal_ownership() {
+    let mut fixture = Fixture::new(0);
+    fixture.open_thread(0, "thread-review");
+    let mut snapshot = fixture
+        .app
+        .active
+        .as_ref()
+        .unwrap()
+        .projection
+        .snapshot()
+        .unwrap()
+        .as_wire_value();
+    snapshot["revision"] = json!(snapshot["revision"].as_u64().unwrap() + 100);
+    snapshot["items"][1]["text"] = json!(
+        (0..80)
+            .map(|i| format!("Reading paragraph {i}.\n\n"))
+            .collect::<String>()
+    );
+    fixture
+        .app
+        .active
+        .as_mut()
+        .unwrap()
+        .projection
+        .apply_snapshot(snapshot, "thread-review")
+        .unwrap();
+    let draft = "Exact café 日本語 e\u{301} 👩\u{200d}💻 draft  \nsecond row  ";
+    fixture.app.composer = ui::editor(draft, &fixture.app.theme, "");
+    let mut backend =
+        crate::slt_ui::tests::ResizableBackend::new(86, 31).with_activation_boundaries();
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    for _ in 0..4 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    let tail = fixture.app.transcript_scroll;
+    let page = surface.transcript_layout.as_ref().unwrap().visible.max(1);
+    assert!(tail > page, "fixture transcript overflows");
+    backend.render(|ctx| {
+        ctx.focus_by_name("transcript");
+        fixture.draw_slt(ctx, &mut surface);
+    });
+    backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    assert_eq!(surface.focus, Some(Focus::Transcript));
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::PageUp)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    assert_eq!(fixture.app.transcript_scroll, tail - page);
+    assert!(!fixture.app.follow);
+    let manual = fixture.app.transcript_scroll;
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_with(::slt::KeyCode::Down, ::slt::KeyModifiers::SHIFT)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    assert_eq!(
+        fixture.app.transcript_scroll, manual,
+        "modified arrows are not transcript commands"
+    );
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::PageDown)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    for _ in 0..3 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert_eq!(fixture.app.transcript_scroll, tail);
+    assert!(
+        fixture.app.follow,
+        "deliberate downward navigation to the tail resumes follow"
+    );
+
+    let (x, y) = backend.find_text("Reading paragraph").unwrap();
+    backend.run_with_events(::slt::EventBuilder::new().scroll_up(x, y).build(), |ctx| {
+        fixture.draw_slt(ctx, &mut surface)
+    });
+    for _ in 0..3 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert!(!fixture.app.follow, "wheel reading leaves follow");
+    backend.run_with_events(
+        ::slt::EventBuilder::new().scroll_down(x, y).build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    for _ in 0..3 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    assert_eq!(fixture.app.transcript_scroll, tail);
+    assert!(
+        fixture.app.follow,
+        "a downward wheel gesture to the tail resumes follow"
+    );
+
+    backend.render(|ctx| {
+        ctx.focus_by_name("composer");
+        fixture.draw_slt(ctx, &mut surface);
+    });
+    backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    let before = fixture.app.transcript_scroll;
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Up)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    assert_eq!(
+        fixture.app.transcript_scroll, before,
+        "composer owns its arrows"
+    );
+    assert_eq!(fixture.app.text(), draft);
+    fixture.app.palette();
+    for _ in 0..4 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::PageUp)
+            .key_code(::slt::KeyCode::Up)
+            .build(),
+        |ctx| fixture.draw_slt(ctx, &mut surface),
+    );
+    assert_eq!(
+        fixture.app.transcript_scroll, before,
+        "modal excludes transcript navigation"
+    );
+    assert_eq!(fixture.app.text(), draft);
+    assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-review");
+    assert!(fixture.app.state.pending("native-0", false).is_none());
+}

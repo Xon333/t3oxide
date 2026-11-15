@@ -18,6 +18,8 @@ SLT owns Tab/Shift+Tab focus, mouse hit tests, text selection and terminal input
 | Model and effort | Model · effort button; /model, /effort |
 | Copy exact thread ID | Cmd+I / Ctrl+I where delivered; Copy ID button |
 | Select / copy editor text, if forwarded | Cmd+A/C or Ctrl+A/C; focused editor selection |
+| Copy whole active draft, outside modals | Ctrl+Alt+C, when forwarded |
+| Scroll focused transcript | Unmodified Up/Down or PageUp/PageDown |
 | Settle native thread | Ctrl+T; /settle |
 | Restore settled thread | /unsettle |
 | Close tab, retain draft | Cmd+W / Ctrl+W where delivered; tab close button |
@@ -28,9 +30,9 @@ The application accepts richer send key events when the terminal forwards them. 
 
 For Mac editor selection/copy on configured Rex clients, open View → Command Palette… (Cmd+Shift+P) and choose **Enter T3oxide Editing**. Cmd+A must visibly select the focused editor text before Cmd+C. Escape exits this manual, client-wide mode; exit before switching panes or leaving the editor. Ordinary terminal selection/copy and pane shortcuts resume outside the mode. Native M1 acceptance verified palette focus return and exact multiline Unicode clipboard bytes; no automatic editor-focus integration is claimed.
 
-Typing `/` at the start of a prompt opens completion. Up/Down selects; Enter consumes the command without adding a newline or sending. Commands needing arguments open their native review controls. Esc returns to unsent text; `//` permits literal slash text. Pasted slash commands and pasted newlines remain text. Copy, cut, paste, word movement and undo use SLT's editor support when the terminal forwards their key events.
+The prompt grows with its wrapped text up to one third of the conversation height, with a 12-row maximum. Typing `/` at the start of a prompt opens completion above the input. Up/Down selects; Enter consumes the command without adding a newline or sending. Commands needing arguments open their native review controls. Esc returns to unsent text; `//` permits literal slash text. Pasted slash commands and pasted newlines remain text. Copy, cut, paste, word movement and undo use SLT's editor support when the terminal forwards their key events.
 
-The focused editor consumes copy only with a selection. An unselected or
+Ctrl+Alt+C copies the complete active draft without moving its caret or selection. It is disabled while a modal owns input. The focused editor consumes ordinary copy only with a selection. An unselected or
 unfocused Ctrl+C does not copy an editor draft or exit the client. Terminal
 forwarding, OS clipboard receipt and actual focus remain separate native checks.
 
