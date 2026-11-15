@@ -2,9 +2,9 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
-use slt::{Context, ScrollState, Style, palette::tailwind};
+use slt::{Context, Style, palette::tailwind};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     sync::Arc,
 };
 use termiflow::{Config, FindingCode, FindingSeverity};
@@ -115,7 +115,6 @@ impl RuntimeInputs {
 pub struct Cache {
     entries: VecDeque<(CacheKey, Arc<Document>)>,
     expanded: HashSet<String>,
-    scroll: HashMap<String, ScrollState>,
 }
 
 impl Cache {
@@ -174,24 +173,18 @@ impl Cache {
                     }
                     match rendered {
                         Ok(diagram) => {
-                            let scroll = self.scroll.entry(identity.clone()).or_default();
-                            let visible_rows = diagram
-                                .height
-                                .min(geometry.height.saturating_sub(2).clamp(3, 18));
                             let style = Style::new().fg(ctx.theme().text);
-                            ctx.scrollable(scroll).h(visible_rows).col(|ctx| {
-                                // Normal text participates in SLT overlay order. Deferred
-                                // buffer copies run after modals and would overwrite them.
-                                ctx.container()
-                                    .w(diagram.width)
-                                    .h(diagram.height)
-                                    .gap(0)
-                                    .col(|ctx| {
-                                        for line in &diagram.lines {
-                                            ctx.styled(line, style).w(diagram.width).h(1);
-                                        }
-                                    });
-                            });
+                            // The containing report owns scrolling for the entire diagram.
+                            // Normal text retains SLT's modal paint order.
+                            ctx.container()
+                                .w(diagram.width)
+                                .h(diagram.height)
+                                .gap(0)
+                                .col(|ctx| {
+                                    for line in &diagram.lines {
+                                        ctx.styled(line, style).w(diagram.width).h(1);
+                                    }
+                                });
                         }
                         Err(reason) => {
                             ctx.text(format!("Source · {reason}"))
@@ -212,9 +205,6 @@ impl Cache {
             }
         }
         // These are transient presentation caches; source text remains controller-owned.
-        if self.scroll.len() > MAX_CACHE_ENTRIES * 4 {
-            self.scroll.clear();
-        }
         if self.expanded.len() > MAX_CACHE_ENTRIES * 4 {
             self.expanded.clear();
         }
@@ -490,6 +480,63 @@ mod tests {
                 _ => None,
             })
             .expect("test contains a Mermaid fence")
+    }
+
+    #[test]
+    fn outer_report_scroll_reaches_complete_diagram_before_remaining() {
+        let mut cache = Cache::default();
+        let mut outer = slt::ScrollState::default();
+        outer.follow_focus = false;
+        outer.anchor = false;
+        let mut backend = TestBackend::new(86, 24);
+        let markdown = "```mermaid\nflowchart TD\n A[Review source] --> B[Check draft]\n B --> C[Submit answer]\n C --> D[Wait for receipt]\n D --> E[Native acknowledgement]\n```\n\n## Remaining\nEnd of report";
+        let geometry = Geometry {
+            width: 80,
+            height: 8,
+        };
+        let document = cache.prepare("original-source", "original-revision", markdown, geometry);
+        let expected_height = diagram(&document).expect("flowchart renders").height;
+        assert!(
+            expected_height > 18,
+            "fixture must exceed the old nested cap"
+        );
+        let mut render = |ctx: &mut Context, outer: &mut slt::ScrollState| {
+            ctx.scrollable(outer).h(22).col(|ctx| {
+                cache.draw(
+                    ctx,
+                    "original-source",
+                    "original-revision",
+                    markdown,
+                    geometry,
+                );
+            });
+        };
+        for _ in 0..3 {
+            backend.render(|ctx| render(ctx, &mut outer));
+        }
+        assert!(
+            outer.content_height() >= expected_height,
+            "outer scroll must own the full diagram"
+        );
+        outer.scroll_down(usize::MAX);
+        for _ in 0..3 {
+            backend.render(|ctx| render(ctx, &mut outer));
+        }
+        backend.assert_contains("Native acknowledgement");
+        backend.assert_contains("End of report");
+        let (_, ack) = backend.find_text("Native acknowledgement").unwrap();
+        let (_, remaining) = backend.find_text("Remaining").unwrap();
+        assert!(
+            remaining > ack + 1,
+            "closing node must precede the next section"
+        );
+        let closing: String = (0..86)
+            .map(|x| backend.buffer().get(x, ack + 1).symbol.as_str())
+            .collect();
+        assert!(
+            closing.contains('─') || closing.contains('━'),
+            "missing closing node: {closing}"
+        );
     }
 
     #[test]

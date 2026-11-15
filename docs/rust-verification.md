@@ -1,3 +1,48 @@
+# Reading and composer extraction — 2026-11-15
+
+This focused change extracts terminal/editor behavior onto public main
+`c59ca818a709057d2f6885e7073bf564254e7a9c`. The historical PR7 branch remains
+closed and unmerged. Its broader layout, renderer and orchestration work is
+not part of this extraction.
+
+| Evidence | Observed result |
+| --- | --- |
+| M1 source checks | `scripts/check-rust.sh` passed: application/vendor formatting, strict Clippy, **135 library + 16 integration tests** |
+| Adapter/scripts | `scripts/check.sh` passed: **260 Node + 5 Python tests**, syntax and compile checks; adapter source is unchanged |
+| Release SLT PTY | `uv run --with pyte==0.8.2 python tests/slt_terminal.py --binary <candidate>` passed **18 behavioral checks** using synthetic native endpoints |
+| M1 release build | `scripts/build-rust.sh` passed; ARM64 Mach-O; `codesign --verify --strict` passed |
+| Independent focused review | Two introduced focus defects were corrected and covered; no outstanding must-fix findings |
+| Existing local host read | Candidate `doctor` returned `ok: true` with authenticated metadata access; no live native writes |
+
+Textarea tests reproduced the old whitespace/grapheme wrapping and coordinate
+failures before the vendor fix. The report regression reproduced nested viewport
+clipping, then passed with the full diagram owned by the outer scroll. Tests
+also cover real size changes, bounded Unicode paste growth/reflow, source/caret
+preservation, manual reading and tail-follow through source return/restart,
+deliberate key/wheel return to the tail, and composer/modal key exclusivity.
+Unchanged ordered-activation regressions still pass.
+
+The candidate release SHA-256 is
+`fd0bb005ffe0bdb4c04b7b664a0f14a5cc69b526ef349cb88e67120441caf9b7`.
+It is available in an isolated M1 review session through temporary ttyd 1.7.7
+(MIT) and the native T3 preview. Browser input verified Enter as newline, one
+exact multiline Unicode fixture send through Ctrl+], the next retained draft,
+and PTY resizing from 139×43 to 97×32 and back. Sending Ctrl+Q through the
+terminal input channel exited with code 0, and the next session restored the
+draft. Closing the browser pane alone disconnected ttyd but left the prior
+client running after SIGHUP; its saved review state was preserved before the
+task-owned process was stopped. This is not a claim of orderly shutdown on
+browser disconnect.
+
+Otis confirmed that the right-pane stream works and the native drawing/comment
+annotation button is unavailable. Annotation support is a separate investigation.
+The preview uses isolated fixture state, not canonical drafts or journals.
+Normal launchers and the adopted M4 client were not changed. These checks do
+not claim native OS clipboard receipt, M4 GUI acceptance or performance savings.
+Hosted Actions were intentionally skipped.
+
+---
+
 # Reduced terminal candidate — 2026-11-15
 
 This focused replacement starts at adopted Rust/SLT main `4543e73`. The large

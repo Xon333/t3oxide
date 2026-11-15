@@ -454,6 +454,8 @@ pub(crate) struct TextareaVLine {
 /// `char_start` / `char_count` are **grapheme-cluster** indices, not scalar
 /// indices, so a soft-wrap break never lands inside a cluster (a ZWJ emoji or
 /// combining sequence stays whole on one visual line).
+/// Prefer the last fitting whitespace boundary; preserve every cluster,
+/// including spaces, so editor coordinates and copied source stay exact.
 pub(crate) fn textarea_build_visual_lines(lines: &[String], wrap_width: u32) -> Vec<TextareaVLine> {
     let mut out = Vec::new();
     for (row, line) in lines.iter().enumerate() {
@@ -468,20 +470,25 @@ pub(crate) fn textarea_build_visual_lines(lines: &[String], wrap_width: u32) -> 
         let mut seg_start = 0usize;
         let mut seg_chars = 0usize;
         let mut seg_width = 0u32;
+        let mut word_break = None;
         for (idx, g) in line.graphemes(true).enumerate() {
             let cw = cluster_width(g);
-            if seg_width + cw > wrap_width && seg_chars > 0 {
+            while seg_width + cw > wrap_width && seg_chars > 0 {
+                let (end, used_width) = word_break.take().unwrap_or((idx, seg_width));
                 out.push(TextareaVLine {
                     logical_row: row,
                     char_start: seg_start,
-                    char_count: seg_chars,
+                    char_count: end - seg_start,
                 });
-                seg_start = idx;
-                seg_chars = 0;
-                seg_width = 0;
+                seg_start = end;
+                seg_chars = idx - end;
+                seg_width -= used_width;
             }
             seg_chars += 1;
             seg_width += cw;
+            if g.chars().all(char::is_whitespace) {
+                word_break = Some((idx + 1, seg_width));
+            }
         }
         out.push(TextareaVLine {
             logical_row: row,
