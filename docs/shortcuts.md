@@ -5,26 +5,32 @@ SLT owns Tab/Shift+Tab focus, mouse hit tests, text selection and terminal input
 | Action | Input |
 | --- | --- |
 | Conversations / human questions | A / B buttons; F2 |
-| Commands | Ctrl+P; command button |
-| Project-first search | Search button; Ctrl+F |
-| Focus next / previous | Tab / Shift+Tab |
+| Commands and keyboard help | Ctrl+P or F1; ? button; /help |
+| Switch conversation | Search button; Ctrl+F; /search |
+| Native content search | Search T3 from the switcher; /search QUERY |
+| Focus next / previous control | Tab / Shift+Tab |
+| Show / hide conversation list | F3; /sidebar |
+| Show / hide context | F4; /inspector |
+| Next / previous pane | F6 / Shift+F6 |
 | Open conversation | Navigator Enter or click; internal tab |
 | Prompt newline | Enter |
 | Rex Send | Ctrl+Enter |
 | Other send events, when forwarded | Cmd+Enter, Shift+Enter, Cmd+Shift+Enter |
-| Portable Send | Ctrl+] or Ctrl+\; explicit Send button |
+| Portable Send | Ctrl+] or Ctrl+\ |
 | Native Stop and queue hold | Ctrl+S; Stop button |
 | Native requests | Ctrl+Y; Questions button |
-| Model and effort | Model · effort button; /model, /effort |
+| Model / effort | Current model / effort controls; /model, /effort |
 | Copy exact thread ID | Cmd+I / Ctrl+I where delivered; Copy ID button |
 | Select / copy editor text, if forwarded | Cmd+A/C or Ctrl+A/C; focused editor selection |
-| Copy whole active draft, outside modals | Ctrl+Alt+C, when forwarded |
+| Copy whole active draft | Ctrl+Alt+C outside modals; /copy-draft |
 | Scroll focused transcript | Unmodified Up/Down or PageUp/PageDown |
 | Settle native thread | Ctrl+T; /settle |
 | Restore settled thread | /unsettle |
 | Close tab, retain draft | Cmd+W / Ctrl+W where delivered; tab close button |
-| Help | F1; ? button; /help |
+| Editing key reference | Editor keys in Commands; /editor-keys |
 | Save and exit | Ctrl+Q; /quit |
+
+Commands and F1 open the same compact, searchable action list. Each action shows its supported shortcut on the same line; the selected action supplies its description. Editor keys lists selection, copy, newline and focus gestures. Unbound actions have no placeholder shortcut.
 
 The application accepts richer send key events when the terminal forwards them. Physical Ctrl+Enter on M1 Rex dispatches once without creating a pane. Existing Rex Cmd+Enter creates a pane; its global binding is preserved. M4 finished-client verification remains a separate acceptance gate. Ctrl+I is Tab in legacy terminals; use Copy ID there.
 
@@ -36,7 +42,7 @@ Ctrl+Alt+C copies the complete active draft without moving its caret or selectio
 unfocused Ctrl+C does not copy an editor draft or exit the client. Terminal
 forwarding, OS clipboard receipt and actual focus remain separate native checks.
 
-Forms retain drafts when dismissed, changed or cancelled at the source. Continue validates a field; Submit is a separate native mutation. Widget-local completion never indicates delivery. An acknowledgement must match the original source revision and operation identity. Changed-source drafts remain recoverable.
+Forms retain drafts when dismissed, changed or cancelled at the source. A single offered answer saves and advances; multiple-choice questions keep Next. Submit answers is a separate native mutation. Widget-local completion never indicates delivery. An acknowledgement must match the original source revision and operation identity. Changed-source drafts remain recoverable.
 
 ## Recovery
 
@@ -45,4 +51,6 @@ Disconnect and client exit never stop accepted native work or retry a mutation. 
 Sending starts a separate next draft after the original operation and attempted
 text are saved. A delayed acknowledgement, rejection or uncertain result cannot
 append to or overwrite that draft. Rejected text remains in Prompt recall;
-uncertain operations remain in Recovery with their original payload.
+uncertain operations remain in Unconfirmed actions with their original payload.
+
+Unconfirmed actions are distinct from saved drafts. Check or retry original action reconciles its original ID; Inspect exact payload shows every retained field. Clear local record is an explicit local deletion after checking native outcome; it never cancels native work.

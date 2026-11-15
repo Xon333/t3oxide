@@ -1,3 +1,39 @@
+# Lean terminal interaction — 2026-11-15
+
+This UX pass is based on public main `3a9e11ee6458ed714dbc11fda85a6244a1d70efb`.
+It preserves the completed PR11 editor/reading mechanics and native T3 authority.
+
+| Evidence | Observed result |
+| --- | --- |
+| M1 Rust checks | `scripts/check-rust.sh` passed: application/vendor formatting, strict all-target/all-feature Clippy, **152 library + 16 integration tests** |
+| Rust documentation | `cargo doc --locked --no-deps` passed |
+| Adapter/scripts | `scripts/check.sh` passed: **260 Node + 5 Python tests**, syntax and compile checks |
+| M1 SLT PTY | **18 behavioral checks** passed on the debug candidate with `pyte==0.8.2` and synthetic native endpoints |
+| Independent focused review | Terra Xhigh reviewed the implementation and rechecked corrections; reported input, geometry, reading-state and hyperlink findings were fixed and regression-covered |
+
+Coverage includes compact Commands/Help at 40×12; actual menu arrow/Enter
+behavior; multiline native answers; readable final review with deliberate
+submission; keyboard paging of long reviews without a queued Enter submitting;
+changed-wording dialog stamps; immediate search filtering and cancellation;
+source-qualified equal-ID tab and model-override handling; visible project
+grouping/collapse; source/revision-qualified question reading; pane-width
+reflow after navigator changes; and bounded Markdown/table/code/source output
+with native links and adjacent-pane isolation. The PTY suite also retains
+Unicode/whitespace drafts, one-send activation boundaries, source switching,
+copy, resize, manual reading and modal exclusivity checks.
+
+The existing Node adapter and SLT vendor source are unchanged by this pass.
+The content adaptation reuses the existing maintained Markdown/table libraries;
+it adds no execution, graph, review-workflow or persistent-service owner.
+
+These are source and synthetic terminal results, not new physical Rex,
+provider-execution or human UX acceptance. The review server remains stopped.
+Release build identity and staged adoption are reported separately after merge;
+no installed launcher, canonical drafts/journals, credentials, Rex configuration
+or M4 installation was changed by these checks.
+
+---
+
 # Reading and composer extraction — 2026-11-15
 
 This focused change extracts terminal/editor behavior onto public main

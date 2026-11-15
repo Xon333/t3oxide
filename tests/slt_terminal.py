@@ -71,7 +71,7 @@ def commands_pointer_and_copy(binary, directory):
     terminal = Terminal(binary, paths["config"], paths["state"], columns=86, rows=31)
     try:
         terminal.wait("Ready for review")
-        for label in ["Unread", "Running", "Pins", "Settled", "Project", "Env", "Ctrl+] send", "Send"]:
+        for label in ["Inbox", "Active", "Pins", "Settled", "Scope", "Env", "Stop"]:
             terminal.wait(label)
         click(terminal, "Env")
         terminal.wait("Environment scope")
@@ -79,16 +79,16 @@ def commands_pointer_and_copy(binary, directory):
         terminal.wait("Fixture host")
         assert "Unknown action" not in terminal.text
         assert not native_payloads(paths), "environment browsing cannot dispatch a mutation"
-        click(terminal, "[ Fixture host ]")
+        terminal.send(b"\x1b[B\r")
         terminal.wait("Browsing Fixture host")
-        terminal.send(b"\x10help\r")
-        terminal.wait("Input and focus")
+        terminal.send(b"\x10editor-keys\r")
+        terminal.wait("Editor keys")
         saved = json.loads(paths["state"].read_text())
         assert not saved.get("drafts", {}).get("fixture-env/thread-a", ""), "palette query must not enter the prompt draft"
         assert not native_payloads(paths)
         terminal.send(ESC)
         terminal.send(b"/help\r")
-        terminal.wait("Input and focus")
+        terminal.wait("Commands")
         terminal.send(ESC)
         saved = wait_file(terminal, paths["state"], lambda value:
                           value.get("drafts", {}).get("fixture-env/thread-a") == "/help")
@@ -102,11 +102,8 @@ def commands_pointer_and_copy(binary, directory):
         terminal.send(b"\x7f")
         terminal.send(b"\x03")  # No selection: no copied text and no reader-level exit.
         assert terminal.process.poll() is None
-        # Pointer activation has the same edit/submit/tail boundary as the chord.
-        matches = [(line.index("Send") + 1, row + 1) for row, line in enumerate(terminal.lines) if "Send" in line]
-        x, y = matches[-1]
-        pointer = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
-        terminal.send(b"mouse-first" + pointer + b"mouse-next", settle=0.3)
+        # The compact composer retains exact edit/send/tail ordering without a Send button.
+        terminal.send(b"mouse-first" + CTRL_ENTER + b"mouse-next", settle=0.3)
         saved = wait_file(terminal, paths["state"], lambda value:
                           value.get("drafts", {}).get("fixture-env/thread-a") == "mouse-next")
         assert saved["pending"]["fixture-env"]["message"] == "mouse-first"
@@ -115,19 +112,19 @@ def commands_pointer_and_copy(binary, directory):
         terminal.resize(140, 38)
         terminal.wait("mouse-next")
         terminal.resize(86, 31)
-        terminal.wait("Ctrl+] send")
+        terminal.wait("Stop")
         # Exact text before modal save; tail is routed to the next prompt draft.
         click(terminal, "Commands")
-        click(terminal, "Enter command")
-        terminal.wait("Explicit command entry.")
+        terminal.send(b"Enter command\r")
+        terminal.wait("Continue")
         terminal.send(b"latest\x1dTAIL", settle=0.4)
         saved = wait_file(terminal, paths["state"], lambda value:
                           value.get("drafts", {}).get("fixture-env/thread-a") == "mouse-nextTAIL")
         assert len(native_payloads(paths)) == 1
         assert "Unknown action" not in terminal.text
         click(terminal, "Commands")
-        click(terminal, "Enter command")
-        terminal.wait("Explicit command entry.")
+        terminal.send(b"Enter command\r")
+        terminal.wait("Continue")
         matches = [(line.index("Continue") + 1, row + 1) for row, line in enumerate(terminal.lines) if "Continue" in line]
         x, y = matches[-1]
         pointer = f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode()
@@ -140,9 +137,9 @@ def commands_pointer_and_copy(binary, directory):
         terminal.close()
     return ["sidebar Env opens the supported environment scope without dispatching a mutation",
             "batched command Enter consumes without newline/send; compact controls and draft survive resize",
-            "batched Ctrl+P/help/Enter settles palette focus and executes Help without changing draft",
+            "batched Ctrl+P/editor-keys/Enter opens compact key reference without changing draft",
             "focused Control select-all/copy Press+Release emits exact clipboard text; unselected Ctrl+C cannot exit",
-            "batched pointer Send separates preceding edits from next draft; modal text/save/tail stays ordered"]
+            "send chord and pointer modal Continue retain exact edit/save/tail ordering"]
 
 
 def click(terminal, label, last=False):
@@ -182,13 +179,16 @@ def run(binary, directory):
         terminal.send("/")
         terminal.send("help")
         terminal.send(ENTER)
-        terminal.wait("Input and focus")
+        terminal.wait("Commands")
         assert json.loads(paths["native"].read_text())["effects"] == 1
         terminal.send(ESC)
         terminal.send(b"\x1bOQ")  # F2: actual human queue, not failed/prose rows.
-        terminal.wait("Questions")
+        terminal.wait("Needs you")
         terminal.wait("Question to answer")
         click(terminal, "Search")
+        terminal.wait("Conversations")
+        terminal.send(b"nonmatching-query")
+        click(terminal, "Search T3")
         terminal.wait("Empty project")
         terminal.send(ESC)
         assert "Finished refactor" not in "\n".join(line[:28] for line in terminal.lines)
@@ -211,7 +211,7 @@ def run(binary, directory):
         "conversation tabs autosave independent drafts and restore them after restart",
         "Ctrl+Enter Press+Release dispatches exactly one native send with no added newline",
         "typed command Enter opens help without dispatch or newline and retains unsent text",
-        "Mode B admits actual questions and source-backed inventory retains a zero-question project",
+        "Mode B admits actual questions; native-search inventory retains an empty project",
     ]
 
 
@@ -305,7 +305,7 @@ def composer_and_transcript_reflow(binary, directory):
         terminal.paste("held under modal")
         wait_file(terminal, paths["state"], lambda value: value.get("drafts", {}).get("fixture-env/thread-a") == "held under modal")
         terminal.command("help")
-        terminal.wait("Input and focus")
+        terminal.wait("Commands")
         start = len(terminal.raw)
         terminal.send(copy_draft + b"\x1b[6~\x1b[B")
         assert b"\x1b]52;c;" not in terminal.raw[start:], "modal disables whole-draft copy"
@@ -324,17 +324,16 @@ def answers(binary, directory):
     paths = fixture(directory / "answers", stream=False)
     terminal = Terminal(binary, paths["config"], paths["state"], mode="b")
     try:
-        terminal.wait("Questions")
+        terminal.wait("Needs you")
         click(terminal, "Question to answer")
         terminal.wait("What should happen next?")
         terminal.wait("Ready for review")
         click(terminal, "Answer")
         terminal.wait("Question 1 / 1")
-        click(terminal, "[ Continue ]")
+        click(terminal, "Continue")
         saved = wait_file(terminal, paths["state"], lambda value: bool(value.get("attentionDrafts")))
         assert not saved.get("pending")
         assert not native_payloads(paths)
-        click(terminal, "[ Next ]")
         terminal.wait("Review answers")
         assert not native_payloads(paths)
         click(terminal, "Submit answers")

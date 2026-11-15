@@ -177,6 +177,84 @@ impl App {
         ui
     }
 
+    pub(super) fn switcher(&mut self) {
+        self.modal_editor = ui::editor("", &self.theme, "Find a conversation…");
+        self.dialog = Some(Dialog {
+            title: "Conversations".into(),
+            description: String::new(),
+            detail: String::new(),
+            choices: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            kind: DialogKind::Switcher,
+            footer: "↑↓ choose · Enter open · Esc close".into(),
+        });
+        self.filter_switcher();
+    }
+
+    pub(super) fn filter_switcher(&mut self) {
+        use nucleo_matcher::{
+            Config, Matcher, Utf32Str,
+            pattern::{AtomKind, CaseMatching, Normalization, Pattern},
+        };
+        let query = self.modal_editor.lines().join(" ");
+        let pattern = Pattern::new(
+            &query,
+            CaseMatching::Ignore,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        );
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        let mut scratch = Vec::new();
+        let mut matches: Vec<_> = self
+            .threads
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let environment = &self.environments[row.profile];
+                let text = format!(
+                    "{} {} {} {}",
+                    row.title, row.project, environment.label, row.id
+                );
+                pattern
+                    .score(Utf32Str::new(&text, &mut scratch), &mut matcher)
+                    .map(|score| (score, index, row))
+            })
+            .collect();
+        matches.sort_by_key(|(score, index, _)| (std::cmp::Reverse(*score), *index));
+        let mut choices: Vec<_> = matches
+            .into_iter()
+            .map(|(_, _, row)| {
+                let environment = &self.environments[row.profile];
+                let mut choice = Choice::new(
+                    if row.title.is_empty() {
+                        row.id.clone()
+                    } else {
+                        row.title.clone()
+                    },
+                    format!("{} · {}", row.project, environment.label),
+                    Intent::Open(row.profile, row.id.clone()),
+                );
+                choice.checked = self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.profile == row.profile && active.thread == row.id);
+                choice
+            })
+            .collect();
+        choices.push(Choice::new(
+            "Search T3…",
+            "Native content search",
+            Intent::Command("native-search".into()),
+        ));
+        if let Some(dialog) = &mut self.dialog {
+            dialog.choices = choices;
+            dialog.selected = 0;
+            dialog.scroll = 0;
+        }
+        self.dirty = true;
+    }
+
     pub(super) fn search_projects(&mut self) {
         let mut choices = Vec::new();
         let mut projects = self.project_sources();
@@ -320,6 +398,70 @@ impl App {
                 self.workspace.pending_jump = None;
             }
         }
+
+        let metadata = self.metadata();
+        let snapshot = self.state.snapshot();
+        let override_selection = self
+            .active
+            .as_ref()
+            .and_then(|active| {
+                snapshot["modelOverrides"][format!(
+                    "{}/{}",
+                    self.environments[active.profile].environment_id, active.thread
+                )]
+                .get("selection")
+            })
+            .filter(|selection| selection.is_object());
+        surface.composer_override = override_selection.is_some();
+        let selection = override_selection.unwrap_or(&metadata["modelSelection"]);
+        surface.composer_model = if surface.composer_override {
+            string(selection, "model")
+        } else {
+            metadata["model"]
+                .as_str()
+                .filter(|model| !model.is_empty())
+                .or_else(|| selection["model"].as_str())
+                .unwrap_or("")
+                .to_owned()
+        };
+        surface.composer_effort = array(selection, "options")
+            .iter()
+            .find(|option| {
+                matches!(
+                    option["id"].as_str(),
+                    Some("reasoningEffort" | "reasoning" | "effort")
+                )
+            })
+            .and_then(|option| option["value"].as_str())
+            .unwrap_or("")
+            .to_owned();
+        surface.run_active = self
+            .active
+            .as_ref()
+            .filter(|active| {
+                !active.navigating
+                    && active
+                        .projection
+                        .snapshot()
+                        .is_some_and(|snapshot| snapshot.is_live())
+            })
+            .and_then(|_| {
+                match metadata["runtimeDetails"]["status"]
+                    .as_str()
+                    .filter(|status| !status.is_empty())
+                    .or_else(|| metadata["status"].as_str())
+                {
+                    Some(
+                        "preparing" | "starting" | "running" | "waiting" | "needs_input"
+                        | "needs-input",
+                    ) => Some(true),
+                    Some("completed" | "failed" | "interrupted" | "cancelled" | "idle") => {
+                        Some(false)
+                    }
+                    _ => None,
+                }
+            });
+
         surface.projects = self.project_sources();
         surface.thread_sources = self
             .threads
@@ -607,6 +749,21 @@ impl App {
             Action::Lane(lane) => {
                 self.set_lane(lane)?;
             }
+            Action::Command(command) if command == "sidebar" => {
+                surface.navigator_visible = Some(!surface.navigator_shown);
+            }
+            Action::Command(command) if command == "inspector" => {
+                surface.show_context = !surface.show_context;
+            }
+            Action::Command(command) if command == "focus-next" => {
+                surface.focus_cycle = Some(false);
+            }
+            Action::Command(command) if command == "focus-prev" => {
+                surface.focus_cycle = Some(true);
+            }
+            Action::Command(command) if command == "copy-draft" => {
+                self.clipboard_request = Some(self.text());
+            }
             Action::Command(command) if command == "palette" => self.palette(),
             Action::Command(command) if command == "internal-tabs" => {
                 self.save_ui()?;
@@ -688,11 +845,23 @@ impl App {
                     .is_some_and(|d| matches!(d.kind, DialogKind::Palette))
                 {
                     self.filter_palette();
+                } else if self
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| matches!(dialog.kind, DialogKind::Switcher))
+                {
+                    self.filter_switcher();
                 } else {
                     self.form_save_at = Some(Instant::now() + Duration::from_millis(200));
                 }
             }
             Action::ModalChoice(index) => {
+                if self.dialog.as_ref().is_some_and(|dialog| {
+                    matches!(dialog.kind, DialogKind::Palette | DialogKind::Switcher)
+                        && dialog.choices.is_empty()
+                }) {
+                    return Ok(());
+                }
                 let choice = self
                     .dialog
                     .as_ref()
@@ -722,7 +891,7 @@ impl App {
         if let Some(dialog) = self.dialog.clone() {
             match dialog.kind {
                 DialogKind::Text(target) => self.submit_text(target)?,
-                DialogKind::Menu | DialogKind::Palette => {
+                DialogKind::Menu | DialogKind::Palette | DialogKind::Switcher => {
                     if let Some(choice) = dialog.choices.get(dialog.selected) {
                         self.dispatch(choice.intent.clone())?;
                     }

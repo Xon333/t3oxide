@@ -106,6 +106,7 @@ pub(super) enum ReadKind {
     Projects { profile: usize, purpose: NewPurpose },
     Defaults { profile: usize, project: Value },
     Models(ModelScope),
+    ModelOption(ModelScope, String),
     Review,
     Activity,
     Inspect,
@@ -175,6 +176,7 @@ pub(super) enum Intent {
         fields: Value,
     },
     ReviewRecovery(Value, bool),
+    RecoveryPayload(Value, bool),
     Recover(Value, bool),
     Forget(Value, bool),
     Inspect(Value),
@@ -204,6 +206,7 @@ impl Choice {
 pub(super) enum DialogKind {
     Menu,
     Palette,
+    Switcher,
     Text(InputTarget),
     Detail,
 }
@@ -232,6 +235,7 @@ pub(super) struct Launch {
 }
 #[derive(Clone, Debug)]
 pub(super) struct ModelEdit {
+    source: Option<workspace::ViewSource>,
     scope: ModelScope,
     catalog: Value,
     original: Value,
@@ -2088,7 +2092,13 @@ impl App {
                 )
                     .hash(&mut identity);
             }
+            (&d.title, &d.description, &d.detail, &d.footer).hash(&mut identity);
+            format!("{:?}", d.kind).hash(&mut identity);
+            if let Some(edit) = &self.request_edit {
+                (edit.index, edit.request.to_string()).hash(&mut identity);
+            }
             for choice in &d.choices {
+                (&choice.label, &choice.description, choice.checked).hash(&mut identity);
                 format!("{:?}", choice.intent).hash(&mut identity);
             }
             ui::Modal {
@@ -2106,7 +2116,16 @@ impl App {
                 selected: d.selected,
                 scroll: d.scroll,
                 detail: d.detail.clone(),
-                editor: matches!(d.kind, DialogKind::Text(_) | DialogKind::Palette),
+                editor: matches!(
+                    d.kind,
+                    DialogKind::Text(_) | DialogKind::Palette | DialogKind::Switcher
+                ),
+                multiline: matches!(
+                    d.kind,
+                    DialogKind::Text(
+                        InputTarget::Question | InputTarget::LaunchMessage | InputTarget::Batch
+                    )
+                ),
                 footer: d.footer.clone(),
                 action_stamp: identity.finish(),
             }
@@ -2181,13 +2200,18 @@ impl App {
         let requests = self.active.as_ref().map(|a| a.requests.len()).unwrap_or(0);
         let pending = self.state.pending_records().len();
         let status = if let Some(a) = &self.active {
-            format!(
-                "{} · {} · {} · {}",
-                a.status,
-                string(&metadata, "status"),
-                string(&metadata, "model"),
-                self.delivery
-            )
+            [
+                if a.status == "Live" { "" } else { &a.status },
+                if self.delivery == "auto" {
+                    ""
+                } else {
+                    &self.delivery
+                },
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ")
         } else {
             self.host_status()
         };

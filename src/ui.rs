@@ -93,6 +93,7 @@ pub struct Modal {
     pub scroll: usize,
     pub detail: String,
     pub editor: bool,
+    pub multiline: bool,
     pub footer: String,
     pub action_stamp: u64,
 }
