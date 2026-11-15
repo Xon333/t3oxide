@@ -1,6 +1,6 @@
 //! Source-qualified Markdown reports and bounded TermiFlow flowcharts (A4, B3).
 
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 use slt::{Context, Style, palette::tailwind};
 use std::{
@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 use termiflow::{Config, FindingCode, FindingSeverity};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_SOURCE_BYTES: usize = 16 * 1024;
@@ -128,82 +129,86 @@ impl Cache {
         geometry: Geometry,
     ) {
         let document = self.prepare(source, revision, markdown, geometry);
-        for part in &document.parts {
-            match part {
-                Part::Markdown(markdown) => {
-                    ctx.markdown(markdown);
-                }
-                Part::Mermaid {
-                    offset,
-                    original,
-                    rendered,
-                } => {
-                    let identity = format!("{source}\0{revision}\0{offset}");
-                    let mut expanded = self.expanded.contains(&identity);
-                    let warnings = rendered
-                        .as_ref()
-                        .map_or(&[][..], |diagram| diagram.warnings.as_slice());
-                    ctx.row(|ctx| {
-                        ctx.text(if rendered.is_err() {
-                            "Diagram source"
-                        } else if warnings.is_empty() {
-                            "Flowchart"
-                        } else {
-                            "Flowchart · review"
-                        })
-                        .fg(if warnings.is_empty() && rendered.is_ok() {
-                            tailwind::CYAN.c300
-                        } else {
-                            tailwind::AMBER.c300
+        ctx.container().w(geometry.width.max(1)).gap(0).col(|ctx| {
+            for part in &document.parts {
+                match part {
+                    Part::Markdown(markdown) => {
+                        draw_markdown(ctx, markdown, geometry.width);
+                    }
+                    Part::Mermaid {
+                        offset,
+                        original,
+                        rendered,
+                    } => {
+                        let identity = format!("{source}\0{revision}\0{offset}");
+                        let mut expanded = self.expanded.contains(&identity);
+                        let warnings = rendered
+                            .as_ref()
+                            .map_or(&[][..], |diagram| diagram.warnings.as_slice());
+                        ctx.container().wrap().row(|ctx| {
+                            ctx.text(if rendered.is_err() {
+                                "Diagram source"
+                            } else if warnings.is_empty() {
+                                "Flowchart"
+                            } else {
+                                "Flowchart · review"
+                            })
+                            .fg(
+                                if warnings.is_empty() && rendered.is_ok() {
+                                    tailwind::CYAN.c300
+                                } else {
+                                    tailwind::AMBER.c300
+                                },
+                            );
+                            if ctx
+                                .button(if expanded { "Hide source" } else { "Source" })
+                                .clicked
+                            {
+                                expanded = !expanded;
+                            }
+                            if ctx.button("Copy source").clicked {
+                                ctx.copy_to_clipboard(original);
+                            }
                         });
-                        if ctx
-                            .button(if expanded { "Hide source" } else { "Source" })
-                            .clicked
-                        {
-                            expanded = !expanded;
+                        if expanded {
+                            self.expanded.insert(identity.clone());
+                        } else {
+                            self.expanded.remove(&identity);
                         }
-                        if ctx.button("Copy source").clicked {
-                            ctx.copy_to_clipboard(original);
+                        match rendered {
+                            Ok(diagram) => {
+                                let style = Style::new().fg(ctx.theme().text);
+                                // The containing report owns scrolling for the entire diagram.
+                                // Normal text retains SLT's modal paint order.
+                                ctx.container()
+                                    .w(diagram.width)
+                                    .h(diagram.height)
+                                    .gap(0)
+                                    .col(|ctx| {
+                                        for line in &diagram.lines {
+                                            ctx.styled(line, style).w(diagram.width).h(1);
+                                        }
+                                    });
+                            }
+                            Err(reason) => {
+                                ctx.text(format!("Source · {reason}"))
+                                    .fg(tailwind::AMBER.c300)
+                                    .wrap();
+                            }
                         }
-                    });
-                    if expanded {
-                        self.expanded.insert(identity.clone());
-                    } else {
-                        self.expanded.remove(&identity);
-                    }
-                    match rendered {
-                        Ok(diagram) => {
-                            let style = Style::new().fg(ctx.theme().text);
-                            // The containing report owns scrolling for the entire diagram.
-                            // Normal text retains SLT's modal paint order.
-                            ctx.container()
-                                .w(diagram.width)
-                                .h(diagram.height)
-                                .gap(0)
-                                .col(|ctx| {
-                                    for line in &diagram.lines {
-                                        ctx.styled(line, style).w(diagram.width).h(1);
-                                    }
-                                });
-                        }
-                        Err(reason) => {
-                            ctx.text(format!("Source · {reason}"))
-                                .fg(tailwind::AMBER.c300)
+                        if expanded || rendered.is_err() {
+                            ctx.text(format!("{source} @ {revision} · fence {offset}"))
+                                .dim()
                                 .wrap();
+                            for warning in warnings {
+                                ctx.text(warning).fg(tailwind::AMBER.c300).wrap();
+                            }
+                            draw_source(ctx, original, geometry.width);
                         }
-                    }
-                    if expanded || rendered.is_err() {
-                        ctx.text(format!("{source} @ {revision} · fence {offset}"))
-                            .dim()
-                            .wrap();
-                        for warning in warnings {
-                            ctx.text(warning).fg(tailwind::AMBER.c300).wrap();
-                        }
-                        ctx.code_block(original).lang("mermaid");
                     }
                 }
             }
-        }
+        });
         // These are transient presentation caches; source text remains controller-owned.
         if self.expanded.len() > MAX_CACHE_ENTRIES * 4 {
             self.expanded.clear();
@@ -244,6 +249,219 @@ impl Cache {
             self.entries.pop_front();
         }
         document
+    }
+}
+
+/// Render Markdown within an allocated pane. SLT retains ordinary inline links;
+/// the existing table library supplies cell wrapping without another renderer.
+pub fn draw_markdown(ctx: &mut Context, markdown: &str, width: u32) {
+    let width = width.max(1);
+    ctx.container().w(width).gap(0).col(|ctx| {
+        let mut preceding = 0;
+        let mut depth = 0usize;
+        let mut block: Option<(usize, usize, TagEnd)> = None;
+        let mut code = String::new();
+        for (event, range) in Parser::new_ext(markdown, Options::ENABLE_TABLES).into_offset_iter() {
+            match event {
+                Event::Start(tag) => {
+                    if block.is_none()
+                        && matches!(
+                            tag,
+                            Tag::CodeBlock(_)
+                                | Tag::Heading { .. }
+                                | Tag::BlockQuote(_)
+                                | Tag::Table(_)
+                        )
+                    {
+                        block = Some((range.start, depth, tag.to_end()));
+                        code.clear();
+                    }
+                    depth += 1;
+                }
+                Event::Text(text) if matches!(block, Some((_, _, TagEnd::CodeBlock))) => {
+                    code.push_str(&text)
+                }
+                Event::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    if block.as_ref().is_some_and(|(_, level, _)| *level == depth) {
+                        let (start, _, kind) = block.take().expect("matching block was present");
+                        if preceding < start {
+                            ctx.markdown(&markdown[preceding..start]);
+                        }
+                        let source = &markdown[start..range.end];
+                        match kind {
+                            TagEnd::CodeBlock => draw_source(ctx, &code, width),
+                            TagEnd::Heading(_) => {
+                                // Retain the original inline syntax and destinations; only
+                                // the block marker is replaced by the pane's heading colour.
+                                let mut start = source.len();
+                                let mut end = 0;
+                                for (event, range) in Parser::new(source).into_offset_iter() {
+                                    if !matches!(
+                                        event,
+                                        Event::Start(Tag::Heading { .. })
+                                            | Event::End(TagEnd::Heading(_))
+                                    ) {
+                                        start = start.min(range.start);
+                                        end = end.max(range.end);
+                                    }
+                                }
+                                let mut theme = *ctx.theme();
+                                theme.text = theme.primary;
+                                ctx.container().w(width).gap(0).theme(theme).col(|ctx| {
+                                    ctx.markdown(source.get(start..end).unwrap_or_default());
+                                });
+                            }
+                            TagEnd::BlockQuote(_) => {
+                                let text = source
+                                    .lines()
+                                    .map(|line| {
+                                        let mut body = line.trim_start();
+                                        while let Some(rest) = body.strip_prefix('>') {
+                                            body =
+                                                rest.strip_prefix(' ').unwrap_or(rest).trim_start();
+                                        }
+                                        body
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                let mut theme = *ctx.theme();
+                                theme.text = theme.text_dim;
+                                ctx.container().w(width).gap(0).theme(theme).col(|ctx| {
+                                    draw_markdown(ctx, &text, width);
+                                });
+                            }
+                            TagEnd::Table => draw_table(ctx, source, width),
+                            _ => unreachable!("only bounded Markdown blocks are captured"),
+                        }
+                        preceding = range.end;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if preceding < markdown.len() {
+            ctx.markdown(&markdown[preceding..]);
+        }
+    });
+}
+
+fn draw_source(ctx: &mut Context, source: &str, width: u32) {
+    let style = Style::new().fg(ctx.theme().accent);
+    for logical in source.split('\n') {
+        let mut line = String::new();
+        let mut cells = 0;
+        for grapheme in logical.graphemes(true) {
+            let count = UnicodeWidthStr::width(grapheme) as u32;
+            if cells + count > width.max(1) && !line.is_empty() {
+                ctx.styled(std::mem::take(&mut line), style)
+                    .w(width.max(1))
+                    .h(1);
+                cells = 0;
+            }
+            line.push_str(grapheme);
+            cells += count;
+        }
+        ctx.styled(if line.is_empty() { " ".into() } else { line }, style)
+            .w(width.max(1))
+            .h(1);
+    }
+}
+
+fn table_rows(markdown: &str) -> Vec<Vec<&str>> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    for (event, range) in Parser::new_ext(markdown, Options::ENABLE_TABLES).into_offset_iter() {
+        match event {
+            Event::Start(Tag::TableCell) => row.push(markdown[range].trim()),
+            Event::End(TagEnd::TableHead | TagEnd::TableRow) => rows.push(std::mem::take(&mut row)),
+            _ => {}
+        }
+    }
+    rows
+}
+
+fn draw_table(ctx: &mut Context, markdown: &str, width: u32) {
+    let links = Parser::new_ext(markdown, Options::ENABLE_TABLES)
+        .any(|event| matches!(event, Event::Start(Tag::Link { .. })));
+    let rows = table_rows(markdown);
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let mut widths = vec![0; columns];
+    for row in &rows {
+        for (index, cell) in row.iter().enumerate() {
+            let label = Parser::new(cell)
+                .filter_map(|event| match event {
+                    Event::Text(text) | Event::Code(text) => Some(text),
+                    _ => None,
+                })
+                .fold(String::new(), |mut value, text| {
+                    value.push_str(&text);
+                    value
+                });
+            widths[index] = widths[index].max(UnicodeWidthStr::width(label.as_str()));
+        }
+    }
+    let natural = widths.iter().sum::<usize>() + columns * 3 + 1;
+    if links && natural <= width as usize {
+        ctx.markdown(markdown);
+        return;
+    }
+    let options = tui_markdown::Options::new(TableStyles)
+        .table_width(u16::try_from(width).unwrap_or(u16::MAX));
+    let text = tui_markdown::from_str_with_options(markdown, &options);
+    if links || text.width() > width as usize {
+        // An overwide linked table becomes header/value rows. This keeps native
+        // SLT links and avoids adding visible destinations before cell wrapping.
+        if let Some(header) = rows.first() {
+            if rows.len() == 1 {
+                for cell in header {
+                    draw_markdown(ctx, cell, width);
+                }
+            }
+            for row in rows.iter().skip(1) {
+                for (index, cell) in row.iter().enumerate() {
+                    if let Some(label) = header.get(index) {
+                        ctx.markdown(&format!("**{label}**"));
+                    }
+                    draw_markdown(ctx, cell, width);
+                }
+                ctx.text(" ");
+            }
+        }
+        return;
+    }
+    use ratatui::style::Modifier;
+    for line in text.lines {
+        if line.spans.is_empty() {
+            ctx.text(" ");
+        } else {
+            ctx.line(|ctx| {
+                for span in line.spans {
+                    let mut style = Style::new().fg(ctx.theme().text);
+                    for (source, target) in [
+                        (Modifier::BOLD, slt::Modifiers::BOLD),
+                        (Modifier::ITALIC, slt::Modifiers::ITALIC),
+                        (Modifier::DIM, slt::Modifiers::DIM),
+                        (Modifier::UNDERLINED, slt::Modifiers::UNDERLINE),
+                        (Modifier::CROSSED_OUT, slt::Modifiers::STRIKETHROUGH),
+                    ] {
+                        if span.style.add_modifier.contains(source) {
+                            style.modifiers |= target;
+                        }
+                    }
+                    ctx.styled(span.content, style);
+                }
+            });
+        }
+    }
+}
+
+#[derive(Clone)]
+struct TableStyles;
+
+impl tui_markdown::StyleSheet for TableStyles {
+    fn code(&self) -> ratatui::style::Style {
+        ratatui::style::Style::new()
     }
 }
 
@@ -537,6 +755,176 @@ mod tests {
             closing.contains('─') || closing.contains('━'),
             "missing closing node: {closing}"
         );
+    }
+
+    #[test]
+    fn markdown_uses_pane_width_and_keeps_heading_quote_table_and_code_tails() {
+        let mut cache = Cache::default();
+        let mut backend = TestBackend::new(64, 44);
+        let markdown = "## A heading that must wrap completely to its headingtail\n\n> A quote with enough detail to reach the final quotetail\n\n| Check | Evidence |\n| --- | --- |\n| Width | A carefully wrapped decision with complete evidence tail |\n\n```rust\nlet original_source = keep_every_character_and_the_final_suffix;\n```";
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                ctx.container().gap(0).row(|ctx| {
+                    cache.draw(
+                        ctx,
+                        "source",
+                        "revision",
+                        markdown,
+                        Geometry {
+                            width: 28,
+                            height: 44,
+                        },
+                    );
+                    ctx.container().w(30).col(|ctx| {
+                        ctx.text("Adjacent Context");
+                    });
+                });
+            });
+        }
+        for tail in [
+            "headingtail",
+            "quotetail",
+            "tail",
+            "suffix;",
+            "Adjacent Context",
+        ] {
+            backend.assert_contains(tail);
+        }
+        for y in 1..44 {
+            for x in 28..64 {
+                assert!(
+                    backend.buffer().get(x, y).symbol.trim().is_empty(),
+                    "report escaped its pane at {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_linked_table_keeps_native_link_without_duplicate_destination() {
+        let mut backend = TestBackend::new(50, 30);
+        let markdown = "Read [the guide](https://example.com/guide).\n\n| Check | Evidence |\n| --- | --- |\n| A long decision label | [evidence](https://example.com/check) and the complete sourcetail |";
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                ctx.container().gap(0).row(|ctx| {
+                    draw_markdown(ctx, markdown, 24);
+                    ctx.container().w(20).col(|ctx| {
+                        ctx.text("Adjacent Context");
+                    });
+                });
+            });
+        }
+        backend.assert_contains("sourcetail");
+        backend.assert_not_contains("https://example.com");
+        let (x, y) = backend
+            .find_text("evidence")
+            .expect("linked label remains visible");
+        assert_eq!(
+            backend.buffer().get(x, y).hyperlink.as_deref(),
+            Some("https://example.com/check")
+        );
+        let (x, y) = backend
+            .find_text("the guide")
+            .expect("ordinary native link remains visible");
+        assert_eq!(
+            backend.buffer().get(x, y).hyperlink.as_deref(),
+            Some("https://example.com/guide")
+        );
+        for y in 1..30 {
+            for x in 24..50 {
+                assert!(
+                    backend.buffer().get(x, y).symbol.trim().is_empty(),
+                    "linked table escaped its pane at {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_headings_and_quotes_retain_inline_links_and_formatting() {
+        let mut backend = TestBackend::new(60, 24);
+        let markdown = "## Review [heading link](https://example.com/heading) with complete headingtail\n\n> Quoted **important** context with [quote link](https://example.com/quote) and quotetail";
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                ctx.container().gap(0).row(|ctx| {
+                    draw_markdown(ctx, markdown, 28);
+                    ctx.container().w(28).col(|ctx| {
+                        ctx.text("Adjacent Context");
+                    });
+                });
+            });
+        }
+        for tail in ["headingtail", "quotetail", "important"] {
+            backend.assert_contains(tail);
+        }
+        backend.assert_not_contains("https://example.com");
+        backend.assert_not_contains("**important**");
+        for (label, target) in [
+            ("heading link", "https://example.com/heading"),
+            ("quote link", "https://example.com/quote"),
+        ] {
+            let (x, y) = backend
+                .find_text(label)
+                .expect("native inline link remains visible");
+            assert_eq!(
+                backend.buffer().get(x, y).hyperlink.as_deref(),
+                Some(target)
+            );
+        }
+        for y in 1..24 {
+            for x in 28..60 {
+                assert!(
+                    backend.buffer().get(x, y).symbol.trim().is_empty(),
+                    "heading or quote escaped pane at {x},{y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_diagram_source_wraps_to_pane_and_retains_unicode_suffix() {
+        let mut cache = Cache::default();
+        let mut backend = TestBackend::new(60, 32);
+        let markdown = "```mermaid\nsequenceDiagram\n Alice->>Bob: Keep_the_complete_original_message_and_sourcetail\n 日本語->>Bob: 🙂 grapheme\n```";
+        for _ in 0..3 {
+            backend.render(|ctx| {
+                ctx.container().gap(0).row(|ctx| {
+                    cache.draw(
+                        ctx,
+                        "source",
+                        "revision",
+                        markdown,
+                        Geometry {
+                            width: 28,
+                            height: 32,
+                        },
+                    );
+                    ctx.container().w(30).col(|ctx| {
+                        ctx.text("Adjacent Context");
+                    });
+                });
+            });
+        }
+        let visible = (0..32)
+            .map(|y| {
+                (0..28)
+                    .map(|x| backend.buffer().get(x, y).symbol.as_str())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<String>();
+        assert!(visible.contains("sourcetail"), "{visible}");
+        backend.assert_contains("日本語");
+        backend.assert_contains("🙂");
+        for y in 1..32 {
+            for x in 28..60 {
+                assert!(
+                    backend.buffer().get(x, y).symbol.trim().is_empty(),
+                    "diagram source escaped its pane at {x},{y}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -139,6 +139,10 @@ fn local_resolution_requires_opening_exact_record_and_explicit_choice() {
         .clone();
     assert!(matches!(choice, Intent::ReviewRecovery(..)));
     fixture.app.dispatch(choice).unwrap();
+    fixture
+        .app
+        .dispatch(Intent::RecoveryPayload(record.clone(), false))
+        .unwrap();
     assert!(
         fixture
             .app
@@ -148,6 +152,10 @@ fn local_resolution_requires_opening_exact_record_and_explicit_choice() {
             .detail
             .contains("exact")
     );
+    fixture
+        .app
+        .dispatch(Intent::ReviewRecovery(record.clone(), false))
+        .unwrap();
     assert!(matches!(
         fixture.app.dialog.as_ref().unwrap().choices[0].intent,
         Intent::Close
@@ -406,7 +414,7 @@ fn inactive_model_favorites_cannot_mutate_preserved_selections() {
         fixture.until(|app| {
             app.dialog
                 .as_ref()
-                .is_some_and(|d| d.title.starts_with("Model ·"))
+                .is_some_and(|d| matches!(d.title.as_str(), "Model" | "Next message model"))
         });
         let choices = &fixture.app.dialog.as_ref().unwrap().choices;
         assert!(
@@ -414,21 +422,16 @@ fn inactive_model_favorites_cannot_mutate_preserved_selections() {
                 .iter()
                 .any(|c| c.label.to_lowercase().contains("favorite"))
         );
-        assert!(
-            choices
-                .iter()
-                .any(|c| matches!(c.intent, Intent::ModelApply))
-        );
+        assert!(choices.iter().any(|c| matches!(c.intent, Intent::Model(_))));
         fixture.app.dialog = None;
     }
     fixture.app.command("model next").unwrap();
     fixture.until(|app| {
         app.dialog
             .as_ref()
-            .is_some_and(|d| d.title.starts_with("Model ·"))
+            .is_some_and(|d| matches!(d.title.as_str(), "Model" | "Next message model"))
     });
     fixture.app.dispatch(Intent::Model(1)).unwrap();
-    fixture.app.dispatch(Intent::ModelApply).unwrap();
     assert_eq!(
         fixture.app.state.snapshot()["modelOverrides"]["native-test/thread-review"]["selection"]["model"],
         "fixture-fast"
@@ -455,7 +458,6 @@ fn inactive_model_favorites_cannot_mutate_preserved_selections() {
             .any(|c| c.label.to_lowercase().contains("favorite"))
     );
     fixture.app.dispatch(Intent::Model(1)).unwrap();
-    fixture.app.dispatch(Intent::ModelApply).unwrap();
     assert_eq!(
         fixture.app.launch.as_ref().unwrap().selection["model"],
         "fixture-fast"

@@ -263,7 +263,7 @@ impl App {
                 self.save_launch()?;
                 self.launch_menu()?;
             }
-            ReadKind::Models(scope) => {
+            kind @ (ReadKind::Models(scope) | ReadKind::ModelOption(scope, _)) => {
                 let a = self.active.as_ref().context("Conversation closed")?;
                 ensure!(
                     value["threadId"] == a.thread,
@@ -276,20 +276,38 @@ impl App {
                 let desired = self
                     .model_edit
                     .take()
-                    .filter(|e| e.catalog.is_null())
-                    .map(|e| e.selection);
-                let selection = desired.unwrap_or_else(|| value["current"].clone());
+                    .filter(|edit| edit.catalog.is_null())
+                    .map(|edit| edit.selection);
+                let next_override = if scope == ModelScope::Next {
+                    let key = format!(
+                        "{}/{}",
+                        self.environments[a.profile].environment_id, a.thread
+                    );
+                    self.state.snapshot()["modelOverrides"][&key]
+                        .get("selection")
+                        .cloned()
+                } else {
+                    None
+                };
+                let selection = desired
+                    .or(next_override)
+                    .unwrap_or_else(|| value["current"].clone());
                 ensure!(
                     selection["instanceId"] == value["current"]["instanceId"],
                     "Favorite belongs to another native provider instance"
                 );
                 self.model_edit = Some(ModelEdit {
+                    source: Some(workspace::ViewSource::active(self)?),
                     scope,
                     original: value["current"].clone(),
                     selection,
                     catalog: value,
                 });
-                self.model_menu()?;
+                if let ReadKind::ModelOption(_, option) = kind {
+                    self.model_option_menu(&option)?;
+                } else {
+                    self.model_menu()?;
+                }
             }
             ReadKind::Review => self.read_review(value)?,
             ReadKind::Activity => {
@@ -500,7 +518,9 @@ impl App {
                     .request_edit
                     .as_ref()
                     .context("Question form expired")?;
-                let q = &array(&edit.request, "questions")[edit.index];
+                let q = array(&edit.request, "questions")
+                    .get(edit.index)
+                    .context("Choose a question to edit")?;
                 let text = custom_answer_text(q, edit.answers.get(&string(q, "id")));
                 self.text_dialog(&string(q, "header"), &string(q, "question"), target, text);
             }
@@ -544,7 +564,9 @@ impl App {
                     .request_edit
                     .as_mut()
                     .context("Question form expired")?;
-                let q = &array(&edit.request, "questions")[edit.index];
+                let q = array(&edit.request, "questions")
+                    .get(edit.index)
+                    .context("Choose a question to edit")?;
                 let id = string(q, "id");
                 let custom = flag(q, "allowCustomAnswer") || array(q, "options").is_empty();
                 ensure!(custom, "Custom answer is not offered by T3");
@@ -676,6 +698,7 @@ impl App {
     pub(super) fn launch_models(&mut self) -> Result<()> {
         let l = self.launch.as_ref().context("Launch review expired")?;
         self.model_edit = Some(ModelEdit {
+            source: None,
             scope: ModelScope::Launch,
             catalog: l.defaults["catalog"].clone(),
             original: l.defaults["modelSelection"].clone(),
@@ -684,77 +707,76 @@ impl App {
         self.model_menu()
     }
     pub(super) fn model_menu(&mut self) -> Result<()> {
-        let edit = self.model_edit.as_ref().context("Model review expired")?;
+        let edit = self
+            .model_edit
+            .as_ref()
+            .context("Model selection expired")?;
         let selected = string(&edit.selection, "model");
         let mut choices = Vec::new();
-        for (i, m) in array(&edit.catalog, "models").iter().enumerate() {
-            let mut c = Choice::new(string(m, "name"), string(m, "slug"), Intent::Model(i));
-            c.checked = m["slug"] == selected;
-            choices.push(c);
+        for (i, model) in array(&edit.catalog, "models").iter().enumerate() {
+            let name = string(model, "name");
+            let mut choice = Choice::new(
+                if name.is_empty() {
+                    string(model, "slug")
+                } else {
+                    name
+                },
+                "",
+                Intent::Model(i),
+            );
+            choice.checked = model["slug"] == selected;
+            choices.push(choice);
         }
         if let Some(model) = array(&edit.catalog, "models")
             .iter()
-            .find(|m| m["slug"] == selected)
+            .find(|model| model["slug"] == selected)
         {
-            for o in array(model, "options") {
-                let id = string(o, "id");
-                let current = array(&edit.selection, "options")
-                    .iter()
-                    .find(|v| v["id"] == id)
-                    .map(|v| {
-                        v["value"]
-                            .as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| v["value"].to_string())
-                    })
-                    .unwrap_or_else(|| "Native default".into());
+            for option in array(model, "options") {
+                let id = string(option, "id");
                 choices.push(Choice::new(
-                    format!("{}: {current}", string(o, "label")),
-                    string(o, "description"),
+                    format!(
+                        "{}: {}",
+                        string(option, "label"),
+                        option_value_label(&edit.selection, option)
+                    ),
+                    "",
                     Intent::Option(id),
                 ));
             }
         }
-        choices.push(Choice::new(
-            "Apply reviewed selection",
-            match edit.scope {
-                ModelScope::Current => "Update this native thread with an expected-selection guard",
-                ModelScope::Next => "Stage only the next human message",
-                ModelScope::Launch => "Return to launch review without writing",
-            },
-            Intent::ModelApply,
-        ));
+        // Saved favorites still need an explicit application after catalog validation.
+        if edit.selection != edit.original {
+            choices.push(Choice::new("Apply selection", "", Intent::ModelApply));
+        }
         if edit.scope == ModelScope::Next {
             choices.push(Choice::new(
-                "Clear next-message override",
-                "Use the thread's native selection",
+                "Use conversation model",
+                "",
                 Intent::ClearOverride,
             ));
         }
         self.menu(
-            format!(
-                "Model · {}",
-                match edit.scope {
-                    ModelScope::Current => "current conversation",
-                    ModelScope::Next => "next message",
-                    ModelScope::Launch => "new conversation",
-                }
-            ),
-            format!(
-                "{} · {}",
-                string(&edit.catalog, "providerLabel"),
-                if flag(&edit.catalog, "requiresNewThreadForModelChange") {
-                    "Provider requires a new thread for model changes."
-                } else {
-                    "Selections stay staged until Apply."
-                }
-            ),
+            if edit.scope == ModelScope::Next {
+                "Next message model"
+            } else {
+                "Model"
+            },
+            if flag(&edit.catalog, "requiresNewThreadForModelChange")
+                && edit.scope != ModelScope::Launch
+            {
+                "Model changes require a new conversation."
+            } else {
+                ""
+            },
             choices,
         );
         Ok(())
     }
     pub(super) fn choose_model(&mut self, index: usize) -> Result<()> {
-        let edit = self.model_edit.as_mut().context("Model review expired")?;
+        let edit = self
+            .model_edit
+            .as_mut()
+            .context("Model selection expired")?;
         let model = array(&edit.catalog, "models")
             .get(index)
             .context("Model is no longer offered")?;
@@ -767,49 +789,91 @@ impl App {
             );
         }
         if edit.selection["model"] != model["slug"] {
-            edit.selection["model"] = model["slug"].clone();
-            edit.selection.as_object_mut().unwrap().remove("options");
+            let selection = edit
+                .selection
+                .as_object_mut()
+                .context("Invalid native model selection")?;
+            selection.insert("model".into(), model["slug"].clone());
+            selection.remove("options");
         }
-        self.model_menu()
+        self.apply_model()
     }
-    pub(super) fn choose_option(&mut self, id: &str) -> Result<()> {
-        let edit = self.model_edit.as_ref().context("Model review expired")?;
+    pub(super) fn model_option_menu(&mut self, kind: &str) -> Result<()> {
+        let edit = self
+            .model_edit
+            .as_ref()
+            .context("Model selection expired")?;
         let model = array(&edit.catalog, "models")
             .iter()
-            .find(|m| m["slug"] == edit.selection["model"])
+            .find(|model| model["slug"] == edit.selection["model"])
             .context("Model is not offered")?;
         let option = array(model, "options")
             .iter()
-            .find(|o| o["id"] == id)
+            .find(|option| option_matches(option, kind))
+            .with_context(|| format!("This model does not offer {kind}"))?;
+        let id = string(option, "id");
+        self.choose_option(&id)
+    }
+    pub(super) fn choose_option(&mut self, id: &str) -> Result<()> {
+        let edit = self
+            .model_edit
+            .as_ref()
+            .context("Model selection expired")?;
+        let model = array(&edit.catalog, "models")
+            .iter()
+            .find(|model| model["slug"] == edit.selection["model"])
+            .context("Model is not offered")?;
+        let option = array(model, "options")
+            .iter()
+            .find(|option| option["id"] == id)
             .context("Option is no longer offered")?;
-        let mut choices = vec![Choice::new(
-            "Native default",
-            "Remove only this staged option",
-            Intent::OptionValue(id.into(), Value::Null),
-        )];
-        if option["type"] == "boolean" {
-            for value in [true, false] {
-                choices.push(Choice::new(
-                    value.to_string(),
-                    "",
-                    Intent::OptionValue(id.into(), json!(value)),
-                ));
-            }
+        let selected = array(&edit.selection, "options")
+            .iter()
+            .find(|value| value["id"] == id)
+            .map(|value| &value["value"]);
+        let mut default = Choice::new("Default", "", Intent::OptionValue(id.into(), Value::Null));
+        default.checked = selected.is_none();
+        let mut choices = vec![default];
+        let values = if option["type"] == "boolean" {
+            vec![
+                json!({"id":true,"label":"On"}),
+                json!({"id":false,"label":"Off"}),
+            ]
         } else {
-            for value in array(option, "options") {
-                choices.push(Choice::new(
-                    string(value, "label"),
-                    string(value, "description"),
-                    Intent::OptionValue(id.into(), value["id"].clone()),
-                ));
-            }
+            array(option, "options").to_vec()
+        };
+        for value in values {
+            let mut choice = Choice::new(
+                string(&value, "label"),
+                string(&value, "description"),
+                Intent::OptionValue(id.into(), value["id"].clone()),
+            );
+            choice.checked = selected == Some(&value["id"]);
+            choices.push(choice);
         }
-        self.menu(
-            string(option, "label"),
-            string(option, "description"),
-            choices,
-        );
+        let title = if option_matches(option, "effort") {
+            "Effort".into()
+        } else {
+            string(option, "label")
+        };
+        self.menu(title, "", choices);
         Ok(())
+    }
+    pub(super) fn set_model_option(&mut self, id: &str, value: Value) -> Result<()> {
+        let edit = self
+            .model_edit
+            .as_mut()
+            .context("Model selection expired")?;
+        let mut options = array(&edit.selection, "options").to_vec();
+        options.retain(|option| option["id"] != id);
+        if !value.is_null() {
+            options.push(json!({"id":id,"value":value}));
+        }
+        edit.selection
+            .as_object_mut()
+            .context("Invalid native model selection")?
+            .insert("options".into(), json!(options));
+        self.apply_model()
     }
     pub(super) fn apply_model(&mut self) -> Result<()> {
         let edit = self
@@ -818,6 +882,16 @@ impl App {
             .context("Model review expired")?
             .clone();
         validate_selection(&edit.selection, &edit.catalog)?;
+        if let Some(source) = &edit.source {
+            source.check(self)?;
+        }
+        if edit.scope != ModelScope::Launch {
+            let active = self.active.as_ref().context("Conversation closed")?;
+            ensure!(
+                edit.catalog["threadId"] == active.thread,
+                "Model selection source changed; reopen the picker"
+            );
+        }
         match edit.scope {
             ModelScope::Launch => {
                 self.launch
@@ -841,11 +915,15 @@ impl App {
                         json!({"id":wire::new_id(),"selection":edit.selection});
                     Ok(())
                 })?;
-                self.notice = "One-message model override staged. Nothing sent.".into();
+                self.notice = "Next-message model saved".into();
             }
             ModelScope::Current => {
-                let a = self.active.as_ref().context("Conversation closed")?;
-                self.mutate(a.profile,"select-model",json!({"threadId":a.thread,"modelSelection":edit.selection,"expectedModelSelection":edit.original}),None)?;
+                let active = self.active.as_ref().context("Conversation closed")?;
+                if edit.selection == edit.original {
+                    self.notice = "Model unchanged".into();
+                } else {
+                    self.mutate(active.profile,"select-model",json!({"threadId":active.thread,"modelSelection":edit.selection,"expectedModelSelection":edit.original}),None)?;
+                }
             }
         }
         Ok(())
@@ -955,17 +1033,13 @@ impl App {
         self.ensure_request(&edit.request)?;
         let qs = array(&edit.request, "questions");
         if edit.index >= qs.len() {
-            let preview = serde_json::to_string_pretty(&edit.answers)?;
+            let preview = answer_review(&edit.request, &edit.answers);
             self.menu(
                 "Review answers",
                 preview,
                 vec![
-                    Choice::new(
-                        "Submit answers",
-                        "Send the exact reviewed native request revision",
-                        Intent::QuestionSubmit,
-                    ),
-                    Choice::new("Back", "Edit the previous question", Intent::QuestionBack),
+                    Choice::new("Submit answers", "", Intent::QuestionSubmit),
+                    Choice::new("Edit answers", "", Intent::QuestionBack),
                 ],
             );
             return Ok(());
@@ -1013,11 +1087,17 @@ impl App {
                 Intent::Edit(InputTarget::Question),
             ));
         }
-        choices.push(Choice::new(
-            "Next",
-            "Review the complete answers before submitting",
-            Intent::QuestionNext,
-        ));
+        if flag(q, "multiSelect") || answer.is_some() || !q["required"].as_bool().unwrap_or(true) {
+            choices.push(Choice::new(
+                if !q["required"].as_bool().unwrap_or(true) && answer.is_none() {
+                    "Skip"
+                } else {
+                    "Next"
+                },
+                "",
+                Intent::QuestionNext,
+            ));
+        }
         if edit.index > 0 {
             choices.push(Choice::new("Back", "", Intent::QuestionBack));
         }
@@ -1038,24 +1118,7 @@ impl App {
             .request_edit
             .as_mut()
             .context("Question form expired")?;
-        let q = &array(&edit.request, "questions")[edit.index];
-        let id = string(q, "id");
-        if flag(q, "multiSelect") {
-            let mut values = edit
-                .answers
-                .get(&id)
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(index) = values.iter().position(|v| v == &value) {
-                values.remove(index);
-            } else {
-                values.push(value);
-            }
-            edit.answers.insert(id, json!(values));
-        } else {
-            edit.answers.insert(id, value);
-        }
+        set_question_option(edit, value)?;
         self.question_menu()
     }
     pub(super) fn question_next(&mut self) -> Result<()> {
@@ -1102,6 +1165,109 @@ impl App {
         self.request_edit = None;
         Ok(())
     }
+}
+
+fn option_matches(option: &Value, kind: &str) -> bool {
+    let identity =
+        format!("{} {}", string(option, "id"), string(option, "label")).to_ascii_lowercase();
+    match kind {
+        "effort" => {
+            identity.contains("effort")
+                || identity.contains("reasoning")
+                || identity.contains("thinking")
+        }
+        "speed" => {
+            identity.contains("speed")
+                || identity.contains("servicetier")
+                || identity.contains("service_tier")
+        }
+        _ => option["id"] == kind,
+    }
+}
+
+fn option_value_label(selection: &Value, option: &Value) -> String {
+    let Some(selected) = array(selection, "options")
+        .iter()
+        .find(|value| value["id"] == option["id"])
+    else {
+        return "Default".into();
+    };
+    array(option, "options")
+        .iter()
+        .find(|value| value["id"] == selected["value"])
+        .map(|value| string(value, "label"))
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| match &selected["value"] {
+            Value::String(value) => value.clone(),
+            Value::Bool(true) => "On".into(),
+            Value::Bool(false) => "Off".into(),
+            value => value.to_string(),
+        })
+}
+
+fn set_question_option(edit: &mut RequestEdit, value: Value) -> Result<()> {
+    let question = array(&edit.request, "questions")
+        .get(edit.index)
+        .context("Question selection expired")?;
+    let id = string(question, "id");
+    if flag(question, "multiSelect") {
+        let mut values = edit
+            .answers
+            .get(&id)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(index) = values.iter().position(|item| item == &value) {
+            values.remove(index);
+        } else {
+            values.push(value);
+        }
+        edit.answers.insert(id, json!(values));
+    } else {
+        validate_answer(question, Some(&value))?;
+        edit.answers.insert(id, value);
+        edit.index += 1;
+    }
+    Ok(())
+}
+
+fn answer_review(request: &Value, answers: &serde_json::Map<String, Value>) -> String {
+    array(request, "questions")
+        .iter()
+        .enumerate()
+        .map(|(index, question)| {
+            let header = string(question, "header");
+            let heading = if header.is_empty() {
+                string(question, "question")
+            } else {
+                header
+            };
+            let label = |answer: &Value| {
+                let text = answer.as_str().unwrap_or_default();
+                array(question, "options")
+                    .iter()
+                    .find(|option| {
+                        option["value"]
+                            .as_str()
+                            .unwrap_or_else(|| option["label"].as_str().unwrap_or_default())
+                            == text
+                    })
+                    .map(|option| string(option, "label"))
+                    .unwrap_or_else(|| text.to_owned())
+            };
+            let answer = match answers.get(&string(question, "id")) {
+                Some(Value::Array(values)) if !values.is_empty() => {
+                    values.iter().map(label).collect::<Vec<_>>().join(", ")
+                }
+                Some(Value::String(value)) if !value.is_empty() => {
+                    label(&Value::String(value.clone()))
+                }
+                _ => "Skipped".into(),
+            };
+            format!("{}. {heading}\n{answer}", index + 1)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn validate_selection(selection: &Value, catalog: &Value) -> Result<()> {
@@ -1293,5 +1459,71 @@ mod tests {
         assert_eq!(changed, json!(["A", "new custom"]));
         assert!(validate_answer(&q, Some(&changed)).is_ok());
         assert_eq!(replace_custom_answer(&q, Some(&changed), ""), json!(["A"]));
+    }
+    #[test]
+    fn single_choice_advances_but_multiple_choices_stay_editable() {
+        let request = json!({"questions":[
+            {"id":"single","options":[{"label":"Yes","value":"approved"}]},
+            {"id":"multi","multiSelect":true,"options":[{"label":"A"},{"label":"B"}]}
+        ]});
+        let mut edit = RequestEdit {
+            request,
+            index: 0,
+            answers: serde_json::Map::new(),
+        };
+        assert!(set_question_option(&mut edit, json!("unoffered")).is_err());
+        assert_eq!(edit.index, 0);
+        assert!(edit.answers.is_empty());
+        set_question_option(&mut edit, json!("approved")).unwrap();
+        assert_eq!(edit.index, 1);
+        set_question_option(&mut edit, json!("A")).unwrap();
+        set_question_option(&mut edit, json!("B")).unwrap();
+        assert_eq!(edit.index, 1, "multiselect waits for explicit Next");
+        assert_eq!(edit.answers["multi"], json!(["A", "B"]));
+        set_question_option(&mut edit, json!("A")).unwrap();
+        assert_eq!(edit.answers["multi"], json!(["B"]));
+        edit.index = 2;
+        assert!(set_question_option(&mut edit, json!("A")).is_err());
+    }
+
+    #[test]
+    fn final_answer_review_uses_offered_labels_and_retains_custom_text() {
+        let request = json!({"questions":[
+            {"id":"single","header":"Decision","options":[{"label":"Proceed","value":"opaque-native-value"}]},
+            {"id":"multi","header":"Items","multiSelect":true,"options":[{"label":"First","value":"a"}]},
+            {"id":"custom","header":"Notes"},
+            {"id":"optional","header":"Later","required":false}
+        ]});
+        let answers = json!({"single":"opaque-native-value","multi":["a","Custom"],"custom":"  résumé 🙂\n日本語  "});
+        let review = answer_review(&request, answers.as_object().unwrap());
+        assert!(review.contains("1. Decision\nProceed"));
+        assert!(review.contains("2. Items\nFirst, Custom"));
+        assert!(review.contains("3. Notes\n  résumé 🙂\n日本語  "));
+        assert!(review.contains("4. Later\nSkipped"));
+        assert!(!review.contains("opaque-native-value"));
+    }
+
+    #[test]
+    fn native_option_labels_and_direct_matching_use_catalog_descriptors() {
+        let descriptor = json!({"id":"reasoningEffort","label":"Reasoning","options":[
+            {"id":"xhigh","label":"Extra high"}
+        ]});
+        assert!(option_matches(&descriptor, "effort"));
+        assert!(!option_matches(&descriptor, "speed"));
+        assert!(option_matches(
+            &json!({"id":"serviceTier","label":"Speed"}),
+            "speed"
+        ));
+        assert_eq!(
+            option_value_label(&json!({"options":[]}), &descriptor),
+            "Default"
+        );
+        assert_eq!(
+            option_value_label(
+                &json!({"options":[{"id":"reasoningEffort","value":"xhigh"}]}),
+                &descriptor
+            ),
+            "Extra high"
+        );
     }
 }

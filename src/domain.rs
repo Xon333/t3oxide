@@ -444,7 +444,7 @@ pub const ACTIONS: &[Action] = &[
         name: "new",
         label: "New conversation",
         description: "Choose native project and defaults; review before creating",
-        key: "n",
+        key: "",
     },
     Action {
         name: "commands",
@@ -462,13 +462,13 @@ pub const ACTIONS: &[Action] = &[
         name: "views",
         label: "Conversation tabs",
         description: "Unread and Completed, Running, Pins and Settled",
-        key: "v",
+        key: "",
     },
     Action {
         name: "env",
         label: "Environment scope",
         description: "Browse one or all configured environments",
-        key: "e",
+        key: "",
     },
     Action {
         name: "filter",
@@ -490,27 +490,27 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         name: "search",
-        label: "Search server conversations",
-        description: "Explicit native recent-message search; results are bounded",
+        label: "Switch conversation",
+        description: "Find loaded conversations; Search T3 for more",
         key: "Ctrl+F",
     },
     Action {
         name: "preview",
         label: "Preview highlighted conversation",
         description: "Read-only preview; does not change the attached thread",
-        key: "Space",
+        key: "",
     },
     Action {
         name: "parent",
         label: "Open parent conversation",
         description: "Use authoritative native lineage",
-        key: "Alt+Up",
+        key: "",
     },
     Action {
         name: "recent",
         label: "Recent conversations",
         description: "Return to an exact source and draft",
-        key: "Alt+Left",
+        key: "",
     },
     Action {
         name: "requests",
@@ -522,7 +522,7 @@ pub const ACTIONS: &[Action] = &[
         name: "send",
         label: "Send draft",
         description: "Send the human message with native delivery semantics",
-        key: "Ctrl+]",
+        key: "Ctrl+Enter | Ctrl+] | Ctrl+\\",
     },
     Action {
         name: "stop",
@@ -540,25 +540,25 @@ pub const ACTIONS: &[Action] = &[
         name: "earlier",
         label: "Earlier messages",
         description: "Read an earlier native page; pause live detail",
-        key: "[",
+        key: "",
     },
     Action {
         name: "latest",
         label: "Latest live conversation",
         description: "Resume the current native subscription",
-        key: "]",
+        key: "",
     },
     Action {
         name: "activity",
         label: "Tools and activity",
         description: "Inspect bounded tool source, arguments and results",
-        key: "a",
+        key: "",
     },
     Action {
         name: "review",
         label: "Changes and pull requests",
         description: "Read native workspace diff and linked PRs",
-        key: "d",
+        key: "",
     },
     Action {
         name: "reviewed",
@@ -570,7 +570,7 @@ pub const ACTIONS: &[Action] = &[
         name: "unreviewed",
         label: "Restore to inbox / Unsettle",
         description: "Unsettle the selected or attached conversation using its native revision",
-        key: "Ctrl+T in Settled",
+        key: "",
     },
     Action {
         name: "snooze",
@@ -592,9 +592,27 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         name: "model",
-        label: "Model and options",
-        description: "Stage model, effort and service tier from native catalog",
-        key: "m",
+        label: "Model",
+        description: "Choose from the native catalog",
+        key: "",
+    },
+    Action {
+        name: "effort",
+        label: "Effort",
+        description: "Choose reasoning effort for this conversation",
+        key: "",
+    },
+    Action {
+        name: "speed",
+        label: "Service tier",
+        description: "Choose a native service tier",
+        key: "",
+    },
+    Action {
+        name: "editor-keys",
+        label: "Editor keys",
+        description: "Newline, send, selection, copy and focus",
+        key: "",
     },
     Action {
         name: "override",
@@ -634,8 +652,8 @@ pub const ACTIONS: &[Action] = &[
     },
     Action {
         name: "recover",
-        label: "Recover saved operations",
-        description: "Review original intent; reconcile with the same operation ID",
+        label: "Unconfirmed actions",
+        description: "Check actions whose acceptance is unknown",
         key: "",
     },
     Action {
@@ -648,19 +666,31 @@ pub const ACTIONS: &[Action] = &[
         name: "recall",
         label: "Recall a sent prompt",
         description: "Restore a source-qualified human prompt into the composer",
-        key: "Alt+R",
+        key: "",
     },
     Action {
         name: "edit",
         label: "Edit draft externally",
         description: "Use VISUAL or EDITOR; save back to the same conversation",
-        key: "Ctrl+E",
+        key: "",
     },
     Action {
-        name: "layout",
-        label: "Workspace layout",
-        description: "Split, focused conversation, or wide inspector",
+        name: "sidebar",
+        label: "Toggle conversation sidebar",
+        description: "Show or hide the conversation list",
         key: "F3",
+    },
+    Action {
+        name: "inspector",
+        label: "Toggle context",
+        description: "Show or hide the source context",
+        key: "F4",
+    },
+    Action {
+        name: "focus-next",
+        label: "Cycle panes",
+        description: "Move focus between navigation, transcript and prompt",
+        key: "F6 | Shift+F6",
     },
     Action {
         name: "theme",
@@ -683,8 +713,8 @@ pub const ACTIONS: &[Action] = &[
     Action {
         name: "help",
         label: "Keyboard help",
-        description: "Context-aware shortcuts and workflow",
-        key: "Alt+H / F1 / ?",
+        description: "Search actions and shortcuts",
+        key: "F1",
     },
     Action {
         name: "quit",
@@ -696,7 +726,7 @@ pub const ACTIONS: &[Action] = &[
         name: "find",
         label: "Find in loaded messages",
         description: "Search the current bounded transcript page",
-        key: "Ctrl+F in transcript",
+        key: "",
     },
     Action {
         name: "find-next",
@@ -715,6 +745,12 @@ pub const ACTIONS: &[Action] = &[
         label: "Loaded message outline",
         description: "Inspect or jump to exact source-qualified messages",
         key: "",
+    },
+    Action {
+        name: "copy-draft",
+        label: "Copy whole draft",
+        description: "Copy exact draft text without moving the caret",
+        key: "Ctrl+Alt+C",
     },
     Action {
         name: "copy",

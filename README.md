@@ -18,7 +18,7 @@ Use a current stable Rust toolchain (declared minimum 1.92), existing environmen
 
 **A** combines Unread and Completed, with unread first. Completed means opened, inactive and unsettled. Running contains active work, needs input and failures; read state remains independent. Pins and the on-demand Settled explorer retain their native identity. Ordering follows meaningful native activity rather than token/tool churn. Native metadata supplies delegated-work visibility; absent evidence stays unknown.
 
-Search starts with a project and supports environment/name/native-content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
+Ctrl+F opens a live fuzzy switcher over loaded conversations, matching titles, projects, environments and IDs. Search T3 opens project-scoped native content search. Opening a conversation reuses its internal tab or adds one; every tab owns its autosaved prompt draft. Closing a tab retains its draft and recovery records. Model and effort controls use the current native catalog and provider identity.
 
 **B** lists actual native human questions by project. Select the source and answer its interactive native choices; Open in A retains the exact conversation. Answers autosave against the source/request revision and require explicit Submit. Success requires an acknowledged sequence plus matching environment, thread, request, revision and operation ID. Supporting Markdown and manually invoked Mermaid rendering remain available; they do not create requests or schedule work.
 
@@ -29,7 +29,9 @@ The revised presentation preferences live under `sltUi`; old presentation prefer
 
 ## Input
 
-Plain Enter inserts a newline. Typing `/` at the prompt opens completion; Enter selects the command. Esc retains unsent text, `//` stays literal, and pasted slash text stays literal. Cmd+Enter is preferred when delivered; Ctrl+Enter, Shift+Enter and Cmd+Shift+Enter are supported alternatives. An explicit Send button and portable Ctrl+] / Ctrl+\ path remain available. Ctrl+S is the independent Stop action. Physical Rex checks on M1 and the adopted M4 route verified one Ctrl+Enter send without creating a pane. Rex Cmd+Enter retains its pane action. On configured Rex clients, use the native **Enter T3oxide Editing** palette action for Mac selection/copy and Escape to leave its client-wide mode.
+Plain Enter inserts a newline. Typing `/` at the prompt opens completion; Enter selects the command. Esc retains unsent text, `//` stays literal, and pasted slash text stays literal. Cmd+Enter is preferred when delivered; Ctrl+Enter, Shift+Enter and Cmd+Shift+Enter are supported alternatives. The portable Ctrl+] / Ctrl+\ path remains available. Ctrl+S is the independent Stop action. Physical Rex checks on M1 and the adopted M4 route verified one Ctrl+Enter send without creating a pane. Rex Cmd+Enter retains its pane action. On configured Rex clients, use the native **Enter T3oxide Editing** palette action for Mac selection/copy and Escape to leave its client-wide mode.
+
+F1 opens the compact searchable Commands/keybind menu. F3 toggles conversation navigation, including in narrow terminals; F4 toggles context and F6 cycles the visible panes.
 
 See [shortcuts](docs/shortcuts.md), [content controls and examples](docs/content-controls.md), [architecture and flow map](docs/architecture.md), [source reuse](docs/rust-source-reuse.md) and [verification](docs/rust-verification.md).
 

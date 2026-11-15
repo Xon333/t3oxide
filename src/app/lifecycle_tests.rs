@@ -863,6 +863,7 @@ fn changed_or_cancelled_request_preserves_fresh_unsaved_answer_on_its_original_s
             "Continue"
         );
 
+        fixture.app.dispatch(Intent::QuestionBack).unwrap();
         fixture.app.edit_field(InputTarget::Question).unwrap();
         fixture.app.modal_editor.select_all();
         let freshest = "Fresh résumé 🙂\n日本語  \n  unfinished ";
@@ -2239,4 +2240,211 @@ fn focused_transcript_keys_and_wheel_preserve_editor_and_modal_ownership() {
     assert_eq!(fixture.app.text(), draft);
     assert_eq!(fixture.app.active.as_ref().unwrap().thread, "thread-review");
     assert!(fixture.app.state.pending("native-0", false).is_none());
+}
+
+#[test]
+fn live_switcher_keeps_cancelled_draft_and_opens_equal_id_on_exact_environment() {
+    let mut fixture = Fixture::new(0);
+    fixture.load_pages();
+    fixture.open(0);
+    fixture
+        .app
+        .replace_text("résumé 🙂\n  keep exactly  ".into());
+    fixture.app.flush_draft().unwrap();
+    fixture.app.switcher();
+    fixture.app.modal_editor = ui::editor("Fixture 1", &fixture.app.theme, "");
+    fixture.app.filter_switcher();
+    let selected = fixture
+        .app
+        .dialog
+        .as_ref()
+        .unwrap()
+        .choices
+        .iter()
+        .find(|choice| matches!(&choice.intent, Intent::Open(1, id) if id == "thread-a"))
+        .unwrap()
+        .intent
+        .clone();
+    fixture.app.dispatch(Intent::Close).unwrap();
+    assert_eq!(
+        fixture.app.composer.lines().join("\n"),
+        "résumé 🙂\n  keep exactly  "
+    );
+    fixture.app.switcher();
+    fixture.app.dispatch(selected).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture
+        .app
+        .active
+        .as_ref()
+        .unwrap()
+        .projection
+        .snapshot()
+        .is_none()
+    {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    assert_eq!(fixture.app.active.as_ref().unwrap().profile, 1);
+    assert_eq!(
+        fixture.app.state.snapshot()["drafts"]["native-0/thread-a"],
+        "résumé 🙂\n  keep exactly  "
+    );
+    assert!(fixture.app.state.pending_records().is_empty());
+}
+
+#[test]
+fn direct_effort_preserves_next_model_and_rejects_equal_id_retargeting() {
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    fixture.app.command("effort next").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture
+        .app
+        .dialog
+        .as_ref()
+        .is_none_or(|dialog| dialog.title != "Effort")
+    {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    let selection = fixture.app.model_edit.as_ref().unwrap().selection.clone();
+    fixture
+        .app
+        .dispatch(Intent::OptionValue("reasoningEffort".into(), json!("high")))
+        .unwrap();
+    let override_selection =
+        fixture.app.state.snapshot()["modelOverrides"]["native-0/thread-a"]["selection"].clone();
+    assert_eq!(override_selection["model"], selection["model"]);
+    assert_eq!(override_selection["instanceId"], selection["instanceId"]);
+    assert_eq!(override_selection["options"][0]["value"], "high");
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    fixture.app.populate_surface(&mut surface);
+    assert!(surface.composer_override);
+    assert_eq!(
+        surface.composer_model,
+        override_selection["model"].as_str().unwrap()
+    );
+    assert_eq!(surface.composer_effort, "high");
+    assert!(
+        fixture.app.state.pending_records().is_empty(),
+        "next-message selection is local until deliberate send"
+    );
+    fixture.app.command("effort next").unwrap();
+    while fixture
+        .app
+        .dialog
+        .as_ref()
+        .is_none_or(|dialog| dialog.title != "Effort")
+    {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    let stale = fixture.app.model_edit.clone().unwrap();
+    fixture.open(1);
+    fixture.app.model_edit = Some(stale);
+    assert!(
+        fixture
+            .app
+            .set_model_option("reasoningEffort", json!("low"))
+            .is_err()
+    );
+    assert!(fixture.app.state.snapshot()["modelOverrides"]["native-1/thread-a"].is_null());
+    assert_eq!(
+        fixture.app.state.snapshot()["modelOverrides"]["native-0/thread-a"]["selection"],
+        override_selection
+    );
+}
+
+#[test]
+fn changed_dialog_wording_and_question_revision_rebind_activation_geometry() {
+    let mut fixture = Fixture::new(0);
+    fixture.app.menu(
+        "First question",
+        "Short text",
+        vec![Choice::new(
+            "Same value",
+            "",
+            Intent::QuestionOption(json!("same")),
+        )],
+    );
+    let first = fixture.app.modal().unwrap().action_stamp;
+    fixture.app.menu(
+        "Second question",
+        "Different wrapping\nand question wording",
+        vec![Choice::new(
+            "New label",
+            "",
+            Intent::QuestionOption(json!("same")),
+        )],
+    );
+    let second = fixture.app.modal().unwrap().action_stamp;
+    assert_ne!(
+        first, second,
+        "identical answer values must not reuse previous question geometry"
+    );
+}
+
+#[test]
+fn edited_zero_result_palette_accepts_only_the_new_model_match() {
+    let mut fixture = Fixture::new(0);
+    fixture.open(0);
+    fixture.app.replace_text("Unsent original draft".into());
+    fixture.app.palette();
+    fixture.app.modal_editor = ui::editor("modelz", &fixture.app.theme, "");
+    fixture.app.filter_palette();
+    assert!(fixture.app.dialog.as_ref().unwrap().choices.is_empty());
+    let mut backend = ::slt::TestBackend::new(86, 31);
+    let mut surface = crate::slt_ui::SurfaceState::new();
+    for _ in 0..4 {
+        backend.render(|ctx| fixture.draw_slt(ctx, &mut surface));
+    }
+    backend.run_with_events(
+        ::slt::EventBuilder::new()
+            .key_code(::slt::KeyCode::Backspace)
+            .key_code(::slt::KeyCode::Enter)
+            .build(),
+        |ctx| {
+            fixture.draw_slt(ctx, &mut surface);
+        },
+    );
+    assert_eq!(fixture.app.text(), "Unsent original draft");
+    assert!(fixture.app.state.pending_records().is_empty());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fixture
+        .app
+        .dialog
+        .as_ref()
+        .is_none_or(|dialog| dialog.title != "Model")
+    {
+        let event = fixture
+            .app
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap();
+        fixture.app.handle(event).unwrap();
+    }
+    assert_eq!(
+        fixture.app.model_edit.as_ref().unwrap().catalog["threadId"],
+        "thread-a"
+    );
+    assert!(
+        fixture
+            .app
+            .dialog
+            .as_ref()
+            .is_none_or(|dialog| !matches!(dialog.kind, DialogKind::Palette))
+    );
 }

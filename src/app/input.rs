@@ -389,7 +389,7 @@ impl App {
             }
         }
         match kind {
-            DialogKind::Menu | DialogKind::Palette => match key.code {
+            DialogKind::Menu | DialogKind::Palette | DialogKind::Switcher => match key.code {
                 KeyCode::Down | KeyCode::Tab => self.move_dialog(1),
                 KeyCode::Up | KeyCode::BackTab => self.move_dialog(-1),
                 KeyCode::PageDown => self.move_dialog(8),
@@ -405,9 +405,13 @@ impl App {
                         dialog.selected = dialog.choices.len().saturating_sub(1);
                     }
                 }
-                _ if matches!(kind, DialogKind::Palette) => {
+                _ if matches!(kind, DialogKind::Palette | DialogKind::Switcher) => {
                     if editor_key(&mut self.modal_editor, key)? {
-                        self.filter_palette();
+                        if matches!(kind, DialogKind::Switcher) {
+                            self.filter_switcher();
+                        } else {
+                            self.filter_palette();
+                        }
                     }
                 }
                 KeyCode::Char('j') => self.move_dialog(1),
@@ -459,7 +463,7 @@ impl App {
         };
         let result = match &dialog.kind {
             DialogKind::Text(target) => self.submit_text(target.clone()),
-            DialogKind::Menu | DialogKind::Palette => {
+            DialogKind::Menu | DialogKind::Palette | DialogKind::Switcher => {
                 if let Some(choice) = dialog.choices.get(dialog.selected) {
                     self.dispatch(choice.intent.clone())
                 } else {
@@ -1122,20 +1126,24 @@ mod tests {
         app.replace_text("/settle is literal draft text".into());
         app.input(key(KeyCode::Char('h'), KeyModifiers::ALT))
             .unwrap();
-        let help = &app.dialog.as_ref().unwrap().detail;
-        assert!(help.contains("Ctrl+T"));
-        assert!(help.contains("Cmd+Enter") && help.contains("Ctrl+Enter"));
-        assert!(help.contains("## Recovery"));
-        assert!(help.contains("Plain Enter") || help.contains("Prompt newline"));
+        let help = app.dialog.as_ref().unwrap();
+        assert!(matches!(help.kind, DialogKind::Palette));
+        assert!(help.choices.iter().any(|c| c.label.contains("Ctrl+T")));
+        assert!(help.choices.iter().any(|c| c.label.contains("Ctrl+Enter")));
+        assert!(
+            help.choices
+                .iter()
+                .any(|c| matches!(&c.intent,Intent::Command(command) if command == "recover"))
+        );
         assert_eq!(app.text(), "/settle is literal draft text");
         app.dialog = None;
         app.input(key(KeyCode::Tab, KeyModifiers::NONE)).unwrap();
         assert_eq!(app.focus, Focus::Inspector);
         app.input(key(KeyCode::F(1), KeyModifiers::NONE)).unwrap();
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Commands");
         app.dialog = None;
         app.command("shortcuts").unwrap();
-        assert_eq!(app.dialog.as_ref().unwrap().title, "Keyboard help");
+        assert_eq!(app.dialog.as_ref().unwrap().title, "Commands");
         assert!(app.state.pending_records().is_empty());
     }
 

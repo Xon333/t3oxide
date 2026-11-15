@@ -16,7 +16,7 @@ impl App {
             selected: 0,
             scroll: 0,
             kind: DialogKind::Menu,
-            footer: "↑↓ choose · Enter select · Esc back · Ctrl+S Stop".into(),
+            footer: "↑↓ choose · Enter select · Esc back".into(),
         });
         self.dirty = true;
     }
@@ -32,7 +32,7 @@ impl App {
             selected: 0,
             scroll: 0,
             kind: DialogKind::Detail,
-            footer: "↑↓ / PageUp / PageDown scroll · Esc close · Copy via commands".into(),
+            footer: "↑↓ scroll · Esc close".into(),
         });
         self.dirty = true;
     }
@@ -52,7 +52,7 @@ impl App {
             selected: 0,
             scroll: 0,
             kind: DialogKind::Text(target),
-            footer: "Ctrl+] save · Esc back (edits retained for launch)".into(),
+            footer: "Ctrl+] save · Esc back".into(),
         });
         self.dirty = true;
     }
@@ -60,13 +60,13 @@ impl App {
         self.modal_editor = ui::editor("", &self.theme, "Find an action…");
         self.dialog = Some(Dialog {
             title: "Commands".into(),
-            description: "Actions use the current source. Type to filter.".into(),
+            description: String::new(),
             detail: String::new(),
             choices: Vec::new(),
             selected: 0,
             scroll: 0,
             kind: DialogKind::Palette,
-            footer: "Type to filter · ↑↓ choose · Enter run · Esc close".into(),
+            footer: "↑↓ choose · Enter run · Esc close".into(),
         });
         self.filter_palette();
         self.dirty = true;
@@ -88,6 +88,7 @@ impl App {
         let mut matches: Vec<_> = domain::ACTIONS
             .iter()
             .enumerate()
+            .filter(|(_, action)| !matches!(action.name, "commands" | "help"))
             .filter_map(|(index, action)| {
                 let text = format!(
                     "{} {} {} {}",
@@ -109,7 +110,7 @@ impl App {
                         if action.key.is_empty() {
                             String::new()
                         } else {
-                            format!("  {}", action.key)
+                            format!("  [ {} ]", action.key)
                         }
                     ),
                     action.description,
@@ -180,16 +181,7 @@ impl App {
             }
             Intent::Model(index) => self.choose_model(index)?,
             Intent::Option(id) => self.choose_option(&id)?,
-            Intent::OptionValue(id, value) => {
-                let edit = self.model_edit.as_mut().context("Model review expired")?;
-                let mut options = array(&edit.selection, "options").to_vec();
-                options.retain(|o| o["id"] != id);
-                if !value.is_null() {
-                    options.push(json!({"id":id,"value":value}));
-                }
-                edit.selection["options"] = json!(options);
-                self.model_menu()?;
-            }
+            Intent::OptionValue(id, value) => self.set_model_option(&id, value)?,
             Intent::ModelApply => self.apply_model()?,
             Intent::ClearOverride => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
@@ -231,6 +223,21 @@ impl App {
                 fields,
             } => self.mutate(profile, &op, fields, None)?,
             Intent::ReviewRecovery(record, stop) => self.review_saved_action(record, stop)?,
+            Intent::RecoveryPayload(record, stop) => {
+                let payload = serde_json::to_string_pretty(&record)?;
+                self.menu(
+                    "Original action",
+                    "",
+                    vec![Choice::new(
+                        "Back",
+                        "",
+                        Intent::ReviewRecovery(record, stop),
+                    )],
+                );
+                if let Some(dialog) = &mut self.dialog {
+                    dialog.detail = format!("```json\n{payload}\n```");
+                }
+            }
             Intent::Recover(record, stop) => self.retry_record(record, stop)?,
             Intent::Forget(record, stop) => {
                 let env = string(&record, "environmentId");
@@ -320,47 +327,45 @@ impl App {
             "/{name} is inactive; retained drafts and original operations remain in Saved launches and Recovery"
         );
         match name {
-            "commands" => self.palette(),
-            "command" => self.text_dialog(
-                "Enter command",
-                "Explicit command entry. Ctrl+] executes the reviewed text; Escape closes without executing.",
-                InputTarget::Command,
-                String::new(),
-            ),
+            "commands" | "palette" | "help" | "shortcuts" => self.palette(),
+            "command" => self.text_dialog("Enter command", "", InputTarget::Command, String::new()),
             "quit" => {
                 self.flush_draft()?;
                 self.quit = true;
-            },
+            }
             "mode" => {
-                ensure!(["", "dev", "developer", "agentbox"].contains(&args), "Workspace is Dev");
+                ensure!(
+                    ["", "dev", "developer", "agentbox"].contains(&args),
+                    "Workspace is Dev"
+                );
                 self.mode = Mode::Dev;
                 self.save_ui()?;
                 self.rebuild();
-            },
+            }
             "views" => {
-                let choices = [
-                    "Open", "Running", "Pins", "Settled",
-                ]
-                .into_iter()
-                .map(|name| Choice::new(name, "Native conversation state", Intent::Lane(name.into())))
-                .collect();
+                let choices = ["Open", "Running", "Pins", "Settled"]
+                    .into_iter()
+                    .map(|name| {
+                        Choice::new(name, "Native conversation state", Intent::Lane(name.into()))
+                    })
+                    .collect();
                 self.menu("Views", "Dev conversations", choices);
-            },
+            }
             "env" | "switch" | "threads" => {
                 let mut choices = vec![Choice::new(
                     "All environments",
                     "Keep unavailable sources visible",
                     Intent::Environment(None),
                 )];
-                choices.extend(self.environments.iter().enumerate().map(|(i, e)|
+                choices.extend(self.environments.iter().enumerate().map(|(i, e)| {
                     Choice::new(e.label.clone(), e.id.clone(), Intent::Environment(Some(i)))
-                ));
+                }));
                 self.menu(
                     "Environment scope",
                     "Browsing does not change the attached conversation.",
                     choices,
                 );
-            },
+            }
             "filter" => self.menu(
                 "Conversation type",
                 "Lineage comes from T3.",
@@ -373,38 +378,60 @@ impl App {
             "more" => self.refresh(true, false)?,
             "search" => {
                 if args.is_empty() {
-                    self.search_projects();
+                    self.switcher();
                 } else {
                     self.filter = args.into();
                     self.refresh(false, true)?;
                 }
-            },
+            }
+            "native-search" => self.search_projects(),
             "preview" => {
-                let selected = self.selected_thread().cloned().context("Select a conversation")?;
+                let selected = self
+                    .selected_thread()
+                    .cloned()
+                    .context("Select a conversation")?;
                 self.source_read(
                     selected.profile,
                     "thread-preview",
                     json!({"threadId": selected.id}),
                     ReadKind::Preview,
                 )?;
-                self.notice = "Reading preview; the active draft and Stop target stay attached.".into();
-            },
+                self.notice =
+                    "Reading preview; the active draft and Stop target stay attached.".into();
+            }
             "parent" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 let parent = string(&self.metadata()["lineage"], "parentThreadId");
-                ensure!(domain::valid_id(&parent), "No authoritative parent is available");
+                ensure!(
+                    domain::valid_id(&parent),
+                    "No authoritative parent is available"
+                );
                 self.open(a.profile, parent)?;
-            },
+            }
             "recent" => {
-                let choices = self.recents.iter().map(|(p, t)| {
-                    let title = self.threads.iter()
-                        .find(|r| r.profile == *p && r.id == *t)
-                        .map(|r| r.title.clone())
-                        .unwrap_or_else(|| t.clone());
-                    Choice::new(title, self.environments[*p].label.clone(), Intent::Open(*p, t.clone()))
-                }).collect();
-                self.menu("Recent conversations", "Exact environment and thread identities", choices);
-            },
+                let choices = self
+                    .recents
+                    .iter()
+                    .map(|(p, t)| {
+                        let title = self
+                            .threads
+                            .iter()
+                            .find(|r| r.profile == *p && r.id == *t)
+                            .map(|r| r.title.clone())
+                            .unwrap_or_else(|| t.clone());
+                        Choice::new(
+                            title,
+                            self.environments[*p].label.clone(),
+                            Intent::Open(*p, t.clone()),
+                        )
+                    })
+                    .collect();
+                self.menu(
+                    "Recent conversations",
+                    "Exact environment and thread identities",
+                    choices,
+                );
+            }
             "new" => self.begin_new(NewPurpose::Launch)?,
             "new-same" => self.begin_new(NewPurpose::Same)?,
             "destination" => self.destination_menu()?,
@@ -415,9 +442,17 @@ impl App {
             "stop" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 let run = string(&self.metadata(), "activeRunId");
-                ensure!(!run.is_empty(), "No reviewed active turn. Return to Latest to refresh.");
-                self.mutate(a.profile, "stop", json!({"threadId": a.thread, "runId": run}), None)?;
-            },
+                ensure!(
+                    !run.is_empty(),
+                    "No reviewed active turn. Return to Latest to refresh."
+                );
+                self.mutate(
+                    a.profile,
+                    "stop",
+                    json!({"threadId": a.thread, "runId": run}),
+                    None,
+                )?;
+            }
             "delivery" => {
                 if ["auto", "queue", "steer"].contains(&args) {
                     self.delivery = args.into();
@@ -425,75 +460,143 @@ impl App {
                     self.menu(
                         "Delivery",
                         "T3 owns immediate dispatch and accepted queues.",
-                        ["auto", "queue", "steer"].into_iter().map(|mode| Choice::new(
-                            mode,
-                            match mode {
-                                "auto" => "Native automatic delivery",
-                                "queue" => "After the active turn",
-                                "steer" => "Steer the active turn",
-                                _ => "",
-                            },
-                            Intent::Command(format!("delivery {mode}")),
-                        )).collect(),
+                        ["auto", "queue", "steer"]
+                            .into_iter()
+                            .map(|mode| {
+                                Choice::new(
+                                    mode,
+                                    match mode {
+                                        "auto" => "Native automatic delivery",
+                                        "queue" => "After the active turn",
+                                        "steer" => "Steer the active turn",
+                                        _ => "",
+                                    },
+                                    Intent::Command(format!("delivery {mode}")),
+                                )
+                            })
+                            .collect(),
                     );
                 }
-            },
+            }
             "earlier" => self.navigate(true)?,
             "latest" => self.navigate(false)?,
             "answer-drafts" => {
                 let saved = self.state.snapshot();
-                let choices = saved["attentionDrafts"].as_object().map(|drafts| drafts.values().map(|record| Choice::new(
-                    format!("{} · {}", string(&record["source"],"environmentId"), string(&record["source"],"threadId")),
-                    format!("{} · {}", string(&record["source"],"requestId"), string(&record["source"],"revision")),
-                    Intent::SavedAnswer(record.clone())
-                )).collect()).unwrap_or_default();
+                let choices = saved["attentionDrafts"]
+                    .as_object()
+                    .map(|drafts| {
+                        drafts
+                            .values()
+                            .map(|record| {
+                                Choice::new(
+                                    format!(
+                                        "{} · {}",
+                                        string(&record["source"], "environmentId"),
+                                        string(&record["source"], "threadId")
+                                    ),
+                                    format!(
+                                        "{} · {}",
+                                        string(&record["source"], "requestId"),
+                                        string(&record["source"], "revision")
+                                    ),
+                                    Intent::SavedAnswer(record.clone()),
+                                )
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 self.menu("Saved answers", "Original source revisions", choices);
             }
             "requests" => {
-                let requests = self.active.as_ref().context("Open a conversation first")?.requests.clone();
-                ensure!(!requests.is_empty(), "No verified pending requests. Latest refreshes live offers.");
+                let requests = self
+                    .active
+                    .as_ref()
+                    .context("Open a conversation first")?
+                    .requests
+                    .clone();
+                ensure!(
+                    !requests.is_empty(),
+                    "No verified pending requests. Latest refreshes live offers."
+                );
                 if requests.len() == 1 {
                     self.review_request(requests[0].clone())?;
                 } else {
                     self.menu(
                         "Requests",
                         "Closing this menu leaves every native request pending.",
-                        requests.into_iter().map(|r| Choice::new(
-                            string(&r, "prompt"), string(&r, "kind"), Intent::Request(r),
-                        )).collect(),
+                        requests
+                            .into_iter()
+                            .map(|r| {
+                                Choice::new(
+                                    string(&r, "prompt"),
+                                    string(&r, "kind"),
+                                    Intent::Request(r),
+                                )
+                            })
+                            .collect(),
                     );
                 }
-            },
+            }
             "activity" => {
-                let thread = self.active.as_ref().context("Open a conversation first")?.thread.clone();
+                let thread = self
+                    .active
+                    .as_ref()
+                    .context("Open a conversation first")?
+                    .thread
+                    .clone();
                 self.read("activity", json!({"threadId": thread}), ReadKind::Activity)?;
                 self.notice = "Reading tools and activity…".into();
-            },
+            }
             "review" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
-                self.read("thread-review", json!({"threadId": a.thread}), ReadKind::Review)?;
+                self.read(
+                    "thread-review",
+                    json!({"threadId": a.thread}),
+                    ReadKind::Review,
+                )?;
                 self.notice = "Reading native changes…".into();
-            },
-            "reviewed" | "settle" | "unreviewed" | "unsettle" | "snooze" | "unsnooze" | "pin" => self.thread_action(name)?,
+            }
+            "reviewed" | "settle" | "unreviewed" | "unsettle" | "snooze" | "unsnooze" | "pin" => {
+                self.thread_action(name)?
+            }
             "model" | "settings" | "effort" | "speed" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 self.model_edit = None;
                 self.read(
                     "models",
                     json!({"threadId": a.thread}),
-                    ReadKind::Models(if args == "next" { ModelScope::Next } else { ModelScope::Current }),
+                    if matches!(name, "effort" | "speed") {
+                        ReadKind::ModelOption(
+                            if args == "next" {
+                                ModelScope::Next
+                            } else {
+                                ModelScope::Current
+                            },
+                            name.into(),
+                        )
+                    } else {
+                        ReadKind::Models(if args == "next" {
+                            ModelScope::Next
+                        } else {
+                            ModelScope::Current
+                        })
+                    },
                 )?;
                 self.notice = "Reading native model catalog…".into();
-            },
+            }
             "override" => {
                 if args == "clear" {
                     self.dispatch(Intent::ClearOverride)?;
                 } else {
                     let a = self.active.as_ref().context("Open a conversation first")?;
                     self.model_edit = None;
-                    self.read("models", json!({"threadId": a.thread}), ReadKind::Models(ModelScope::Next))?;
+                    self.read(
+                        "models",
+                        json!({"threadId": a.thread}),
+                        ReadKind::Models(ModelScope::Next),
+                    )?;
                 }
-            },
+            }
             "presets" => self.presets()?,
             "runtime" => {
                 let m = self.metadata();
@@ -503,33 +606,47 @@ impl App {
                     serde_json::to_string_pretty(&m["runtimeDetails"])?,
                     serde_json::to_string_pretty(&m["providerIdentity"])?,
                 ));
-            },
+            }
             "recover" | "pending" | "retry" | "retry-launch" | "resolve" => self.recovery_menu()?,
             "reconnect" => {
                 let a = self.active.as_ref().context("Open a conversation first")?;
                 let target = (a.profile, a.thread.clone());
                 self.open(target.0, target.1)?;
-            },
+            }
             "recall" => self.recall_menu()?,
             "edit" => {
                 ensure!(self.active.is_some(), "Open a conversation first");
                 self.flush_draft()?;
                 self.pending_external_edit = true;
-            },
+            }
             "layout" => self.menu(
                 "Workspace layout",
                 "Each layout keeps the same session and composer.",
                 vec![
-                    Choice::new("Split", "Conversation list, transcript and composer", Intent::Layout(LayoutMode::Split)),
-                    Choice::new("Focus", "Give the conversation the full workspace", Intent::Layout(LayoutMode::Focus)),
-                    Choice::new("Wide", "Keep native context visible in an inspector", Intent::Layout(LayoutMode::Wide)),
+                    Choice::new(
+                        "Split",
+                        "Conversation list, transcript and composer",
+                        Intent::Layout(LayoutMode::Split),
+                    ),
+                    Choice::new(
+                        "Focus",
+                        "Give the conversation the full workspace",
+                        Intent::Layout(LayoutMode::Focus),
+                    ),
+                    Choice::new(
+                        "Wide",
+                        "Keep native context visible in an inspector",
+                        Intent::Layout(LayoutMode::Wide),
+                    ),
                 ],
             ),
             "theme" => self.menu(
                 "Appearance",
                 "Saved with this Rust client's UI settings.",
-                ["violet", "cyan", "lime", "terminal"].into_iter()
-                    .map(|t| Choice::new(t, "", Intent::Theme(t.into()))).collect(),
+                ["violet", "cyan", "lime", "terminal"]
+                    .into_iter()
+                    .map(|t| Choice::new(t, "", Intent::Theme(t.into())))
+                    .collect(),
             ),
             "mouse" => {
                 self.mouse = !self.mouse;
@@ -538,17 +655,22 @@ impl App {
                 } else {
                     "Mouse disabled for next launch".into()
                 };
-            },
+            }
             "web" => {
                 let env = self.active_env()?;
-                self.detail("Full T3", env.web_url.clone()
-                    .unwrap_or_else(|| "No webURL configured for this environment".into()));
-            },
-            "help" | "shortcuts" => {
-                self.detail("Keyboard help", HELP_TEXT);
-            },
-            "" => {},
-            _ => ensure!(self.workspace_command(name, args)?, "Unknown action /{name}; Ctrl+P lists supported actions"),
+                self.detail(
+                    "Full T3",
+                    env.web_url
+                        .clone()
+                        .unwrap_or_else(|| "No webURL configured for this environment".into()),
+                );
+            }
+            "editor-keys" => self.detail("Editor keys", EDITOR_KEYS),
+            "" => {}
+            _ => ensure!(
+                self.workspace_command(name, args)?,
+                "Unknown action /{name}; Ctrl+P lists supported actions"
+            ),
         }
         self.dirty = true;
         Ok(())
@@ -652,26 +774,29 @@ impl App {
             .into_iter()
             .map(|pending| {
                 let record = pending.record;
-                let label = format!(
-                    "{} · {} · {}",
-                    pending.environment_id,
-                    string(&record, "op"),
-                    string(&record, "id")
-                );
+                let environment = self
+                    .environments
+                    .iter()
+                    .find(|env| env.environment_id == pending.environment_id)
+                    .map(|env| env.label.as_str())
+                    .unwrap_or(&pending.environment_id);
                 Choice::new(
-                    label,
-                    "Review exact source, payload and recovery options",
+                    format!(
+                        "{} · {environment}",
+                        recovery_action_name(&string(&record, "op"))
+                    ),
+                    string(&record, "threadId"),
                     Intent::ReviewRecovery(record, pending.stop),
                 )
             })
             .collect::<Vec<_>>();
         if choices.is_empty() {
             self.detail(
-                "Recovery",
-                "No unresolved operations. Drafts remain saved independently.",
+                "Unconfirmed actions",
+                "None. Message drafts are saved separately.",
             );
         } else {
-            self.menu("Saved actions","These may already have reached T3. Select an action to inspect its original identity and payload.",choices);
+            self.menu("Unconfirmed actions", "Acceptance unknown", choices);
         }
         Ok(())
     }
@@ -681,31 +806,40 @@ impl App {
             self.state.pending(&environment, stop).as_ref() == Some(&record),
             "Saved action changed; reopen Recovery"
         );
-        let detail = serde_json::to_string_pretty(&record)?;
-        let mut choices = vec![Choice::new(
-            "Keep saved",
-            "Leave this exact recovery record intact",
-            Intent::Close,
-        )];
+        let mut choices = vec![Choice::new("Keep saved", "", Intent::Close)];
         if self
             .environments
             .iter()
-            .any(|e| e.environment_id == environment)
+            .any(|env| env.environment_id == environment)
         {
             choices.push(Choice::new(
-                "Reconcile original action",
-                "Use this saved operation ID and unchanged payload; no new action identity",
+                "Check or retry original action",
+                "Use its saved ID and exact payload",
                 Intent::Recover(record.clone(), stop),
             ));
         }
         choices.push(Choice::new(
-            "Clear this local recovery record",
-            "Only after inspecting native outcome; this removes local retry, not native work",
-            Intent::Forget(record, stop),
+            "Inspect exact payload",
+            "",
+            Intent::RecoveryPayload(record.clone(), stop),
         ));
-        self.menu("Review saved action",format!("Original environment: {environment}. Acceptance is unknown until native reconciliation. Clearing is an explicit local decision."),choices);
+        choices.push(Choice::new(
+            "Clear local record",
+            "After checking T3; native work is unchanged",
+            Intent::Forget(record.clone(), stop),
+        ));
+        self.menu(
+            recovery_action_name(&string(&record, "op")),
+            "Acceptance unknown",
+            choices,
+        );
         if let Some(dialog) = &mut self.dialog {
-            dialog.detail = detail;
+            dialog.detail = format!(
+                "Environment: {}\n\nThread: {}\n\nOperation: {}",
+                environment,
+                string(&record, "threadId"),
+                string(&record, "id"),
+            );
         }
         Ok(())
     }
@@ -758,4 +892,27 @@ impl App {
     }
 }
 
-const HELP_TEXT: &str = include_str!("../../docs/shortcuts.md");
+fn recovery_action_name(op: &str) -> &str {
+    match op {
+        "send" => "Send message",
+        "stop" => "Stop turn",
+        "answer" => "Submit answer",
+        "launch" | "create-thread" => "Create conversation",
+        "settings" | "model" => "Change model",
+        "thread-action" => "Change conversation",
+        other => other,
+    }
+}
+
+const EDITOR_KEYS: &str = "\
+- Newline  [ Enter ]\n\
+- Send  [ Ctrl+Enter | Ctrl+] | Ctrl+\\ ]\n\
+- Select all  [ Ctrl+A | Cmd+A ]\n\
+- Copy selection  [ Ctrl+C | Cmd+C ]\n\
+- Copy whole draft  [ Ctrl+Alt+C ]\n\
+- Next / previous focus  [ Tab | Shift+Tab ]\n\
+- Completion  [ ↑↓ | Enter ]\n\
+- Close completion  [ Esc ]\n\
+- Read transcript  [ ↑↓ | PageUp | PageDown ]\n\
+- Stop  [ Ctrl+S ]\n\
+- Commands  [ Ctrl+P | F1 ]";
